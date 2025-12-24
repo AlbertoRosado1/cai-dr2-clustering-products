@@ -1,5 +1,6 @@
 #!/bin/bash
 # salloc -N 1 -C "gpu&hbm80g" -t 00:10:00 --gpus 4 --qos interactive --account desi_g
+# salloc -N 1 -C "gpu&hbm80g" -t 00:20:00 --gpus 4 --gpus-per-node=4 --qos interactive --account desi_g
 # salloc -N 4 -C "gpu&hbm80g" -t 00:20:00 --gpus 16 --gpus-per-node=4 --qos interactive --account desi_g
 # source /global/common/software/desi/users/adematti/cosmodesi_environment.sh test
 # bash run_pkrun_mocks.sh QSO
@@ -38,7 +39,7 @@ NRAN_QSO=10
 
 
 COMMON_FLAGS="--todo mesh2_spectrum combine --region NGC SGC --cellsize 10" 
-if [ $TRACER == 'ELG_LOPnotqso' ]; then
+if [ $TRACER == 'ELG_LOP' ]; then
     TRACER_FLAGS="--tracer $TRACER --boxsize $BOXSIZE_ELG --nran $NRAN_ELG --zrange 0.8 1.1 1.1 1.6 --weight_type default_FKP"   
 fi
 

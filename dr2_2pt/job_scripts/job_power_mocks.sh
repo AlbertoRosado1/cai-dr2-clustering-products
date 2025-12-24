@@ -32,6 +32,7 @@ NRAN_ELG=10
 NRAN_LRG=10
 NRAN_QSO=10
 
+JOB_FLAGS="-N 1 -n 4" 
 COMMON_FLAGS="--todo mesh2_spectrum combine --region NGC SGC --cellsize 10 --basedir $INPUT_DIR --outdir $OUTPUT_DIR"
 
 ELG_FLAGS="--tracer ELG_LOPnotqso --boxsize $BOXSIZE_ELG --nran $NRAN_ELG --zrange 0.8 1.1 1.1 1.6 --weight_type default_FKP"   
