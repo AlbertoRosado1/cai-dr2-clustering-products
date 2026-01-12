@@ -1,16 +1,46 @@
 import os
-import numpy as np
+import logging
 from pathlib import Path
+
+import numpy as np
 
 from mockfactory import Catalog, setup_logging, sky_to_cartesian
 import lsstypes as types
-from astropy.table import Table
+
+
+logger = logging.getLogger('io')
+
+
+desi_dir = Path('/dvs_ro/cfs/cdirs/desi/')
+
 
 def load_footprint():
     #global footprint
     from regressis import footprint
     footprint = footprint.DR9Footprint(256, mask_lmc=False, clear_south=True, mask_around_des=False, cut_desi=False)
     return footprint
+
+
+def join_tracers(tracers):
+    if not isinstance(tracers, str):
+        return 'x'.join(tracers)
+    return tracers
+
+
+def get_simple_tracer(tracer):
+    if 'BGS' in tracer:
+        return 'BGS'
+    elif 'LRG+ELG' in tracer:
+        return 'LRG+ELG'
+    elif 'LRG' in tracer:
+        return 'LRG'
+    elif 'ELG' in tracer:
+        return 'ELG'
+    elif 'QSO' in tracer:
+        return 'QSO'
+    else:
+        raise NotImplementedError(f'tracer {tracer} is unknown')
+
 
 def select_region(ra, dec, region=None):
     import healpy as hp
@@ -52,128 +82,94 @@ def select_region(ra, dec, region=None):
     raise ValueError('unknown region {}'.format(region))
 
 
-def get_proposal_mattrs(tracer):
-    if 'BGS' in tracer:
-        mattrs = dict(boxsize=4000., cellsize=10)
-    elif 'LRG+ELG' in tracer:
-        mattrs = dict(boxsize=9000., cellsize=10)
-    elif 'LRG' in tracer:
-        mattrs = dict(boxsize=7000., cellsize=10)
-    elif 'ELG' in tracer:
-        mattrs = dict(boxsize=9000., cellsize=10)
-    elif 'QSO' in tracer:
-        mattrs = dict(boxsize=10000., cellsize=10)
-    else:
-        raise NotImplementedError(f'tracer {tracer} is unknown')
-    #mattrs.update(cellsize=30)
-    return mattrs
+def propose_fiducial(kind, tracer):
+    cellsize = 7.8
+    base = {'correlation': {}, 'mesh2_spectrum': {}, 'mesh3_spectrum': {}}
+    propose_fiducial = {
+        'BGS': base | {'zranges': [(0.1, 0.4)], 'mattrs': dict(boxsize=4000., cellsize=cellsize), 'nran': 2, 'recon': dict(bias=1.5, smoothing_radius=15.)},
+        'LRG+ELG': base | {'zranges': [(0.8, 1.1)], 'mattrs': dict(boxsize=9000., cellsize=cellsize), 'nran': 13, 'recon': dict(bias=1.6, smoothing_radius=15.)},
+        'LRG': base | {'zranges': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)], 'mattrs': dict(boxsize=7000., cellsize=cellsize), 'nran': 9, 'recon': dict(bias=2.0, smoothing_radius=15.)},
+        'ELG': base | {'zranges': [(0.8, 1.1), (1.1, 1.6)], 'mattrs': dict(boxsize=9000., cellsize=cellsize), 'nran': 13, 'recon': dict(bias=1.2, smoothing_radius=15.)},
+        'QSO': base | {'zranges': [(0.8, 2.1)], 'mattrs': dict(boxsize=10000., cellsize=cellsize), 'nran': 4, 'recon': dict(bias=2.1, smoothing_radius=30.)}
+    }
+    return propose_fiducial[get_simple_tracer(tracer)][kind]
 
 
-def get_catalog_dir(survey='Y1', verspec='iron', version='v1.2', base_dir='/global/cfs/cdirs/desi/survey/catalogs'):
+def get_catalog_dir(survey='Y1', verspec='iron', version='v1.2', base_dir=desi_dir / 'survey/catalogs'):
     base_dir = Path(base_dir)
     return base_dir / survey / 'LSS' / verspec / 'LSScats' / version
 
 
-def get_catalog_fn(base_dir='/global/cfs/cdirs/desi/survey/catalogs', kind='data', tracer='LRG', weight_type='bitwise', zrange=(0.8, 1.1), region='NGC', nran=10, fmt='h5', **kwargs):
-    # if 'bitwise' in weight_type: is not implemented yet
-    data_dir = Path(base_dir)
+def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
+                   region='NGC', weight_type='default_FKP', nran=10, imock=0, ext='h5', **kwargs):
+    if region in ['N', 'NGC', 'NGCnoN']: region = 'NGC'
+    elif region in ['SGC', 'SGCnoDES']: region = 'SGC'
+    elif 'full' not in kind:
+        if region in ['S', 'ALL']: regions = ['NGC', 'SGC']
+        else: raise NotImplementedError(f'{region} is unknown')
+        return [get_catalog_fn(version=version, cat_dir=cat_dir, kind=kind, tracer=tracer,
+                               region=region, weight_type=weight_type, nran=nran, imock=imock, ext=ext, **kwargs) for region in regions]
+
+    if cat_dir is None:  # pre-registered paths
+        if version == 'data-dr1-v1.5':
+            cat_dir = desi_dir / f'Y1/LSS/iron/LSScats'
+            if 'bitwise' in weight_type:
+                cat_dir = cat_dir / 'v1.5pip'
+            else:
+                cat_dir = cat_dir / 'v1.5'
+        elif version == 'data-dr2-v2':
+            cat_dir = desi_dir / f'DA2/LSS/loa-v1/LSScats/v2'
+            if 'bitwise' in weight_type:
+                data_dir = cat_dir / 'PIP'
+            else:
+                data_dir = cat_dir / 'nonKP'
+            if kind == 'data':
+                return data_dir / f'{tracer}_{region}_clustering.dat.fits'
+            if kind == 'randoms':
+                return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.fits' for iran in range(nran)]
+            if kind == 'full_data':
+                return cat_dir / f'{tracer}_full_HPmapcut.dat.fits'
+            if kind == 'full_randoms':
+                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.fits' for iran in range(nran)]
+        elif version == 'holi-v1-complete':
+            cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            if kind == 'data':
+                return cat_dir / f'{tracer}_complete_{region}_clustering.dat.h5'
+            if kind == 'randoms':
+                return [cat_dir / f'{tracer}_complete_{region}_{iran:d}_clustering.ran.h5' for iran in range(nran)]
+        elif version == 'holi-v1-altmtl':
+            cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'fits' if 'full' in kind else 'h5'
+    cat_dir = Path(cat_dir)
     if kind == 'data':
-        return data_dir / f'{tracer}_{region}_clustering.dat.{fmt}'
+        return cat_dir / f'{tracer}_{region}_clustering.dat.{ext}'
     if kind == 'randoms':
-        return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{fmt}' for iran in range(nran)]
-    if kind == 'full_data_clus':
-        return [data_dir / f'{tracer}_{region}_clustering.dat.{fmt}' for region in ['NGC','SGC']]
-    if kind == 'full_randoms_clus':
-        return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{fmt}' for iran in range(nran) for region in ['NGC','SGC']]
+        return [cat_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{ext}' for iran in range(nran)]
     if kind == 'full_data':
-        return data_dir / f'{tracer}_full_HPmapcut.dat.{fmt}'
+        return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
     if kind == 'full_randoms':
-        return [data_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{fmt}' for iran in range(nran)]
+        return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in range(nran)]
 
 
-def get_power_fn(base_dir=os.getenv('PSCRATCH'), kind='', file_type='h5', region='', tracer='ELG', tracer2=None, zmin=0, zmax=np.inf, weight_type='default',
-                 weight_type2='default', nran=None, option=None, cut=None, auw=None,
-                 P0=None,P02=None,ric_dir=None, boxsize=None, cellsize=None,test=False):
-    base_dir = Path(base_dir)
-    weight_type1=weight_type
-    if tracer2: tracer += '_' + tracer2
-    if weight_type2!=weight_type:
-        weight_type += '_' + weight_type2
-    # if rec_type: tracer += '_' + rec_type
-    if region: tracer += '_' + region
-    # if recon_dir != 'n':
-    #     out_dir = out_dir[:-2] + recon_dir+'/pk/'
 
-    if option:
-        zmax = str(zmax) + option
-
-    root = '{}_z{}-{}_{}'.format(tracer, zmin, zmax, weight_type)
-    if test:
-        # useful for testing
-        if nran is not None:
-            root += '_nran{}'.format(nran)
-        if cellsize is not None:
-            root += '_cellsize{}'.format(cellsize)
-        if isinstance(boxsize, list):
-            root += '_boxsize{}_{}_{}'.format(int(boxsize[0]),int(boxsize[1]),int(boxsize[2]))
-        else:
-            root += '_boxsize{}'.format(int(boxsize))
-    if P0 is not None:
-        root += '_P0-{}'.format(P0)
-    if P02 is not None:
-        root += '_P02-{}'.format(P02)
-    if auw is not None:
-        root += '_auw'
-    if cut is not None:
-        root += '_thetacut'
-    if ric_dir is not None:
-        ric = 'noric' if 'noric' in ric_dir else 'ric'
-        root += '_{}'.format(ric)
-    return base_dir / '{}_{}.{}'.format(kind, root, file_type)
-
-# def get_catalog_fn(version='dr1-v1.5', kind='data', tracer='LRG', weight_type='bitwise', zrange=(0.8, 1.1), region='NGC', nran=10, **kwargs):
-#     desi_dir = Path('/dvs_ro/cfs/cdirs/desi/survey/catalogs/')
-#     nran_full = 1
-#     if version == 'dr1-v1.5':
-#         base_dir = desi_dir / f'Y1/LSS/iron/LSScats'
-#         if 'bitwise' in weight_type:
-#             data_dir = base_dir / 'v1.5pip'
-#         else:
-#             data_dir = base_dir / 'v1.5'
-#         if kind == 'data':
-#             return data_dir / f'{tracer}_{region}_clustering.dat.fits'
-#         if kind == 'randoms':
-#             return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.fits' for iran in range(nran)]
-#         if kind == 'full_data':
-#             return data_dir / f'{tracer}_full_HPmapcut.dat.fits'
-#         if kind == 'full_randoms':
-#             return [data_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.fits' for iran in range(nran_full)]
-#     elif version == 'dr2-v2':
-#         base_dir = desi_dir / f'DA2/LSS/loa-v1/LSScats/v2'
-#         if 'bitwise' in weight_type:
-#             data_dir = base_dir / 'PIP'
-#         else:
-#             data_dir = base_dir / 'nonKP'
-#         if kind == 'data':
-#             return data_dir / f'{tracer}_{region}_clustering.dat.fits'
-#         if kind == 'randoms':
-#             return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.fits' for iran in range(nran)]
-#         if kind == 'full_data':
-#             return base_dir / f'{tracer}_full_HPmapcut.dat.fits'
-#         if kind == 'full_randoms':
-#             return [base_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.fits' for iran in range(nran_full)]
-#     raise ValueError('issue with input args')
-
-
-# def get_measurement_fn(kind='mesh2_spectrum_poles', version='dr2-v2', recon=None, tracer='LRG', region='NGC', zrange=(0.8, 1.1), cut=None, auw=None, weight_type='default', **kwargs):
-#     #base_dir = Path(f'/global/cfs/projectdirs/desi/mocks/cai/mock-challenge-cutsky-dr2/')
-#     base_dir = Path(f'/pscratch/sd/a/arosado/checks/power-spectrum/test/')
-#     base_dir = base_dir / (f'unblinded_data_{recon}' if recon else 'unblinded_data')
-#     if cut: cut = '_thetacut'
-#     else: cut = ''
-#     if auw: auw = '_auw'
-#     else: auw = ''
-#     return str(base_dir / f'{version}/{kind}_{tracer}_z{zrange[0]:.1f}-{zrange[1]:.1f}_{region}_{weight_type}{auw}{cut}.h5')
+def get_measurement_fn(meas_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='mesh2_spectrum', version='data-dr2-v2', recon=None,
+                       tracer='LRG', region='NGC', zrange=(0.8, 1.1), auw=None, cut=None, weight_type='default', imock=None, extra='', ext='h5', **kwargs):
+    if imock == '*':
+        fns = [get_measurement_fn(meas_dir=meas_dir, kind=kind, version=version, recon=recon, tracer=tracer, region=region, zrange=zrange, auw=auw, cut=cut, weight_type=weight_type, imock=imock, ext=ext, **kwargs) for imock in range(1000)]
+        return [fn for fn in fns if os.path.exists(fn)]
+    if cut: cut = '_thetacut'
+    else: cut = ''
+    if auw: auw = '_auw'
+    else: auw = ''
+    meas_dir = meas_dir / version
+    if recon:
+        meas_dir = meas_dir / recon
+    if imock is None: imock = ''
+    else: imock = '_{imock:d}'
+    if extra: extra = '_{extra}'
+    tracer = join_tracers(tracer)
+    basename = f'{kind}_{tracer}_z{zrange[0]:.1f}-{zrange[1]:.1f}_{region}_{weight_type}{auw}{cut}{extra}{imock}.{ext}'
+    return meas_dir / basename
 
 
 def apply_wntmp(ntile, ntmp_table, method='ntmp'):
@@ -226,15 +222,44 @@ def _compute_ntmp(bitweights, loc_assigned, ntile):
     return frac_missing_pw, frac_zero_prob
 
 
+def _read_catalog(fn, mpicomm=None):
+    one_fn = fn[0] if isinstance(fn, (tuple, list)) else fn
+    kw = {}
+    if str(one_fn).endswith('.h5'): kw['group'] = 'LSS'
+    catalog = Catalog.read(fn, mpicomm=mpicomm, **kw)
+    if str(one_fn).endswith('.fits'): catalog.get(catalog.columns())  # Faster to read all columns at once
+    return catalog
+
+
 def compute_ntmp(full_data_fn):
     from mpi4py import MPI
     mpicomm = MPI.COMM_WORLD
     ntmp = None
     if mpicomm.rank == 0:
-        import fitsio
-        catalog = fitsio.read(full_data_fn)
+        catalog = _read_catalog(full_data_fn, mpicomm=MPI.COMM_SELF)
         ntmp = _compute_ntmp(_format_bitweights(catalog['BITWEIGHTS']), catalog['LOCATION_ASSIGNED'], catalog['NTILE'])
     return mpicomm.bcast(ntmp, root=0)
+
+
+def _compute_wntile(ntile, weight):
+    sum_ntile = np.bincount(ntile)
+    sum_weight = np.bincount(ntile, weights=weight)
+    mask_zero_ntile = sum_ntile == 0
+    return np.divide(sum_weight, sum_ntile, out=np.ones_like(sum_weight), where=~mask_zero_ntile)
+
+
+def compute_wntile(clustering_data_fn):
+    from mpi4py import MPI
+    mpicomm = MPI.COMM_WORLD
+    wntile = None
+    if mpicomm.rank == 0:
+        catalog = _read_catalog(clustering_data_fn, mpicomm=MPI.COMM_SELF)
+        wntile = _compute_wntile(catalog['NTILE'], catalog['WEIGHT'] / catalog['WEIGHT_COMP'])
+    return mpicomm.bcast(wntile, root=0)
+
+
+def apply_wntile(ntile, wntile_table):
+    return wntile_table[ntile]
 
 
 def _format_bitweights(bitweights):
@@ -242,7 +267,7 @@ def _format_bitweights(bitweights):
     return [bitweights]
 
 
-def get_clustering_rdzw(*fns, kind=None, zrange=None, region=None, tracer=None, weight_type='default', ntmp=None, **kwargs):
+def read_clustering_rdzw(*fns, kind=None, zrange=None, region=None, weight_type='default', ntmp=None, concatenate=True, **kwargs):
     from mpi4py import MPI
     mpicomm = MPI.COMM_WORLD
 
@@ -251,11 +276,7 @@ def get_clustering_rdzw(*fns, kind=None, zrange=None, region=None, tracer=None, 
         irank = ifn % mpicomm.size
         catalogs[ifn] = (irank, None)
         if mpicomm.rank == irank:  # Faster to read catalogs from one rank
-            if 'fits' in str(fn):
-                catalog = Catalog.read(fn, mpicomm=MPI.COMM_SELF)
-            else:
-                catalog = Catalog.read(fn, mpicomm=MPI.COMM_SELF, group='LSS')
-            catalog.get(catalog.columns())  # Faster to read all columns at once
+            catalog = _read_catalog(catalog, mpicomm=MPI.COMM_SELF)
             columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'WEIGHT_COMP', 'WEIGHT_FKP', 'BITWEIGHTS', 'FRAC_TLOBS_TILES', 'NTILE']
             columns = [col for col in columns if col in catalog.columns()]
             catalog = catalog[columns]
@@ -284,13 +305,16 @@ def get_clustering_rdzw(*fns, kind=None, zrange=None, region=None, tracer=None, 
                 individual_weight = catalog['WEIGHT'] * apply_wntmp(catalog['NTILE'], ntmp)
         if 'FKP' in weight_type.upper():
             individual_weight *= catalog['WEIGHT_FKP']
-        rdzw.append([catalog['RA'], catalog['DEC'], catalog['Z'], individual_weight] + bitwise_weights)
-    rdzw = [np.concatenate([arrays[i] for arrays in rdzw], axis=0) for i in range(len(rdzw[0]))]
-    for i in range(4): rdzw[i] = rdzw[i].astype('f8')
-    return rdzw[:3], rdzw[3:]
+        _rdzw = [catalog['RA'], catalog['DEC'], catalog['Z'], individual_weight] + bitwise_weights
+        for i in range(4): _rdzw[i] = _rdzw[i].astype('f8')
+        rdzw.append(_rdzw)
+    if concatenate:
+        rdzw = [np.concatenate([arrays[i] for arrays in rdzw], axis=0) for i in range(len(rdzw[0]))]
+    else:
+        return rdzw
 
 
-def get_full_rdw(*fns, kind='parent', zrange=None, region=None, tracer=None, weight_type='default', ntmp=None, **kwargs):
+def read_full_rdw(*fns, kind='parent', region=None, weight_type='default', ntmp=None, wntile=None, **kwargs):
 
     from mpi4py import MPI
     mpicomm = MPI.COMM_WORLD
@@ -300,9 +324,9 @@ def get_full_rdw(*fns, kind='parent', zrange=None, region=None, tracer=None, wei
         irank = ifn % mpicomm.size
         catalogs[ifn] = (irank, None)
         if mpicomm.rank == irank:  # Faster to read catalogs from one rank
-            catalog = Catalog.read(fn, mpicomm=MPI.COMM_SELF, group='LSS')
+            catalog = Catalog.read(fn, mpicomm=MPI.COMM_SELF)
             catalog.get(catalog.columns())  # Faster to read all columns at once
-            columns = ['RA', 'DEC', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'WEIGHT_NTILE']
+            columns = ['RA', 'DEC', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'WEIGHT_NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES']
             columns = [col for col in columns if col in catalog.columns()]
             catalog = catalog[columns]
             if 'fibered' in kind:
@@ -318,16 +342,16 @@ def get_full_rdw(*fns, kind='parent', zrange=None, region=None, tracer=None, wei
         if mpicomm.size > 1:
             catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=irank)
         individual_weight = catalog['WEIGHT_NTILE']
+        if wntile is not None:
+            individual_weight = apply_wntile(catalog['NTILE'], wntile)
+            assert np.allclose(individual_weight, catalog['WEIGHT_NTILE'])
         bitwise_weights = []
         if 'fibered' in kind and 'data' in kind:
             if ntmp is not None:
                 individual_weight /= apply_wntmp(catalog['NTILE'], ntmp)
             bitwise_weights = _format_bitweights(catalog['BITWEIGHTS'])
-            if 'bitwise' not in weight_type:  # to be updated
-                nbits = 8 * sum(weight.dtype.itemsize for weight in bitwise_weights)
-                recurr = popcount(*bitwise_weights)
-                wiip = (nbits + 1) / (recurr + 1)
-                individual_weight *= wiip
+            if 'bitwise' not in weight_type:
+                individual_weight /= (catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES'])
                 bitwise_weights = []
         rdzw.append([catalog['RA'], catalog['DEC'], individual_weight] + bitwise_weights)
     rdzw = [np.concatenate([arrays[i] for arrays in rdzw], axis=0) for i in range(len(rdzw[0]))]
@@ -335,85 +359,38 @@ def get_full_rdw(*fns, kind='parent', zrange=None, region=None, tracer=None, wei
     return rdzw[:2], rdzw[2:]
 
 
-def get_clustering_positions_weights(*fns, **kwargs):
+def get_positions_weights_from_rdzw(rdzw):
     from cosmoprimo.fiducial import TabulatedDESI, DESI
     fiducial = TabulatedDESI()  # faster than DESI/class (which takes ~30 s for 10 random catalogs)
-    [ra, dec, z], weights = get_clustering_rdzw(*fns, **kwargs)
-    dist = fiducial.comoving_radial_distance(z)
-    positions = sky_to_cartesian(dist, ra, dec)
-    return positions, weights
+
+    def _get_clustering_positions_weights(ra, dec, z, weights):
+        weights = np.asarray(weights, dtype='f8')
+        dist = fiducial.comoving_radial_distance(z)
+        positions = sky_to_cartesian(dist, ra, dec, dtype='f8')
+        return positions, weights
+
+    if isinstance(rdzw[0], (tuple, list)):  # list of (RA, DEC, Z, W)
+        return [_get_clustering_positions_weights(*rdzw) for rdzw in rdzw]
+    else:
+        return _get_clustering_positions_weights(*rdzw)
 
 
-def compute_angular_upweights(output_fn, get_data, get_randoms, tracer='ELG'):
-    from cucount.jax import Particles, BinAttrs, WeightAttrs, count2, setup_logging
-    from lsstypes import ObservableLeaf, ObservableTree
-    from lsstypes.types import Count2, Count2Correlation
-
-    fibered_data = Particles(*get_data('fibered_data'), positions_type='rd', exchange=True)
-    parent_data = Particles(*get_data('parent_data'), positions_type='rd', exchange=True)
-
-    theta = 10**np.arange(-5, -1 + 0.1, 0.1)
-    battrs = BinAttrs(theta=theta)
-    wattrs = WeightAttrs(bitwise=dict(weights=fibered_data.get('bitwise_weight')))
-    fibered_data_iip = fibered_data.clone(weights=wattrs(fibered_data))  # compute IIP weights
-
-    def get_counts(*particles):
-        #setup_logging('error')
-        autocorr = len(particles) == 1
-        weight = count2(*(particles * 2 if autocorr else particles), battrs=battrs, wattrs=wattrs)['weight']
-        if autocorr:
-            norm = wattrs(particles[0]).sum()**2 - wattrs(*(particles * 2)).sum()
-        else:
-            norm = wattrs(particles[0]).sum() * wattrs(particles[1]).sum()
-        # No need to remove auto-pairs, as edges[0] > 0
-        return weight / norm
-        #return Count2(counts=weight, norm=norm, theta=battrs.coords('theta'), theta_edges=battrs.edges('theta'), coords=['theta'])
-
-    DDfibered = get_counts(fibered_data)
-    wattrs = WeightAttrs()
-    DDparent = get_counts(parent_data)
-
-    #parent_randoms = Particles(*get_randoms('parent_randoms'), positions_type='rd', exchange=True)
-    #DRparent = get_counts(parent_data, parent_randoms)
-    #DRfibered = get_counts(fibered_data_iip, parent_randoms)
-    kw = dict(theta=battrs.coords('theta'), theta_edges=battrs.edges('theta'), coords=['theta'])
-    auw = {}
-    auw['DD'] = ObservableLeaf(value=np.where(DDfibered == 0., 1., DDparent / DDfibered), **kw)
-    #auw['DR'] = ObservableLeaf(value=np.where(DRfibered == 0., 1., DRparent / DRfibered), **kw)
-    auw = ObservableTree(list(auw.values()), pairs=list(auw.keys()))
-    if output_fn is not None and jax.process_index() == 0:
-        logger.info(f'Writing to {output_fn}')
-        auw.write(output_fn)
-    return auw
+def write_summary_statistics(fn, stats):
+    import jax
+    if jax.process_index() == 0:
+        logger.info(f'Writing to {fn}')
+        stats.write(fn)
 
 
-def compute_fkp_effective_redshift(fkp, cellsize=10., order=2):
-    from jax import numpy as jnp
-    from cosmoprimo.fiducial import TabulatedDESI, DESI
-    from cosmoprimo.utils import DistanceToRedshift
-    from jaxpower import compute_fkp2_normalization, compute_fkp3_normalization, FKPField
-    fiducial = TabulatedDESI()
-    d2z = DistanceToRedshift(lambda z: jnp.array(fiducial.comoving_radial_distance(z)))
-
-    compute_fkp_normalization = {2: compute_fkp2_normalization, 3: compute_fkp3_normalization}[order]
-
-    def compute_z(positions):
-        return d2z(jnp.sqrt(jnp.sum(positions**2, axis=-1)))
-
-    if isinstance(fkp, FKPField):
-        norm = compute_fkp_normalization(fkp, cellsize=cellsize)
-        fkp = fkp.clone(data=fkp.data.clone(weights=data.weights * compute_z(fkp.data.positions)), randoms=randoms.clone(weights=fkp.randoms.weights  * compute_z(fkp.randoms.positions)))
-        znorm = compute_fkp_normalization(fkp, cellsize=cellsize)
-    else:  # fkp is randoms
-        norm = compute_fkp_normalization(fkp, cellsize=cellsize, split=42)
-        fkp = fkp.clone(weights=fkp.weights * compute_z(fkp.positions))
-        znorm = compute_fkp_normalization(fkp, cellsize=cellsize, split=42)
-    return znorm / norm
-
-
-def combine_regions(output_fn, fns, logger=None):
-    combined = types.sum([types.read(fn) for fn in fns])  # for the covariance matrix, assumes observables are independent
-    if output_fn is not None:
-        if logger: logger.info(f'Writing to {output_fn}')
-        combined.write(output_fn)
-    #return combined
+def possible_combine_regions(regions):
+    """Return potential combinations."""
+    regions = sorted(regions)
+    region_combs = {'GCcomb': ['NGC', 'SGC'],
+                    'NS': ['N', 'S'],
+                    'GCcomb_noN': ['NGCnoN', 'SGC'],
+                    'GCcomb_noDES': ['NGC', 'SGCnoDES']}
+    combs = {}
+    for _region_comb, _regions in region_combs.items():
+        if all(region in _regions for region in regions):
+            combs[_region_comb] = _regions
+    return combs
