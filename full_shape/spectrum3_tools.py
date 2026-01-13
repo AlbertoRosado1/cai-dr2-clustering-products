@@ -29,14 +29,14 @@ def compute_mesh3_spectrum(*particles,
 
     # Computing shot noise
     all_fkp = [FKPField(data, shifted if shifted is not None else randoms) for (data, randoms, shifted) in particles]
-    num_shotnoise = compute_fkp3_shotnoise(*all_fkp, bin=bin)
+    kw = dict(resampler='tsc', interlacing=3, compensate=True)
++   kw = dict(resampler='tsc', interlacing=3, compensate=True)
+    num_shotnoise = compute_fkp3_shotnoise(*all_fkp, los=los, bin=bin, **kw)
 
     jax.block_until_ready((norm, num_shotnoise))
     if jax.process_index() == 0:
         logger.info('Normalization and shotnoise computation finished')
-    
-    kw = dict(resampler='tsc', interlacing=3, compensate=True)
-    num_shotnoise = compute_fkp3_shotnoise(*all_fkp, los=los, bin=bin, **kw)
+
     jitted_compute_mesh3_spectrum = jax.jit(compute_mesh3_spectrum, static_argnames=['los'], donate_argnums=[0])
 
     # out='real' to save memory
