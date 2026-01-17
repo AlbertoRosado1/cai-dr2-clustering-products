@@ -221,16 +221,20 @@ def combine_fiducial_stats_from_options(stats, region_comb, regions, get_measure
 
     kwargs = fill_fiducial_options(**kwargs)
     catalog_options = kwargs['catalog']
-    for stat in stats:
-        for kw in _expand_cut_auw_options(stat, kwargs[stat]).values():
-            fns = [get_measurement_fn(kind=stat, **(catalog_options | dict(region=region)), **kw) for region in regions]
-            fn_comb = get_measurement_fn(kind=stat, **(catalog_options | dict(region=region_comb)), **kw)
-            exists = {os.path.exists(fn): fn for fn in fns}
-            if all(exists):
-                combined = types.sum([types.read(fn) for fn in fns])
-                tools.write_summary_statistics(fn_comb, combined)
-            else:
-                logger.info(f'Skipping {fn_comb} as {[fn for ex, fn in exists.items() if not ex]} do not exist')
+    zranges = catalog_options['zrange']
+    if np.ndim(zranges[0]) == 0:
+        zranges = [zranges]
+    for zrange in zranges:
+        for stat in stats:
+            for kw in _expand_cut_auw_options(stat, kwargs[stat]).values():
+                fns = [get_measurement_fn(kind=stat, **(catalog_options | dict(region=region, zrange=zrange)), **kw) for region in regions]
+                fn_comb = get_measurement_fn(kind=stat, **(catalog_options | dict(region=region_comb, zrange=zrange)), **kw)
+                exists = {os.path.exists(fn): fn for fn in fns}
+                if all(exists):
+                    combined = types.sum([types.read(fn) for fn in fns])
+                    tools.write_summary_statistics(fn_comb, combined)
+                else:
+                    logger.info(f'Skipping {fn_comb} as {[fn for ex, fn in exists.items() if not ex]} do not exist')
 
 
 def main(**kwargs):
@@ -284,11 +288,9 @@ def main(**kwargs):
             compute_fiducial_stats_from_options(args.stats, get_measurement_fn=get_measurement_fn, cache=cache, **_options_imock)
             jax.experimental.multihost_utils.sync_global_devices('measurements')
         if args.combine and jax.process_index() == 0:
-            for zrange in zranges:
-                _options_imock = dict(options_imock)
-                _options_imock['catalog'] = _options_imock['catalog'] | dict(zrange=zrange)
-                for region_comb, regions in tools.possible_combine_regions(args.region).items():
-                    combine_fiducial_stats_from_options(args.stats, region_comb, regions, get_measurement_fn=get_measurement_fn, **_options_imock)
+
+            for region_comb, regions in tools.possible_combine_regions(args.region).items():
+                combine_fiducial_stats_from_options(args.stats, region_comb, regions, get_measurement_fn=get_measurement_fn, **_options_imock)
     if args.stats:
         jax.distributed.shutdown()
 
