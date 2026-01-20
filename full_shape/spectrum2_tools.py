@@ -204,7 +204,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
             from jaxpower.particle2 import convert_particles
             all_particles = [convert_particles(fkp.particles) for fkp in all_fkp]
             close = compute_particle2(*all_particles, bin=pbin, los=los)
-            close = close.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin), norm=norm)
+            close = close.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=ifields), norm=norm)
             close = close.to_spectrum(bin.xavg)
             results['cut'] = -close.value()
 
@@ -231,7 +231,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
             wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
             pbin = BinParticle2SpectrumPoles(mattrs, edges=bin.edges, xavg=bin.xavg, sattrs=sattrs, wattrs=wattrs, ells=ells)
             DD = compute_particle2(*all_data, bin=pbin, los=los)
-            DD = DD.clone(num_shotnoise=compute_particle2_shotnoise(*all_data, bin=pbin), norm=norm)
+            DD = DD.clone(num_shotnoise=compute_particle2_shotnoise(*all_data, bin=pbin, fields=ifields), norm=norm)
             results['auw'] = DD.value()
 
         jax.block_until_ready(results)
@@ -266,7 +266,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
         results = {}
         for ell in ells:
             if jax.process_index() == 0:
-                logger.info(f'Applying optimal weights for ell {ell}')
+                logger.info(f'Applying optimal weights for ell = {ell:d}')
 
             ifields = tuple(range(len(all_particles)))
             ifields = ifields + (ifields[-1],) * (2 - len(ifields))
