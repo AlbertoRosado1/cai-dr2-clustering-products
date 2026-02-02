@@ -528,6 +528,99 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='me
     return stats_dir / basename
 
 
+def get_box_stats_fn(stats_dir='/global/cfs/cdirs/desi/science/gqc/y3_fits/mockchallenge_abacushf/measurements', 
+                     kind='mesh2_spectrum', extra='', ext='h5', **kwargs):
+    """
+    Return measurement filename for box mocks with given parameters.
+
+    Parameters
+    ----------
+    stats_dir : str, Path
+        Directory containing the measurements.
+    version : str, optional
+        Measurement version. Default is 'v2'.
+    kind : str
+        Measurement kind. Options are 'particle2_correlation', 'mesh2_spectrum', 'mesh3_spectrum', etc.
+    tracer : str
+        Tracer name.
+    cosmo : str
+        Cosmology label (e.g., 'c000').
+    zrange : tuple, optional
+        Redshift range of interest. This will be mapped to a specific box snapshot.
+    box_type : str, optional
+        Type of box (e.g., 'base'). Default is 'base'.
+    hod : str, optional
+        HOD flavor (e.g., 'B', 'dv'). Default is None (baseline HOD).
+    los : str, optional
+        Line of sight direction (e.g., 'z'). Default is 'z'.
+    imock : int, str, optional
+        Mock index. If '*', return all existing mock filenames.
+    extra : str, optional
+        Extra string to append to filename.
+    ext : str
+        File extension. Default is 'h5'.
+
+    Returns
+    -------
+    fn : str, Path, list
+        Measurement filename(s).
+        Multiple filenames are returned as a list when imock is '*'.
+    """
+    _default_options = dict(version='v2', tracer=None, cosmo=None, zrange=None, box_type='base', hod=None, los='z', imock=None)
+    catalog_options = kwargs.get('catalog', {})
+    if not catalog_options:
+        catalog_options = {key: kwargs.get(key, _default_options[key]) for key, value in _default_options.items()}
+        catalog_options = _unzip_catalog_options(catalog_options)
+    else:
+        catalog_options = _unzip_catalog_options(catalog_options)
+        _default_options.pop('tracer')
+        catalog_options = {tracer: _default_options | catalog_options[tracer] for tracer in catalog_options}
+    catalog_options = _zip_catalog_options(catalog_options, squeeze=False)
+    imock = catalog_options['imock']
+    
+    if imock[0] and imock[0] == '*':
+        fns = [get_box_stats_fn(stats_dir=stats_dir, kind=kind, ext=ext, catalog=catalog_options | dict(imock=(imock,)), **kwargs) for imock in range(1000)]
+        return [fn for fn in fns if os.path.exists(fn)]
+
+    stats_dir = Path(stats_dir)
+
+    def join_if_not_none(f, key):
+        items = catalog_options[key]
+        if any(item is not None for item in items):
+            return join_tracers(tuple(f(item) for item in items if item is not None))
+        return ''
+
+    def check_is_not_none(key):
+        items = catalog_options[key]
+        assert all(item is not None for item in items), f'provide {key}'
+        return items
+
+    version = join_if_not_none(str, 'version')
+    if version: stats_dir = stats_dir / version
+    tracer = join_tracers(check_is_not_none('tracer'))
+    cosmo = join_tracers(check_is_not_none('cosmo'))
+    zrange = join_if_not_none(lambda zrange: f'z{zrange[0]:.1f}-{zrange[1]:.1f}', 'zrange')
+    zrange = f'_{zrange}' if zrange else ''
+    box_type = join_tracers(check_is_not_none('box_type'))
+    hod = join_if_not_none(str, 'hod')
+    hod = f'_{hod}' if hod else ''
+    los = join_tracers(check_is_not_none('los'))
+    extra = f'_{extra}' if extra else ''
+    imock = join_if_not_none(str, 'imock')
+    imock = f'_{imock}' if imock else ''
+    corr_type = 'smu'
+    battrs = kwargs.get('battrs', None)
+    if battrs is not None: corr_type = ''.join(list(battrs))
+    kind = {'mesh2_spectrum': 'mesh2_spectrum_poles',
+            'particle2_correlation': f'particle2_correlation_{corr_type}'}.get(kind, kind)
+    if 'mesh3' in kind:
+        basis = kwargs.get('basis', None)
+        basis = f'_{basis}' if basis else ''
+        kind = f'mesh3_spectrum{basis}_poles'
+    basename = f'{kind}_{tracer}{zrange}_{cosmo}_{box_type}{hod}_los{los}{extra}{imock}.{ext}'
+    return stats_dir / basename
+
+
 def checks_if_exists_and_readable(get_fn, test_if_readable=True, **kwargs):
     """
     Return lists of existing, missing and not readable files for all combinations of input kwargs.
