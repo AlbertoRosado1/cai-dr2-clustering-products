@@ -576,7 +576,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='me
         basis = kwargs.get('basis', None)
         basis = f'_{basis}' if basis else ''
         kind = f'mesh3_spectrum{basis}_poles'
-    basename = f'{kind}_{tracer}{zrange}_{region}_{weight}{auw}{cut}{extra}{imock}.{ext}'
+    basename = f'{kind}_{tracer}{zrange}_{region}_weight-{weight}{auw}{cut}{extra}{imock}.{ext}'
     return stats_dir / basename
 
 
@@ -988,6 +988,9 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             if FKP_P0 is not None:
                 catalog['WEIGHT_FKP'] = 1. / (1. + catalog['NX'] * FKP_P0)
             individual_weight *= catalog['WEIGHT_FKP']
+        if 'noimsys' in weight_type:
+            # this assumes that the WEIGHT column contains WEIGHT_SYS
+            individual_weight /= catalog['WEIGHT_SYS']
         if 'comp' in weight_type:
             individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
         catalog = catalog[['RA', 'DEC', 'Z', 'NX', 'TARGETID']]

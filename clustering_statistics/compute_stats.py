@@ -329,7 +329,7 @@ def main(**kwargs):
     parser.add_argument('--imock', help='mock number', type=int, nargs='*', default=[None])
     parser.add_argument('--region', help='regions', type=str, nargs='*', choices=['N', 'S', 'NGC', 'SGC', 'NGCnoN', 'SGCnoDES'], default=['NGC', 'SGC'])
     parser.add_argument('--analysis', help='type of analysis', type=str, choices=['full_shape', 'png_local'], default='full_shape')
-    parser.add_argument('--weight',  help='type of weights to use for tracer; "default" just uses WEIGHT column', type=str, default='default_FKP')
+    parser.add_argument('--weight',  help='type of weights to use for tracer; "default" just uses WEIGHT column', type=str, default='default-FKP')
     parser.add_argument('--thetacut',  help='Apply theta-cut', action='store_true', default=None)
     parser.add_argument('--auw',  help='Apply angular upweighting', action='store_true', default=None)
     parser.add_argument('--boxsize',  help='box size', type=float, default=None)
