@@ -99,17 +99,19 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             # sets NTILE-MISSING-POWER (missing_power) and per-tile completeness (completeness)
             _catalog_options['binned_weight'] = read_full_catalog(kind='parent_data', **_catalog_options, attrs_only=True)
 
-        data[tracer] = read_clustering_catalog(kind='data', **_catalog_options, concatenate=True)
         if with_recon:
             recon_options = kwargs['recon'][tracer]
             # pop as we don't need it anymore
             _catalog_options |= {key: recon_options.pop(key) for key in list(recon_options) if key in ['nran', 'zrange']}
+
+        data[tracer] = read_clustering_catalog(kind='data', **_catalog_options, concatenate=True)
+        
         randoms[tracer] = read_clustering_catalog(kind='randoms', **_catalog_options, cache=cache, concatenate=False)
 
     from jaxpower import create_sharding_mesh
     with create_sharding_mesh() as sharding_mesh:
         if with_recon:
-            data_rec, randoms_rec = {}, {}
+            # data_rec, randoms_rec = {}, {}
             for tracer in tracers:
                 recon_options = kwargs['recon'][tracer]
                 # local sizes to select positions
@@ -119,7 +121,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     size = len(random['POSITION'])
                     random['POSITION_REC'] = randoms_rec_positions[start:start + size]
                     start += size
-                randoms[tracer] = randoms[tracer][:catalog_options['nran']]  # keep only relevant random files
+                randoms[tracer] = randoms[tracer][:catalog_options[tracer]['nran']]  # keep only relevant random files
+                
 
         # Compute angular upweights
         if any(kwargs[stat].get('auw', False) for stat in stats):
