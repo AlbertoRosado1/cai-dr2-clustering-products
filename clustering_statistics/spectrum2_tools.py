@@ -303,7 +303,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
 
 
 
-def compute_window_mesh2_spectrum(*get_data_randoms, spectrum, optimal_weights=None):
+def compute_window_mesh2_spectrum(*get_data_randoms, spectrum, optimal_weights=None, cut=None):
     r"""
     Compute the 2-point spectrum window with :mod:`jaxpower`.
 
@@ -388,6 +388,18 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum, optimal_weights=N
         observable = window.observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'),
                                                                    attrs=pole.attrs | dict(zeff=zeff)), input_label=True)
         results['raw'] = window.clone(observable=observable, value=window.value() / (norm[..., None] / np.mean(norm)))  # just in case norm is k-dependent
+        if cut:
+            sattrs = {'theta': (0., 0.05)}
+            #pbin = BinParticle2SpectrumPoles(mattrs, edges=bin.edges, xavg=bin.xavg, sattrs=sattrs, ells=ells)
+            pbin = BinParticle2CorrelationPoles(mattrs, edges={'step': 0.1}, sattrs=sattrs, ells=ells)
+            from jaxpower.particle2 import convert_particles
+            all_particles = []
+            for iran, randoms in enumerate(all_randoms):
+                alpha = pole.attrs[f'wsum_data{iran:d}'] / randoms.weights.sum()
+                all_particles.append(convert_particles(randoms.clone(weights=alpha * randoms.weights)))
+            close = compute_particle2(*all_particles, bin=pbin, los=los)
+            close = close.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields), norm=norm)
+            results['window_mesh2_correlation_cut'] = correlation
         return results
 
     if optimal_weights is None:
