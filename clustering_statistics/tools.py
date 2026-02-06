@@ -506,8 +506,10 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
     if kind == 'full_data':
         return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
     if kind == 'full_randoms':
-        return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in range(nran)]
-
+        return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in range(nran)]        
+    if kind == 'single_randoms':
+        return cat_dir / f'{tracer}_{region}_{nran:d}_clustering.ran.{ext}'
+    
 
 def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='mesh2_spectrum', auw=None, cut=None, extra='', ext='h5', **kwargs):
     """
@@ -770,12 +772,12 @@ def _format_bitweights(bitweights):
 
 
 @default_mpicomm
-def _read_catalog(fn, mpicomm=None):
+def _read_catalog(fn, mpicomm=None, **kwargs):
     """Wrapper around :meth:`Catalog.read` to read catalog(s)."""
     one_fn = fn[0] if isinstance(fn, (tuple, list)) else fn
     if str(one_fn).endswith('.h5'): 
         try:
-            catalog = Catalog.read(fn, mpicomm=mpicomm, group='LSS')
+            catalog = Catalog.read(fn, mpicomm=mpicomm, group='LSS', **kwargs)
         except KeyError:
             catalog = Catalog.read(fn, mpicomm=mpicomm)
     else:
@@ -878,38 +880,41 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
         Data catalogs to take redshift information from (concatenation of NGC and SGC).
     from_randoms : list, tuple
         List of the column names to add to ``randoms`` from the parent random catalog via TARGETID match.
+        If empty, no columns are added from ``parent_randoms``.
     from_data : list, tuple
         List of the column names to add to ``randoms`` from the data catalog via TARGETID_DATA to TARGETID match.
+        If empty, no columns are added from ``data``.
 
     Returns
     -------
     randoms : Catalog
         Expanded randoms catalog.
     """
-    _, randoms_index, parent_index = np.intersect1d(randoms['TARGETID'], parent_randoms['TARGETID'], return_indices=True)
-    randoms = randoms[randoms_index]
-    for column in from_randoms:
-        if column != 'TARGETID':
-            randoms[column] = parent_randoms[column][parent_index]
-
-    if isinstance(data, (list, tuple)):  # NGC + SGC
-        data = Catalog.concatenate([dd[list(from_data) + ['TARGETID']] for dd in data])
-    else:
-        data = data[list(from_data) + ['TARGETID']]
-    data['TARGETID_DATA'] = data.pop('TARGETID')
-
-    if data['TARGETID_DATA'].max() < int(1e9):  # faster method
-        lookup = np.arange(1 + data['TARGETID_DATA'].max())
-        lookup[data['TARGETID_DATA']] = np.arange(len(data))
-        index = lookup[randoms['TARGETID_DATA']]
-    else:
-        sorted_index = np.argsort(data['TARGETID_DATA'])
-        index_in_sorted = np.searchsorted(data['TARGETID_DATA'], randoms['TARGETID_DATA'], sorter=sorted_index)
-        index = sorted_index[index_in_sorted]
-    for column in data:
-        if column != 'TARGETID':
-            randoms[column] = data[column][index]
-
+    
+    if len(from_randoms) != 0:
+        _, randoms_index, parent_index = np.intersect1d(randoms['TARGETID'], parent_randoms['TARGETID'], return_indices=True)
+        randoms = randoms[randoms_index]
+        for column in from_randoms:
+            if column != 'TARGETID':
+                randoms[column] = parent_randoms[column][parent_index]
+    if len(from_data) != 0:
+        if isinstance(data, (list, tuple)):  # NGC + SGC
+            data = Catalog.concatenate([dd[list(from_data) + ['TARGETID']] for dd in data])
+        else:
+            data = data[list(from_data) + ['TARGETID']]
+        data['TARGETID_DATA'] = data.pop('TARGETID')
+    
+        if data['TARGETID_DATA'].max() < int(1e9):  # faster method
+            lookup = np.arange(1 + data['TARGETID_DATA'].max())
+            lookup[data['TARGETID_DATA']] = np.arange(len(data))
+            index = lookup[randoms['TARGETID_DATA']]
+        else:
+            sorted_index = np.argsort(data['TARGETID_DATA'])
+            index_in_sorted = np.searchsorted(data['TARGETID_DATA'], randoms['TARGETID_DATA'], sorter=sorted_index)
+            index = sorted_index[index_in_sorted]
+        for column in data:
+            if column != 'TARGETID':
+                randoms[column] = data[column][index]
     return randoms
 
 
@@ -1236,3 +1241,69 @@ def combine_stats(observables):
                                weights=[window.observable.get(**label).values('norm').mean() for window in observables])
             pole.attrs.update(zeff=zeff)
     return observable
+
+
+def merge_catalogs(output, inputs, factor=1., seed=42, **kwargs):
+    import numpy as np
+    from mockfactory import Catalog
+    inputs = list(inputs)
+    ncatalogs = len(inputs)
+    catalogs = []
+    columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_FKP', 'MASK']
+    columns += ['WEIGHT_COMP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'NX']
+    rng = np.random.RandomState(seed=seed)
+    from pyrecon.utils import MemoryMonitor
+    with MemoryMonitor() as mem:
+        for fn in inputs:
+            catalog = _read_catalog(fn, **kwargs)
+            mask = rng.uniform(0., 1., catalog.size) < factor / ncatalogs
+            catalog.get(catalog.columns())
+            columns = [col for col in columns if col in catalog.columns()]
+            catalogs.append(catalog[columns][mask])
+            mem()
+    catalog = Catalog.concatenate(catalogs, intersection=True)
+    catalog.write(output)
+
+
+def merge_randoms_catalogs(output, inputs, factor=1., seed=42, expand=None, **kwargs):
+    import numpy as np
+    from mockfactory import Catalog
+    inputs = list(inputs)
+    ncatalogs = len(inputs)
+    rng = np.random.RandomState(seed=seed)
+    from pyrecon.utils import MemoryMonitor
+    concatenate = None
+    # columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_FKP', 'MASK']
+    columns = ['RA', 'DEC', 'NX', 'TARGETID', 'TARGETID_DATA', 'WEIGHT']
+    
+    # def get_uid(ra, dec):
+    #     factor = 1000000
+    #     return np.rint(ra * factor) + 360 * factor * np.rint((dec + 90.) * factor)
+    
+    def get_uid(ra, dec):
+        return ra + 1j * dec
+        
+    with MemoryMonitor() as mem:
+        for ifn, fn in enumerate(inputs):
+            print(ifn,fn)
+            catalog =  _read_catalog(fn, **kwargs)
+            catalog.get(catalog.columns())
+            if expand is not None:
+                print(f'Expanding {fn}')
+                catalog = expand(catalog)
+            columns = [col for col in columns if col in catalog.columns()]
+            if concatenate is None:
+                mask = rng.uniform(0., 1., catalog.size) < factor / ncatalogs
+                concatenate = catalog[columns][mask]
+            else:
+                csize = catalog.size
+                mask = np.isin(get_uid(catalog['RA'], catalog['DEC']), get_uid(concatenate['RA'], concatenate['DEC']))
+                print(mask.sum(), mask.sum() / mask.size, factor / ncatalogs, ncatalogs)
+                catalog = catalog[~mask]
+                if not catalog.csize: break
+                print(factor * csize / catalog.size / ncatalogs)
+                mask = rng.uniform(0., 1., catalog.size) < factor * csize / catalog.size / ncatalogs
+                concatenate = Catalog.concatenate(concatenate, catalog[columns][mask])
+            mem()
+    concatenate.write(output)
+    
