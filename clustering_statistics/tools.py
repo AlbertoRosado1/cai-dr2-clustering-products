@@ -8,6 +8,8 @@ import functools
 
 import numpy as np
 from mpi4py import MPI
+import jax
+from jax import numpy as jnp
 from mockfactory import Catalog, sky_to_cartesian, setup_logging
 import lsstypes as types
 
@@ -121,7 +123,7 @@ def select_region(ra, dec, region=None):
         - 'SSGCnoDES': Southern part of SGC excluding DES footprint
         - 'SGCnoDES': SGC excluding DES footprint
         - 'ACT_DR6': ACT DR6 footprint
-        = 'PLANCK_PR4': Planck PR4 footprint
+        - 'PLANCK_PR4': Planck PR4 footprint
 
     Returns
     -------
@@ -201,11 +203,93 @@ def compute_fiducial_selection_weights(catalog, stat='mesh3_spectrum', tracer=No
     return catalog
 
 
+@jax.jit
+def lininterp_1d(xp: jax.Array, y: jax.Array, xmin: jax.Array=0., step: jax.Array=1.):
+    """
+    xp are query points, y is a 1D array of samples spaced by `step` starting at `xmin`.
+
+    Parameters
+    ----------
+    xp : array-like
+        Query points.
+    y : array-like
+        Sampled values on a regular grid.
+    xmin : float, optional
+        Grid starting coordinate.
+    step : float, optional
+        Grid spacing.
+
+    Returns
+    -------
+    array-like
+        Interpolated values at xp using linear interpolation with clipping at boundaries.
+    """
+    fidx = (xp - xmin) / step
+    idx = jnp.floor(fidx).astype(jnp.int16)
+    fidx -= idx
+    toret = (1 - fidx) * y[idx] + fidx * y[idx + 1]
+    #return jnp.where((idx >= 0) & (idx < len(y)), toret, 0.)
+    toret = jnp.where(idx < 0, y[0], toret)
+    toret = jnp.where(idx > len(y) - 1, y[-1], toret)
+    return toret
+
+
+def get_interpolator_1d(x: jax.Array, y: jax.Array, order: int=1):
+    """
+    Return a 1D interpolator function for arrays x, y.
+
+    For linear regular grids (constant spacing) a JIT-able linear interpolator is
+    returned; for other cases or higher `order`, an interpolator based on interpax is used.
+
+    Parameters
+    ----------
+    x : 1D array-like
+        Grid points (monotonic).
+    y : 1D array-like
+        Values at grid points.
+    order : int, optional
+        Interpolation order (1 for linear). Higher orders use an external Interpolator.
+
+    Returns
+    -------
+    callable
+        A function that takes query points and returns interpolated values (JAX arrays).
+    """
+    xmin, xmax = x[0], x[-1]
+    step = (xmax - xmin) / (len(x) - 1)
+    is_lin = np.allclose(x, step * np.arange(len(x)) + xmin)
+
+    if order == 1:
+        if is_lin:
+
+            def interp(xp):
+                return lininterp_1d(xp, y=y, xmin=xmin, step=step)
+        else:
+
+            def interp(xp):
+                return jnp.interp(xp, x, y)
+
+    else:
+        from interpax import Interpolator1D
+        interpolator = Interpolator1D(x, jnp.asarray(y), method={1: 'linear', 3: 'cubic2'}[order], extrap=False, period=None)
+
+        @jax.jit
+        def interp(xp):
+            # clip
+            toret = interpolator(xp)
+            #return jnp.where((xp >= xmin) & (xp <= xmax), toret, 0.)
+            toret = jnp.where(xp < xmin, y[0], toret)
+            toret = jnp.where(xp > xmax, y[-1], toret)
+            return toret
+
+    return interp
+
+
 def compute_fiducial_png_weights(ell, catalog, tracer='LRG', p=1.):
     """Return total optimal weights for local PNG analysis."""
     from jax import numpy as jnp
     from cosmoprimo.fiducial import DESI
-    from cosmoprimo.utils import Interpolator1D
+    from interpax import Interpolator1D
 
     def bias(z, tracer='QSO'):
         """Bias model for the different DESI tracer (measured from DR2 data (loa/v2))."""
@@ -224,10 +308,10 @@ def compute_fiducial_png_weights(ell, catalog, tracer='LRG', p=1.):
         return alpha * (1 + z)**2 + beta
 
     cosmo = DESI()
-    zmax, nz = 100., 512
-    zgrid = 1. / np.geomspace(1. / (1. + zmax), 1., nz)[::-1] - 1.
-    growth_factor = Interpolator1D(zgrid, jnp.array(cosmo.growth_factor(zgrid)), k=3)
-    growth_rate = Interpolator1D(zgrid, jnp.array(cosmo.growth_rate(zgrid)), k=3)
+    zstep = 0.001
+    zgrid = np.arange(0., 10. + zstep, zstep)
+    growth_factor = get_interpolator_1d(zgrid, cosmo.growth_factor(zgrid), order=1)
+    growth_rate = get_interpolator_1d(zgrid, cosmo.growth_rate(zgrid), order=1)
 
     tracers = _make_tuple(tracer, n=2)
     catalogs = _make_tuple(catalog, n=2)
@@ -1174,7 +1258,7 @@ def possible_combine_regions(regions):
 
 
 def compute_fkp_effective_redshift(*fkps, cellsize=10., order=2, split=None, fields=None, func_of_z=lambda x: x,
-                                   resampler='cic'):
+                                   resampler='cic', return_fraction=False):
     """
     Return effective redshift given input :class:`FKPField` of :class:`ParticleField` fields.
 
@@ -1202,15 +1286,14 @@ def compute_fkp_effective_redshift(*fkps, cellsize=10., order=2, split=None, fie
     # FIXME
     from jax import numpy as jnp
     from cosmoprimo.fiducial import TabulatedDESI, DESI
-    from cosmoprimo.utils import Interpolator1D
     from jaxpower import split_particles, FKPField
     from jaxpower.mesh import _iter_meshes
 
-    fiducial = TabulatedDESI()
-    zmax, nz = 100., 512
-    zgrid = 1. / np.geomspace(1. / (1. + zmax), 1., nz)[::-1] - 1.
+    fiducial = DESI()
+    zstep = 0.005
+    zgrid = np.arange(0., 1100 + zstep, zstep)
     rgrid = fiducial.comoving_radial_distance(zgrid)
-    d2z = Interpolator1D(jnp.array(rgrid), jnp.array(func_of_z(zgrid)), k=1)  #FIXME k = 1, otherwise memory error
+    d2z = get_interpolator_1d(rgrid, func_of_z(zgrid), order=1)
 
     fkps_none =  list(fkps) + [None] * (order - len(fkps))
 
@@ -1225,24 +1308,44 @@ def compute_fkp_effective_redshift(*fkps, cellsize=10., order=2, split=None, fie
         reduce = 1
         for mesh in _iter_meshes(*particles, resampler=resampler, cellsize=cellsize, compensate=False, interlacing=0):
             reduce *= mesh
-        reduce /= reduce.sum()
+        rsum = reduce.sum()
+        if not return_fraction: reduce /= rsum
         distance = jnp.sqrt(sum(xx**2 for xx in mesh.attrs.xcoords(kind='position', sparse=True)))
         reduce *= d2z(distance)
-        return reduce.sum()
+        if not return_fraction: return reduce.sum()
+        return reduce.sum(), rsum
 
     return compute_fkp_normalization_z(*randoms)
 
 
 def combine_stats(observables):
     """Combine input observables (e.g. NGC and SGC); of :mod:`lsstypes` type."""
+    import copy
     observables = list(observables)
     observable = types.sum(observables)
+
+    def _combine_attrs(observables):
+        attrs = copy.deepcopy(observables[0].attrs)
+        for name in ['size_data', 'size_randoms', 'size_shifted',
+                    'wsum_data', 'wsum_randoms', 'wsum_shifted']:
+            if name in attrs:
+                attrs[name] = sum([observable.attrs[name] for observable in observables], start=[])
+        name = 'zeff'
+        if name in attrs:
+            norm_zeff = [observable.attrs[f'norm_{name}'] for observable in observables]
+            attrs[name] = np.average([observable.attrs[name] for observable in observables], weights=norm_zeff)
+            attrs[f'norm_{name}'] = np.sum(norm_zeff)
+        return attrs
+
+    def combine_attrs(observable, observables):
+        return types.tree_map(lambda observables: observables[0].clone(attrs=_combine_attrs(observables[1:])), [observable] + observables, level=None)
+    
     if isinstance(observable, types.WindowMatrix):
         window = observable
-        for label, pole in window.observable.items():
-            zeff = np.average([window.observable.get(**label).attrs['zeff'] for window in observables],
-                               weights=[window.observable.get(**label).values('norm').mean() for window in observables])
-            pole.attrs.update(zeff=zeff)
+        observable = window = window.clone(observable=combine_attrs(window.observable, [window.observable for window in observables]))
+    else:
+        observable = combine_attrs(observable, [observable for observable in observables])
+
     return observable
 
 

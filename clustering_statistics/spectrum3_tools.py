@@ -171,20 +171,14 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=Non
                 logger.info(f'Processing scale x{scale:.0f}')
             mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
             kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
-            print(len(edges), kw['ells'])
-            buffer_size = 0
-            edges = edges[:5]
             sbin = BinMesh3CorrelationPoles(mattrs2, edges=edges, **kw, buffer_size=buffer_size)  # kcut=(0., mattrs2.knyq.min()))
             meshes = []
             for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
                                                            seed=seed, fields=fields)):
-                    randoms = randoms.exchange()
-                    alpha = pole.attrs[f'wsum_data{min(iran, len(all_randoms) - 1):d}'] / randoms.weights.sum()
-                    meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
+                randoms = randoms.exchange(backend='mpi')
+                alpha = pole.attrs['wsum_data'][0][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
+                meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
             correlation = jitted_compute_mesh3_correlation(meshes, bin=sbin, los=los).clone(norm=[np.mean(norm)] * len(sbin.ells))
-            jax.block_until_ready(correlation)
-            logger.info('Done!')
-            exit()
             correlation = interpolate_window_function(correlation.unravel(), coords=coords, order=3)
             correlations.append(correlation)
 
