@@ -595,7 +595,9 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
     if kind == 'full_data':
         return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
     if kind == 'full_randoms':
-        return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in range(nran)]        
+        return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in range(nran)]
+    if kind == 'single_full_randoms':
+        return cat_dir / f'{tracer}_{nran:d}_full_HPmapcut.ran.{ext}'
     if kind == 'single_randoms':
         return cat_dir / f'{tracer}_{region}_{nran:d}_clustering.ran.{ext}'
     
@@ -1010,7 +1012,7 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
 
 @default_mpicomm
 def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn, get_positions_from_rdz=get_positions_from_rdz,
-                            expand=None, FKP_P0=None, binned_weight=None, return_all_columns=False, mpicomm=None, **kwargs):
+                            expand=None, reshuffle=None, FKP_P0=None, binned_weight=None, return_all_columns=False, mpicomm=None, **kwargs):
     """
     Read clustering catalog (data or randoms) with given parameters.
 
@@ -1028,6 +1030,10 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         If callable, function to expand randoms catalog.
         If dict, parameters to expand randoms catalog via :func:`expand_randoms`.
         In this case, modified in-place to add the parent randoms catalog with key its file name.
+    reshuffle : callable, dict, optional
+        If callable, function to reshuffle randoms catalog.
+        If dict, parameters to reshuffle randoms catalog via :func:`reshuffle_randoms`.
+        In this case, modified in-place to add the merged data catalogs with key its file name.
     binned_weight : dict, optional
         Binned weights to apply. Keys are column names, values are weight arrays.
     mpicomm : MPI.Comm, optional
@@ -1041,21 +1047,24 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         Catalog object or list of Catalog objects (if ``concatenate`` is False).
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
     """
-    
-    zrange, region, weight_type = (kwargs.get(key) for key in ['zrange', 'region', 'weight'])
-
     assert kind in ['data', 'randoms'], 'provide kind (data or randoms)'
     assert weight_type is not None, 'provide weight'
 
-    fns = get_catalog_fn(kind=kind, **kwargs)
+    zrange, region, weight_type, imock, tracer = (kwargs.get(key) for key in ['zrange', 'region', 'weight', 'imock', 'tracer'])
+    if kind == 'randoms' and (isinstance(reshuffle, dict) or (reshuffle is not None)):
+        # if randoms are going to be reshuffled, all regions are needed so we force it.
+        fns = get_catalog_fn(kind=kind,  **(kwargs | dict(region='ALL')))
+    else:
+        fns = get_catalog_fn(kind=kind, **kwargs)
     if not isinstance(fns, (tuple, list)): fns = [fns]
-    exists = {os.path.exists(fn): fn for fn in fns}
-    if not all(exists):
-        raise IOError(f'Catalogs {[fn for ex, fn in exists.items() if not ex]} do not exist!')
+    fns = list(zip(*fns)) if isinstance(fns[0], (list, tuple)) else fns
+    exists = {f: os.path.exists(f) for fn in fns for f in (fn if isinstance(fn, (list,tuple)) else [fn])}
+    if not all(exists.values()):
+        raise IOError(f'Catalogs {[fn for fn, ex in exists.items() if not ex]} do not exist!')
 
     if kind == 'randoms' and isinstance(expand, dict):
-        from_data = expand.get('from_data', ['Z','WEIGHT_SYS', 'FRAC_TLOBS_TILES'])
-        from_randoms = expand.get('from_randoms', ['RA', 'DEC'])
+        from_data = expand.get('from_data', ['Z','WEIGHT_SYS','FRAC_TLOBS_TILES'])
+        from_randoms = expand.get('from_randoms', ['RA','DEC','NTILE'])
         parent_randoms_fn = expand['parent_randoms_fn']
         if not isinstance(parent_randoms_fn, (tuple, list)):
             parent_randoms_fn = [parent_randoms_fn]
@@ -1077,7 +1086,25 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
     else:
         expand = None
 
+    if kind == 'randoms' and isinstance(reshuffle, dict):
+        merged_data_fn = reshuffle['merged_data_fn']
+        if not isinstance(merged_data_fn, (tuple, list)):
+            raise ValueError(f"Merged data filenames must be a tuple or list containing the filenames for NGC and SGC")
+        if mpicomm.rank == 0:
+            logger.info('Reshuffling randoms')
+        merged_data = _read_catalog(merged_data_fn, mpicomm=MPI.COMM_SELF)
+        data_fn = reshuffle.get('data_fn', None)
+        if data_fn is None:
+            data_fn = [get_catalog_fn(kind='data', **(kwargs | dict(region=region))) for region in ['NGC', 'SGC']]
+        data = _read_catalog(data_fn, mpicomm=MPI.COMM_SELF)
+        
+        def reshuffle(catalog,seed):
+            return reshuffle_randoms(tracer, catalog, merged_data=merged_data, data=data, seed=seed)
+    else: 
+        reshuffle = None
+
     catalogs = [None] * len(fns)
+    if mpicomm.rank == 0: logger.info(f'length of filenames {len(fns)} and fns are {fns}')
     for ifn, fn in enumerate(fns):
         irank = ifn % mpicomm.size
         catalogs[ifn] = (irank, None)
@@ -1085,6 +1112,14 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             catalog = _read_catalog(fn, mpicomm=MPI.COMM_SELF)
             if expand is not None: 
                 catalog = expand(catalog, ifn)
+            if reshuffle is not None:
+                if mpicomm.rank == 0: 
+                    from time import time
+                    t0=time()
+                    logger.info('Reshuffling randoms started.')
+                catalog = reshuffle(catalog, 100 * imock + ifn)
+                if mpicomm.rank == 0: 
+                    logger.info(f'Reshuffling randoms completed in {time() - t0:2.1f} s')
             columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_COMP', 'WEIGHT_FKP', 'WEIGHT_SYS', 'BITWEIGHTS', 'FRAC_TLOBS_TILES', 'NTILE', 'NX', 'TARGETID']
             columns = [column for column in columns if column in catalog.columns()]
             catalog = catalog[columns]
@@ -1436,4 +1471,82 @@ def merge_randoms_catalogs(output, inputs, parent_randoms_fn=None, factor=1., se
                 concatenate = Catalog.concatenate(concatenate, catalog[columns][mask])
             mem()
     concatenate.write(output)
+
+def reshuffle_randoms(tracer, randoms, merged_data, data, seed):
+    import numpy as np
+    # get weights
+    data_wtotp = data['WEIGHT_COMP'] * data['WEIGHT_SYS'] * data['WEIGHT_ZFAIL']
+    data_wcomp = data_wtotp / data['WEIGHT']
+    
+    merged_data_wtotp = merged_data['WEIGHT_COMP'] * merged_data['WEIGHT_SYS'] * merged_data['WEIGHT_ZFAIL']
+    merged_data_wcomp = merged_data_wtotp / merged_data['WEIGHT']
+    
+    merged_data_ftile = data_ftile = 1. # ok for FFA
+    
+    merged_data_ftile_wcomp = merged_data_ftile / merged_data_wcomp
+    merged_data_nz = merged_data['NX'] / merged_data_ftile_wcomp
+    
+    P0 = np.rint(np.mean((1. / merged_data['WEIGHT_FKP'] - 1.) / merged_data['NX']))
+        
+    if 'Z' not in randoms: 
+        randoms['Z'] = randoms.zeros() # place holder, since will be filled with 'Z' from merged_data anyway
+    randoms_ntile = randoms['NTILE']
+    randoms_wcomp = _compute_binned_weight(data['NTILE'], data_wcomp)[randoms_ntile]
+
+    # print(seed)
+    rng = np.random.RandomState(seed=seed)
+
+    regions = ['N', 'S']
+    if tracer == 'QSO':
+        regions = ['N', 'SnoDES', 'DES']
+
+    randoms['NZ'] = randoms.zeros()
+
+    randoms_ftile = 1.  # ok for FFA
+    sum_data_weights, sum_randoms_weights = [], []
+
+    for region in regions:
+        mask_data = select_region(data['RA'], data['DEC'], region=region)
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        mask_merged_data = select_region(merged_data['RA'], merged_data['DEC'], region=region)
+
+        # Shuffle z
+        index = rng.choice(mask_merged_data.sum(), size=mask_randoms.sum())
+        randoms['Z'][mask_randoms] = merged_data['Z'][mask_merged_data][index]
+        randoms['WEIGHT'][mask_randoms] = (merged_data_wtotp * randoms_ftile)[mask_merged_data][index]
+        randoms['NZ'][mask_randoms] = merged_data_nz[mask_merged_data][index]
+
+        sum_data_weights.append(data_wtotp[mask_data].sum())
+        sum_randoms_weights.append(randoms['WEIGHT'][mask_randoms].sum())
+    if np.any(randoms['Z']==0.):
+        raise ValueError('Something went wrong! Place holder of z = 0. remain after reshuffling.')
+    # Renormalize randoms / data here
+    sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
+    alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
+    # logger.info('alpha before renormalization: {}'.format(alphas))
+
+    for region, alpha in zip(regions, alphas):
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        randoms['WEIGHT'][mask_randoms] *= alpha
+
+    randoms['WEIGHT'] /= randoms_wcomp
+    randoms['NX'] = randoms['NZ'] * (randoms_ftile / randoms_wcomp)
+    # randoms['WEIGHT_FKP'] = 1. / (1. + randoms['NX'] * P0)
+    del randoms['NZ']
+
+    alphas = []
+    sum_data_weights, sum_randoms_weights = [], []
+    for region in regions:
+        mask_data = select_region(data['RA'], data['DEC'], region=region)
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        sum_data_weights.append(data['WEIGHT'][mask_data].sum())
+        sum_randoms_weights.append(randoms['WEIGHT'][mask_randoms].sum())
+
+    sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
+    alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
+    # logger.info('alpha after renormalization & reweighting: {}'.format(alphas))
+
+    # for iregion, region in enumerate(cregions):
+    #     randoms[select_region(randoms['RA'], randoms['DEC'], region=region)][output_columns].write(output_randoms_fn[iregion])
+    return randoms
     
