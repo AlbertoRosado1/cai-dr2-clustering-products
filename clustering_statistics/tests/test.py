@@ -115,8 +115,8 @@ def test_cross(stats=['mesh2_spectrum']):
 def test_window(stats=['mesh2_spectrum']):
     stats_dir = Path(Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks')
     for stat in stats:
-        for tracer in ['QSO']:
-            zranges = [(0.8, 2.1)]
+        for tracer in ['LRG'][:0]:
+            zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
@@ -154,7 +154,7 @@ if __name__ == '__main__':
     jax.distributed.initialize()
     setup_logging()
 
-    test_window(stats=['mesh3_spectrum'])
+    test_window(stats=['mesh2_spectrum'])
     exit()
     test_stats_fn()
     test_auw(stats=['mesh2_spectrum'])
