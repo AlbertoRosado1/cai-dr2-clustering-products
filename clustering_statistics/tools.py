@@ -659,7 +659,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='me
     catalog_options = _zip_catalog_options(catalog_options, squeeze=False)
     imock = catalog_options['imock']
     if imock[0] and imock[0] == '*':
-        fns = [get_stats_fn(stats_dir=stats_dir, kind=kind, auw=auw, cut=cut, ext=ext, catalog=catalog_options | dict(imock=(imock,)), **kwargs) for imock in range(1000)]
+        fns = [get_stats_fn(stats_dir=stats_dir, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options | dict(imock=(imock,)), **kwargs) for imock in range(1000)]
         return [fn for fn in fns if os.path.exists(fn)]
 
     stats_dir = Path(stats_dir)
