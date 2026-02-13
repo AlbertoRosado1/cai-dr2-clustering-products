@@ -81,7 +81,7 @@ if __name__ == '__main__':
     
     mode = 'slurm'
     imocks2run = np.arange(100, 150+1)
-    analysis = 'full_shape'
+    analysis = 'png_local' #'full_shape'
     tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
     cai_dir    = Path(f'/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe/')
     stats_dir  = cai_dir / analysis
@@ -99,14 +99,14 @@ if __name__ == '__main__':
     if analysis == 'full_shape':
         if noric:
             stats   = ['mesh2_spectrum', 'mesh3_spectrum']
-            weights = ['default-FKP']
+            weights = ['default-noimsys-FKP']
         else:
             stats   = ['mesh2_spectrum', 'mesh3_spectrum']
             weights = ['default-noimsys-FKP','default-FKP']
     elif analysis == 'png_local':
         stats   = ['mesh2_spectrum']
         if noric:
-            weights = ['default-oqe']
+            weights = ['default-noimsys-oqe','default-oqe']
         else:
             weights = ['default-noimsys-oqe','default-oqe']
     else:
