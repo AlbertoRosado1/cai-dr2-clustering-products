@@ -3,11 +3,11 @@ from matplotlib import pyplot as plt
 import lsstypes as types
 from clustering_statistics import tools
 
-def get_means_covs(kind, versions, tracer, zrange, region, stats_dir):
+def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, rebin=1):
     means, covs = {}, {}
     for version in versions:
         kw = {'tracer': tracer}
-        for name in ['version', 'weight', 'cut', 'auw']:
+        for name in ['version', 'weight', 'cut', 'auw', 'extra']:
             kw[name] = versions[version][name]
         if 'ELG' in kw['tracer']:
             if 'complete' in kw['version']:
@@ -19,10 +19,7 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir):
             kw['auw'] = False
         fns = tools.get_stats_fn(kind=kind, stats_dir=stats_dir, zrange=zrange, region=region, **kw, imock='*')
         stats = list(map(types.read, fns))
-        rebin = 1
-        if 'mesh2' in kind:
-            rebin = 5
-        means[version] = types.mean(stats).select(k=slice(0, None, rebin))#.select(k=(0., 0.3))
+        means[version] = types.mean(stats).select(k=slice(0, None, rebin))
         if len(stats) > 1:
             covs[version] = types.cov(stats).at.observable.match(means[version])
         else:
@@ -30,7 +27,7 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir):
     return means, covs
 
 
-def plot_stats(kind, versions, tracer, zrange, region, stats_dir, ells=(0,2,4), reference=None, ylim=(-1.5, 1.5),
+def plot_stats(kind, versions, tracer, zrange, region, stats_dir, ells=(0,2,4), rebin=1, reference=None, ylim=(-1.5, 1.5),
                figure=None, ax_col=0, linestyles=None, colors=None, scaling='kpk', save_fn=None):
     if reference is None:
         # use first item from versions as reference
@@ -47,7 +44,7 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, ells=(0,2,4), 
             lax = axes[:, ax_col]
     k_exp = 1 if scaling == 'kpk' else 0
     if 'mesh2_spectrum' in kind:
-        means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir)
+        means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir, rebin=rebin)
         versions = list(means)
         lax[0].set_title(f'{tracer} in {region} {zrange[0]:.1f} < z < {zrange[1]:.1f}')
         for ill, ell in enumerate(ells):
@@ -71,12 +68,13 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, ells=(0,2,4), 
             for iversion, version in enumerate(versions):
                 if 'data' in version or version == reference: continue
                 pole = means[version].get(ell)
+                # std = covs[reference].at.observable.get(ell).std().real
                 std = covs[reference].at.observable.get(ell).std().real
                 ax.plot(pole.coords('k'), (pole.value() - means[reference].get(ell).value()).real / std, color=colors[version], linestyle=linestyles[version])
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
 
     elif 'mesh3_spectrum_sugiyama-diagonal' in kind:
-        means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir)
+        means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir, rebin=rebin)
         versions = list(means)
         lax[0].set_title(f'{tracer} in {zrange[0]:.1f} < z < {zrange[1]:.1f}')
         for ill, ell in enumerate(ells):
