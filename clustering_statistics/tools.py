@@ -10,7 +10,7 @@ import numpy as np
 from mpi4py import MPI
 import jax
 from jax import numpy as jnp
-from mockfactory import Catalog, sky_to_cartesian, setup_logging
+from mockfactory import Catalog, sky_to_cartesian, cartesian_to_sky, setup_logging
 import lsstypes as types
 
 
@@ -18,6 +18,14 @@ logger = logging.getLogger('tools')
 
 
 desi_dir = Path('/dvs_ro/cfs/cdirs/desi/')
+
+
+def mkdir(dirname):
+    """Try to create ``dirname`` and catch :class:`OSError`."""
+    try:
+        os.makedirs(dirname)  # MPI...
+    except OSError:
+        return
 
 
 def default_mpicomm(func: Callable):
@@ -71,7 +79,7 @@ def get_lensing_options(sample):
         options['file'] = os.path.join(base_dir,'maps/baseline/mask_act_dr6_lensing_v1_healpix_nside_4096_baseline.fits')
         options['is_cmb_mask'] = True
         options['galactic_coordinates'] = False
-        return options   
+        return options
     if sample == 'planck_pr4':
         base_dir = "/dvs_ro/cfs/cdirs/cmb/data/planck2020/PR4_lensing/"
         options['file'] = os.path.join(base_dir, "mask.fits.gz")
@@ -80,7 +88,7 @@ def get_lensing_options(sample):
         return options
     raise ValueError('unknown lensing sample {}'.format(sample))
 
-    
+
 def get_lensing_footprint(sample, threshold=0.1):
     # https://github.com/cosmodesi/DESI_Y3_x_CMB/blob/28bf7661a6ed02f81397d5db93d87344cd47d0d2/DESI_Y3_x_CMB/auxiliary/config_utils.py#L59
     import healpy as hp
@@ -89,7 +97,7 @@ def get_lensing_footprint(sample, threshold=0.1):
     lensing_mask = hp.ud_grade(hp.read_map(mask_path, dtype=np.float32), lensing_options['healpix_nside']) # This is slow
     if lensing_options['is_cmb_mask']:
         lensing_mask *= lensing_mask
-    
+
     uses_galactic_coords = lensing_options["galactic_coordinates"]
     if uses_galactic_coords:
         rotator = hp.Rotator(coord=['G','C'])
@@ -97,7 +105,7 @@ def get_lensing_footprint(sample, threshold=0.1):
     lensing_mask = hp.reorder(lensing_mask,r2n=True)
     return lensing_mask > threshold
 
-    
+
 def select_region(ra, dec, region=None):
     """
     Return mask of corresponding R.A./Dec. region.
@@ -134,7 +142,7 @@ def select_region(ra, dec, region=None):
     # print('select', region)
     if region in [None, 'ALL', 'GCcomb']:
         return np.ones_like(ra, dtype='?')
-    
+
     # North, South, SGC, and NGC footprints
     mask_ngc = (ra > 100 - dec)
     mask_ngc &= (ra < 280 + dec)
@@ -156,8 +164,8 @@ def select_region(ra, dec, region=None):
         return mask_ngc & (~mask_n)
     # if region == 'GCcomb_noNorth':
     #     return ~mask_n
-    
-    # DES footprint 
+
+    # DES footprint
     north, south, des = load_footprint().get_imaging_surveys()
     mask_des = des[hp.ang2pix(hp.get_nside(des), ra, dec, nest=True, lonlat=True)]
     if region == 'DES':
@@ -170,15 +178,15 @@ def select_region(ra, dec, region=None):
         return (~mask_ngc) & (~mask_des)
     # if region == 'GCcomb_noDES':
     #     return ~mask_des
-    
+
     # Other footprints
     act = get_lensing_footprint(region.lower())
     mask_act = act[hp.ang2pix(hp.get_nside(act), ra, dec, nest=True, lonlat=True)]
-    if region == 'ACT_DR6': 
-        return mask_act    
+    if region == 'ACT_DR6':
+        return mask_act
     planck = get_lensing_footprint(region.lower())
     mask_planck = planck[hp.ang2pix(hp.get_nside(planck), ra, dec, nest=True, lonlat=True)]
-    if region == 'PLANCK_PR4': 
+    if region == 'PLANCK_PR4':
         return mask_planck
     raise ValueError('unknown region {}'.format(region))
 
@@ -366,7 +374,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_cellsize = 20.
     else:
         propose_weight = 'default-FKP'
-        propose_zranges = {'BGS': [(0.1, 0.4)], 'LRG': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)], 
+        propose_zranges = {'BGS': [(0.1, 0.4)], 'LRG': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
                            'ELG': [(0.8, 1.1), (1.1, 1.6)], 'LRG+ELG': [(0.8, 1.1)], 'QSO': [(0.8, 2.1)]}
         propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'LRG+ELG': 1e4, 'QSO': 6e3}
         propose_meshsizes = {'BGS': 750, 'LRG': 750, 'ELG': 960, 'LRG+ELG': 750, 'QSO': 1152}
@@ -600,7 +608,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         return cat_dir / f'{tracer}_{nran:d}_full_HPmapcut.ran.{ext}'
     if kind == 'single_randoms':
         return cat_dir / f'{tracer}_{region}_{nran:d}_clustering.ran.{ext}'
-    
+
 
 def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='mesh2_spectrum', auw=None, cut=None, extra='', ext='h5', **kwargs):
     """
@@ -692,7 +700,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='me
     return stats_dir / basename
 
 
-def get_box_stats_fn(stats_dir='/global/cfs/cdirs/desi/science/gqc/y3_fits/mockchallenge_abacushf/measurements', 
+def get_box_stats_fn(stats_dir='/global/cfs/cdirs/desi/science/gqc/y3_fits/mockchallenge_abacushf/measurements',
                      kind='mesh2_spectrum', extra='', ext='h5', **kwargs):
     """
     Return measurement filename for box mocks with given parameters.
@@ -739,7 +747,7 @@ def get_box_stats_fn(stats_dir='/global/cfs/cdirs/desi/science/gqc/y3_fits/mockc
         catalog_options = {tracer: _default_options | catalog_options[tracer] for tracer in catalog_options}
     catalog_options = _zip_catalog_options(catalog_options, squeeze=False)
     imock = catalog_options['imock']
-    
+
     if imock[0] and imock[0] == '*':
         fns = [get_box_stats_fn(stats_dir=stats_dir, kind=kind, ext=ext, catalog=catalog_options | dict(imock=(imock,)), **kwargs) for imock in range(1000)]
         return [fn for fn in fns if os.path.exists(fn)]
@@ -866,7 +874,7 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
     from mockfactory import Catalog
     import warnings
     one_fn = fn[0] if isinstance(fn, (tuple, list)) else fn
-    if str(one_fn).endswith('.h5'): 
+    if str(one_fn).endswith('.h5'):
         kwargs.setdefault('locking', False)  # fix -> Unable to synchronously open file (unable to lock file, errno = 524, error message = 'Unknown error 524')
         try:
             catalog = Catalog.read(fn, group='LSS', mpicomm=mpicomm, **kwargs)
@@ -995,7 +1003,7 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
         else:
             data = data[list(from_data) + ['TARGETID']]
         data['TARGETID_DATA'] = data.pop('TARGETID')
-    
+
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
             lookup = np.arange(1 + data['TARGETID_DATA'].max())
             lookup[data['TARGETID_DATA']] = np.arange(len(data))
@@ -1050,7 +1058,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
     assert kind in ['data', 'randoms'], 'provide kind (data or randoms)'
     zrange, region, weight_type, imock, tracer = (kwargs.get(key) for key in ['zrange', 'region', 'weight', 'imock', 'tracer'])
     assert weight_type is not None, 'provide weight'
-    reshuffle_condition = kind == 'randoms' and (isinstance(reshuffle, dict) or (reshuffle is not None)) 
+    reshuffle_condition = kind == 'randoms' and (isinstance(reshuffle, dict) or (reshuffle is not None))
     if reshuffle_condition:
         # if randoms are going to be reshuffled, all regions are needed so we force it.
         fns = get_catalog_fn(kind=kind,  **(kwargs | dict(region='ALL')))
@@ -1059,8 +1067,8 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
     if not isinstance(fns, (tuple, list)): fns = [fns]
     if region in ['S', 'ALL'] or reshuffle_condition:
         # group in pairs (this assumes that fns is a list with the first half corresponds to filenames
-        # of one region and the second halft to another (e.g., NGC and SGC) 
-        fns = list(zip(fns[:len(fns)//2],fns[len(fns)//2:])) if len(fns)>1 else fns  
+        # of one region and the second half to another (e.g., NGC and SGC)
+        fns = list(zip(fns[:len(fns)//2],fns[len(fns)//2:])) if len(fns)>1 else fns
     exists = {f: os.path.exists(f) for fn in fns for f in (fn if isinstance(fn, (list,tuple)) else [fn])}
     if not all(exists.values()):
         raise IOError(f'Catalogs {[fn for fn, ex in exists.items() if not ex]} do not exist!')
@@ -1100,10 +1108,10 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         if data_fn is None:
             data_fn = [get_catalog_fn(kind='data', **(kwargs | dict(region=region))) for region in ['NGC', 'SGC']]
         data = _read_catalog(data_fn, mpicomm=MPI.COMM_SELF)
-        
-        def reshuffle(catalog,seed):
+
+        def reshuffle(catalog, seed):
             return reshuffle_randoms(tracer, catalog, merged_data=merged_data, data=data, seed=seed)
-    else: 
+    else:
         reshuffle = None
 
     catalogs = [None] * len(fns)
@@ -1113,25 +1121,25 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         catalogs[ifn] = (irank, None)
         if mpicomm.rank == irank:  # Faster to read catalogs from one rank
             catalog = _read_catalog(fn, mpicomm=MPI.COMM_SELF)
-            if expand is not None: 
+            if expand is not None:
                 catalog = expand(catalog, ifn)
             if reshuffle is not None:
-                if mpicomm.rank == 0: 
+                if mpicomm.rank == 0:
                     from time import time
                     t0=time()
                     logger.info('Reshuffling randoms started.')
                 catalog = reshuffle(catalog, 100 * imock + ifn)
-                if mpicomm.rank == 0: 
+                if mpicomm.rank == 0:
                     logger.info(f'Reshuffling randoms completed in {time() - t0:2.1f} s')
             columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_COMP', 'WEIGHT_FKP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'BITWEIGHTS', 'FRAC_TLOBS_TILES', 'NTILE', 'NX', 'TARGETID']
             columns = [column for column in columns if column in catalog.columns()]
             catalog = catalog[columns]
 
-            if zrange is not None: 
+            if zrange is not None:
                 catalog = catalog[(catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])]
-            if 'bitwise' in weight_type: 
+            if 'bitwise' in weight_type:
                 catalog = catalog[(catalog['FRAC_TLOBS_TILES'] != 0)]
-            if region is not None: 
+            if region is not None:
                 catalog = catalog[select_region(catalog['RA'], catalog['DEC'], region)]
 
             catalogs[ifn] = (irank, catalog)
@@ -1164,9 +1172,9 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         if 'comp' in weight_type:
             individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
 
-        if not return_all_columns: 
+        if not return_all_columns:
             catalog = catalog[[column for column in ['RA', 'DEC', 'Z', 'NX', 'TARGETID'] if column in catalog]]
-        
+
         catalog['INDWEIGHT'] = individual_weight
         for column in catalog:
             if not np.issubdtype(catalog[column].dtype, np.integer):
@@ -1390,7 +1398,7 @@ def combine_stats(observables):
 
     def combine_attrs(observable, observables):
         return types.tree_map(lambda observables: observables[0].clone(attrs=_combine_attrs(observables[1:])), [observable] + observables, level=None)
-    
+
     if isinstance(observable, types.WindowMatrix):
         window = observable
         observable = window = window.clone(observable=combine_attrs(window.observable, [window.observable for window in observables]))
@@ -1398,8 +1406,8 @@ def combine_stats(observables):
         observable = combine_attrs(observable, [observable for observable in observables])
 
     return observable
-    
-    
+
+
 def merge_catalogs(output, inputs, factor=1., seed=42, read_catalog=_read_catalog, **kwargs):
     import numpy as np
     from mockfactory import Catalog
@@ -1434,9 +1442,9 @@ def merge_randoms_catalogs(output, inputs, parent_randoms_fn=None, factor=1., se
             if catalog.csize == 0:
                 raise ValueError(f'Catalog size after expansion is {catalog.csize}')
             return catalog
-    else: 
+    else:
         expand = None
-            
+
     inputs = list(inputs)
     ncatalogs = len(inputs)
     rng = np.random.RandomState(seed=seed)
@@ -1444,14 +1452,14 @@ def merge_randoms_catalogs(output, inputs, parent_randoms_fn=None, factor=1., se
     concatenate = None
     # columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_FKP', 'MASK']
     columns = ['RA', 'DEC', 'NX', 'TARGETID', 'TARGETID_DATA', 'WEIGHT']
-    
+
     # def get_uid(ra, dec):
     #     factor = 1000000
     #     return np.rint(ra * factor) + 360 * factor * np.rint((dec + 90.) * factor)
-    
+
     def get_uid(ra, dec):
         return ra + 1j * dec
-        
+
     with MemoryMonitor() as mem:
         for ifn, fn in enumerate(inputs):
             print(ifn,fn)
@@ -1476,23 +1484,23 @@ def merge_randoms_catalogs(output, inputs, parent_randoms_fn=None, factor=1., se
             mem()
     concatenate.write(output)
 
+
 def reshuffle_randoms(tracer, randoms, merged_data, data, seed):
-    import numpy as np
     # get weights
     data_wtotp = data['WEIGHT_COMP'] * data['WEIGHT_SYS'] * data['WEIGHT_ZFAIL']
     data_wcomp = data_wtotp / data['WEIGHT']
-    
+
     merged_data_wtotp = merged_data['WEIGHT_COMP'] * merged_data['WEIGHT_SYS'] * merged_data['WEIGHT_ZFAIL']
     merged_data_wcomp = merged_data_wtotp / merged_data['WEIGHT']
-    
+
     merged_data_ftile = data_ftile = 1. # ok for FFA
-    
+
     merged_data_ftile_wcomp = merged_data_ftile / merged_data_wcomp
     merged_data_nz = merged_data['NX'] / merged_data_ftile_wcomp
-    
+
     P0 = np.rint(np.mean((1. / merged_data['WEIGHT_FKP'] - 1.) / merged_data['NX']))
-        
-    if 'Z' not in randoms: 
+
+    if 'Z' not in randoms:
         randoms['Z'] = randoms.zeros() # place holder, since will be filled with 'Z' from merged_data anyway
     randoms_ntile = randoms['NTILE']
     randoms_wcomp = _compute_binned_weight(data['NTILE'], data_wcomp)[randoms_ntile]
@@ -1522,7 +1530,8 @@ def reshuffle_randoms(tracer, randoms, merged_data, data, seed):
 
         sum_data_weights.append(data_wtotp[mask_data].sum())
         sum_randoms_weights.append(randoms['WEIGHT'][mask_randoms].sum())
-    if np.any(randoms['Z']==0.):
+
+    if np.any(randoms['Z'] == 0.):
         raise ValueError('Something went wrong! Place holder of z = 0. remain after reshuffling.')
     # Renormalize randoms / data here
     sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
@@ -1553,4 +1562,3 @@ def reshuffle_randoms(tracer, randoms, merged_data, data, seed):
     # for iregion, region in enumerate(cregions):
     #     randoms[select_region(randoms['RA'], randoms['DEC'], region=region)][output_columns].write(output_randoms_fn[iregion])
     return randoms
-    
