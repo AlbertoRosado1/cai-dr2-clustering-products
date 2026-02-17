@@ -117,13 +117,12 @@ def test_window(stats=['mesh2_spectrum']):
     from clustering_statistics.tools import propose_fiducial
     from clustering_statistics.spectrum3_tools import _get_window_edges
     mattrs = get_mesh_attrs(boxcenter=0., **propose_fiducial(kind='mesh2_spectrum', tracer='QSO')['mattrs'])
-    for edges in _get_window_edges(mattrs, scales=(1, 4)):
-        print(edges)
-    exit()
+    #for edges in _get_window_edges(mattrs, scales=(1, 4)):
+    #    print(edges, len(edges))
     stats_dir = Path(Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks')
     for stat in stats:
-        for tracer in ['QSO']:
-            zranges = [(0.8, 2.1)]
+        for tracer in ['LRG']:
+            zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
