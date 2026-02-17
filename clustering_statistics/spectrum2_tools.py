@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 
 import numpy as np
 import jax
@@ -308,11 +309,10 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
     return results
 
 
-def compute_window_mesh2_spectrum(*get_data_randoms, spectrum, optimal_weights=None, cut=None):
+def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2SpectrumPoles, optimal_weights: Callable=None, cut
+: bool=None):
     r"""
     Compute the 2-point spectrum window with :mod:`jaxpower`.
-
-    FIXME: In case of OQE, cross-correlations, ell = 2: keep track of data weights and power spectrum normalizations.
 
     Parameters
     ----------
@@ -388,7 +388,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum, optimal_weights=N
         limits = [0, 0.4 * mattrs.boxsize.min(), 2. * mattrs.boxsize.max()]
         weights = [jnp.maximum((coords >= limits[i]) & (coords < limits[i + 1]), 1e-10) for i in range(len(limits) - 1)]
         results['window_mesh2_correlation_raw'] = correlation = correlations[0].sum(correlations, weights=weights)
-        
+
         window = compute_smooth2_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',))
         observable = window.observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'), attrs=pole.attrs), input_label=True)
         results['raw'] = window.clone(observable=observable, value=window.value() / (norm[..., None] / np.mean(norm)))  # just in case norm is k-dependent
@@ -404,7 +404,6 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum, optimal_weights=N
             correlation = compute_particle2(*all_particles, bin=pbin, los=los)
             correlation = correlation.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields), norm=[np.mean(norm)] * len(sbin.ells))
             pole = next(iter(correlation))
-            print(pole.coords('s'))
             correlation = interpolate_window_function(correlation, coords=coords, order=3)
             results['window_mesh2_correlation_cut'] = correlation
             correlation = correlation.clone(value=results['window_mesh2_correlation_raw'].value() + correlation.value())
@@ -478,6 +477,128 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum, optimal_weights=N
                 results[key] = results[key][0].clone(value=value, observable=observable)  # join multipoles
 
     return results
+
+
+def compute_theory_for_covariance_mesh2_spectrum(data: types.Mesh2SpectrumPoles=None, window: types.WindowMatrix, select: dict=None):
+    """
+    Compute a smooth theory spectrum to assume when building the covariance.
+
+    Parameters
+    ----------
+    data : Mesh2SpectrumPoles or None
+        Measured spectrum multipoles used to build the covariance and (optionally)
+        to set priors / initialize the fit. If None, the function will still
+        construct an analytic covariance from `window` but cannot use data-driven
+        priors.
+    window : WindowMatrix
+        Window matrix describing mode-coupling of the estimator. The window's
+        observable axes are matched to the `data` before fitting.
+    select : dict, optional
+        If provided, a selection is applied to `data` via `data.select(**select)`
+        prior to fitting (e.g. to restrict k-ranges or multipoles).
+
+    Returns
+    -------
+    """
+    from jaxpower import MeshAttrs, compute_spectrum2_covariance
+    smooth = data
+
+    mattrs = MeshAttrs(**{name: data.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']})
+    covariance = compute_spectrum2_covariance(mattrs, data)  # Gaussian, diagonal covariance
+
+    if select is not None:
+        data = data.select(**select)
+    window = window.at.observable.match(data)
+    covariance = covariance.at.observable.match(data)
+    z = window.observable.get(ells=0).attrs['zeff']
+
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.profilers import MinuitProfiler
+
+    template = FixedPowerSpectrumTemplate(fiducial='DESI', z=z)
+    theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    observable = TracerPowerSpectrumMultipolesObservable(data=data.value(concatenate=True), wmatrix=window.value(), ells=data.ells,
+                                                         k=[pole.coords('k') for pole in data], kin=window.theory.get(ells=0).coords('k'),
+                                                         ellsin=window.theory.ells, theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observable, covariance=covariance.value())
+
+    profiler = MinuitProfiler(likelihood, seed=42)
+    profiles = profiler.maximize()
+    theory.init.update(k=smooth.get(0).coords('k'))
+    poles = theory(**profiles.bestfit.choice(index='argmax', input=True))
+    smooth = smooth.clone(value=poles.ravel())
+    return smooth
+
+
+def compute_covariance_mesh2_spectrum(*get_data_randoms, theory=None, mattrs=None):
+    r"""
+    Compute the 2-point spectrum covariance with :mod:`jaxpower`.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions that return tuples of (data, randoms) catalogs.
+        See :func:`prepare_jaxpower_particles` for details.
+    spectrum : Mesh2SpectrumPoles
+        Measured 2-point spectrum multipoles.
+
+    Returns
+    -------
+    covarance : CovarianceMatrix
+        The computed 2-point spectrum covariance.
+    """
+    from jaxpower import compute_fkp2_covariance_window, interpolate_window_function, compute_spectrum2_covariance
+    kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+    kw = dict(los='local', edges={'step': mattrs.cellsize.min()}, basis='bessel') if fftlog else dict(edges={})
+
+    all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
+    fftlog = False
+    windows = compute_fkp2_covariance_window(all_particles, **kw, **kw_paint)
+    if fftlog:
+        coords = np.logspace(-2, 8, 8 * 1024)
+        windows = [interpolate_window_function(window, coords=coords) for window in windows]
+    # delta is the maximum abs(k1 - k2) where the covariance will be computed (to speed up calculation)
+    covs_analytical = compute_spectrum2_covariance(windows, theory, flags=['smooth'] + (['fftlog'] if fftlog else []))
+
+    # Sum all contributions (WW, WS, SS), with W = standard window (multiplying delta), S = shotnoise
+    # Here we assumed randoms have a negligible contribution to the shot noise in the measurements
+    cov = covs_analytical[0].clone(value=sum(cov.value() for cov in covs_analytical))
+    return cov
+
+
+def compute_rotation_mesh2_spectrum(window: types.WindowMatrix, covariance: types.CovarianceMatrix, Minit: str='momt',
+                                    data: types.Mesh2SpectrumPoles=None, theory: types.Mesh2SpectrumPoles=None):
+    """
+    Compute the rotation to make the window matrix more diagonal.
+
+    Parameters
+    ----------
+    window : WindowMatrix
+        Window matrix.
+    covariance : CovarianceMatrix
+        Covariance of the measured spectrum.
+    Minit : {'momt', ...}, optional
+        Initialization method passed to rotation.setup(Minit=...). Defaults to 'momt'.
+    data : Mesh2SpectrumPoles or None, optional
+        Measured spectrum used to set priors for the rotation (if available).
+    theory : Mesh2SpectrumPoles or None, optional
+        Theory spectrum used together with `data` when setting priors.
+
+    Returns
+    -------
+    rotation : WindowRotationSpectrum2
+    """
+    from jaxpower import WindowRotationSpectrum2
+    covariance = covariance.at.observable.match(window.observable)
+    rotation = WindowRotationSpectrum2(window=window, covariance=covariance, xpivot=0.1)
+    rotation.setup(Minit=Minit)
+    rotation.fit()
+    if rotation.with_momt and data is not None:
+        # To set up priors
+        rotation.set_prior(data=data, theory=theory)
+    return rotation
 
 
 def compute_box_mesh2_spectrum(get_data, get_shifted=None, ells=(0, 2, 4), los='z', cache=None, **attrs):
