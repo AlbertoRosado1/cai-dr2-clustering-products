@@ -27,7 +27,7 @@ def compute_angular_upweights(*get_data):
     from cucount.jax import Particles, BinAttrs, WeightAttrs, count2, setup_logging
     from lsstypes import ObservableLeaf, ObservableTree
 
-    with jax.make_mesh(jax.device_count(), axis_names=('x',), axis_types=(jax.sharding.AxisType.Auto,)):
+    with jax.make_mesh((jax.device_count(),), axis_names=('x',), axis_types=(jax.sharding.AxisType.Auto,)):
         all_fibered_data, all_parent_data = [], []
     
         def get_rdw(catalog):
@@ -100,7 +100,7 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs=
     from cucount.jax import Particles, BinAttrs, WeightAttrs, SelectionAttrs, MeshAttrs, count2, setup_logging
     from lsstypes import Count2, Count2Correlation
 
-    with jax.make_mesh(jax.device_count(), axis_names=('x',), axis_types=(jax.sharding.AxisType.Auto,)):
+    with jax.make_mesh((jax.device_count(),), axis_names=('x',), axis_types=(jax.sharding.AxisType.Auto,)):
         all_data, all_randoms, all_shifted = [], [], []
     
         def get_pw(catalog):

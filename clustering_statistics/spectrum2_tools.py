@@ -114,10 +114,10 @@ def _get_jaxpower_attrs(*particles):
         dparticle = dict(data=data, randoms=randoms, shifted=shifted)
         for name in dparticle:
             if dparticle[name] is not None:
-                if f'size_{name}' not in attrs:
-                    attrs[f'size_{name}'] = [[]]
+                if f'wsum_{name}' not in attrs:
+                    #attrs[f'size_{name}'] = [[]]  # size is process-dependent
                     attrs[f'wsum_{name}'] = [[]]
-                attrs[f'size_{name}'][0].append(dparticle[name].size)
+               # attrs[f'size_{name}'][0].append(dparticle[name].size)
                 attrs[f'wsum_{name}'][0].append(dparticle[name].sum())
     for name in ['boxsize', 'boxcenter', 'meshsize']:
         attrs[name] = mattrs[name]
@@ -493,7 +493,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
     return results
 
 
-def compute_theory_for_covariance_mesh2_spectrum(data: types.Mesh2SpectrumPoles=None, window: types.WindowMatrix, select: dict=None):
+def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: types.WindowMatrix, select: dict=None, theory: str='rept', fixed=tuple(), out: types.Mesh2SpectrumPoles=None):
     """
     Compute a smooth theory spectrum to assume when building the covariance.
 
@@ -510,39 +510,57 @@ def compute_theory_for_covariance_mesh2_spectrum(data: types.Mesh2SpectrumPoles=
     select : dict, optional
         If provided, a selection is applied to `data` via `data.select(**select)`
         prior to fitting (e.g. to restrict k-ranges or multipoles).
+    theory : str, optional
+        Theory to use in the fit, one of ['rept', 'kaiser'].
+    out : Mesh2SpectrumPoles, optional
+        If provided, returns a clone of these power spectrum multipoles with best fit theory values.
 
     Returns
     -------
+    out : Mesh2SpectrumPoles
     """
     from jaxpower import MeshAttrs, compute_spectrum2_covariance
-    smooth = data
+    smooth = data.select(k=(0.001, 10.))
 
     mattrs = MeshAttrs(**{name: data.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']})
     covariance = compute_spectrum2_covariance(mattrs, data)  # Gaussian, diagonal covariance
 
-    if select is not None:
-        data = data.select(**select)
+    select = select or {'k': (0.02, 10.)}
+    data = data.select(**select)
     window = window.at.observable.match(data)
+    window = window.at.theory.select(k=(0.001, 1.2 * next(iter(data)).coords('k').max()))
     covariance = covariance.at.observable.match(data)
     z = window.observable.get(ells=0).attrs['zeff']
 
-    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.profilers import MinuitProfiler
 
+    Theory = {'rept': REPTVelocileptorsTracerPowerSpectrumMultipoles, 'kaiser': KaiserTracerPowerSpectrumMultipoles}[theory] 
+
     template = FixedPowerSpectrumTemplate(fiducial='DESI', z=z)
-    theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    theory = Theory(template=template)
     observable = TracerPowerSpectrumMultipolesObservable(data=data.value(concatenate=True), wmatrix=window.value(), ells=data.ells,
                                                          k=[pole.coords('k') for pole in data], kin=window.theory.get(ells=0).coords('k'),
                                                          ellsin=window.theory.ells, theory=theory)
     likelihood = ObservablesGaussianLikelihood(observable, covariance=covariance.value())
+    for param in fixed:
+        likelihood.all_params[param].update(fixed=True)
 
     profiler = MinuitProfiler(likelihood, seed=42)
     profiles = profiler.maximize()
-    theory.init.update(k=smooth.get(0).coords('k'))
-    poles = theory(**profiles.bestfit.choice(index='argmax', input=True))
-    smooth = smooth.clone(value=poles.ravel())
+    params = profiles.bestfit.choice(index='argmax', input=True)
+    if out is None:
+        theory.init.update(k=smooth.get(0).coords('k'))
+        poles = theory(**params)
+        smooth = smooth.clone(value=poles.ravel())
+    else:
+        value = []
+        for label, pole in out.items(level=1):
+            theory.init.update(k=pole.coords('k'))
+            value.append(theory(**params)[theory.ells.index(label['ells'])])
+        smooth = out.clone(value=value)
     return smooth
 
 
@@ -568,17 +586,19 @@ def compute_covariance_mesh2_spectrum(*get_data_randoms, theory=None, fields=Non
     covarance : CovarianceMatrix
         The computed 2-point spectrum covariance.
     """
-    from jaxpower import create_sharding_mesh, compute_fkp2_covariance_window, interpolate_window_function, compute_spectrum2_covariance
-    kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
-    kw = dict(los='local', edges={'step': mattrs.cellsize.min()}, basis='bessel') if fftlog else dict(edges={})
+    from jaxpower import create_sharding_mesh, compute_fkp2_covariance_window, interpolate_window_function, compute_spectrum2_covariance, FKPField
+    fftlog = False
     if fields is None:
         fields = list(range(1, 1 + len(get_data_randoms)))
-
     results = {}
     with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
-        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'], fields=fields)
-        fftlog = False
-        windows = compute_fkp2_covariance_window(all_particles, **kw, **kw_paint)
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
+        all_fkp = [FKPField(data, randoms) for (data, randoms, _) in all_particles]
+        mattrs = all_fkp[0].attrs
+        kw = dict(edges={'step': mattrs.cellsize.min()}, basis='bessel') if fftlog else dict(edges={})
+        kw.update(los='local', fields=fields)
+        kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+        windows = compute_fkp2_covariance_window(all_fkp, **kw, **kw_paint)
         if fftlog:
             coords = np.logspace(-2, 8, 8 * 1024)
             windows = [interpolate_window_function(window, coords=coords) for window in windows]

@@ -139,18 +139,17 @@ def test_window(stats=['mesh2_spectrum']):
 
 def test_covariance():
     stats_dir = Path(Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks')
-    stats = ['covariance_mesh2_spectrum']
-    for tracer in ['LRG']:
+    stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][2:]
+    for tracer in ['LRG', 'ELG_LOPnotqso'][:0]:
         zranges = [(0.8, 1.1)]
-        for region in ['NGC', 'SGC']:
+        for region in ['NGC', 'SGC'][:1]:
             catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True}, analysis='full_shape')
-    stats = ['covariance_mesh2_spectrum']
+            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True})
     for tracer in [('LRG', 'ELG_LOPnotqso')]:
         zranges = [(0.8, 1.1)]
-        for region in ['NGC', 'SGC']:
+        for region in ['NGC', 'SGC'][:1]:
             catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True}, analysis='full_shape')
+            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True})
 
 
 def test_norm():

@@ -652,7 +652,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', kind='me
         Multiple filenames are returned as a list when imock is '*'.
     """
     _default_options = dict(version=None, tracer=None, region=None, zrange=None, weight=None, imock=None)
-    catalog_options = kwargs.get('catalog', {})
+    catalog_options = kwargs.pop('catalog', {})
     if not catalog_options:
         catalog_options = {key: kwargs.get(key, _default_options[key]) for key, value in _default_options.items()}
         catalog_options = _unzip_catalog_options(catalog_options)
