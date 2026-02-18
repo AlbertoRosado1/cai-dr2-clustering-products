@@ -107,7 +107,7 @@ def fit_large_scales(imock=0, tracer='LRG', zranges=None, version='holi-v4.80', 
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer)
 
-    for zrange in zranges:
+    for zrange in zranges[-1:]:
         for region in ['NGC', 'SGC'][:1]:
             kw_catalog = dict(imock=imock, tracer=tracer, zrange=zrange, region=region, version=version, weight=weight)
             # Preliminary fit to the data
