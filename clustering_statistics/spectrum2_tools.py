@@ -579,6 +579,11 @@ def compute_window_mesh2_spectrum_fm(
         # Make into one big catalog
         all_randoms = ParticleField.concatenate(*all_randoms)
 
+        if amr:
+            extra = all_randoms.extra
+            template_values = jnp.stack([extra.pop(map_name) for map_name in regression_maps], axis=-1)
+            all_randoms = all_randoms.clone(extra={**extra, "template_values": template_values})
+
         # Determine "data" and "randoms" particles among the randoms catalog
         data_size = int(data_to_randoms_ratio * all_randoms.weights.size)
         randoms_size = all_randoms.weights.size - data_size
