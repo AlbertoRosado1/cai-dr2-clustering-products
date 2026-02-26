@@ -515,9 +515,13 @@ def compute_window_mesh2_spectrum_fm(
     from desiwinds.window import get_window_geometry, get_window_spikes
     from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, compute_fkp2_normalization, create_sharding_mesh
 
+    from .tools import select_region
+
     def _split_by_region(particles: ParticleField, pk_regions: list[str]) -> tuple[ParticleField, ...]:
-        # TODO : implement
-        pass
+        distances = jnp.sqrt(jnp.power(particles.positions, 2).sum(axis=-1))
+        ra = (jnp.arctan2(particles.positions[..., 1], particles.positions[..., 0]) % (2 * jnp.pi)) * 180 / jnp.pi
+        dec = jnp.arcsin(particles.positions[..., 2] / distances) * 180 / jnp.pi
+        return tuple(particles[select_region(ra=ra, dec=dec, region=region)] for region in pk_regions)
 
     pk_regions = pk_regions or []
 
