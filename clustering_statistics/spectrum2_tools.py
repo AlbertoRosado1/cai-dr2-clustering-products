@@ -473,6 +473,182 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
     return results
 
 
+def compute_window_mesh2_spectrum_fm(
+    *get_data_randoms,
+    spectrum: types.Mesh2SpectrumPoles,
+    data_to_randoms_ratio: float,
+    catalog_split_seed: int,
+    ric_nbins: int,
+    ric_regions: list[str],
+    amr: bool,  # is optional
+    regression_maps: list[str] | None,
+    amr_regions_zranges: list[tuple[str, tuple[float, float]]] | None,
+    pk_regions: list[str] | None,
+    estimator_weights: str | None,
+    unitary_amplitude: bool = True,
+    n_realizations: int,
+    seeds: list[int] | None,
+    batch_size: int = 4,
+) -> dict[str, types.WindowMatrix] | dict[str, list[types.WindowMatrix]]:
+    """
+    Compute the 2-point spectrum window with :mod:`desiwinds`.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions that return tuples of (data, randoms) catalogs.
+        See :func:`prepare_jaxpower_particles` for details.
+    spectrum : Mesh2SpectrumPoles
+        Measured 2-point spectrum multipoles.
+
+    Returns
+    -------
+    WindowMatrix or dict of WindowMatrix
+        The computed 2-point spectrum window. If `auw` is provided, returns a dict with keys 'raw' and 'auw'.
+    """
+    # Notes to self:
+    # * RIC not optional
+    # * n_randoms is effectively set by the length of get_data_randoms
+    # * regression_maps is not used for now but should probably be passed to prepare_jaxpower_particles down the line
+    import mpytools as mpy
+    from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
+    from desiwinds.window import get_window_geometry, get_window_spikes
+    from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, compute_fkp2_normalization, create_sharding_mesh
+
+    def _split_by_region(particles: ParticleField, pk_regions: list[str]) -> tuple[ParticleField, ...]:
+        # TODO : implement
+        pass
+
+    pk_regions = pk_regions or []
+
+    # Recover mesh attributes from the observed spectrum
+    # Will also be used as fiducial point
+    ells = spectrum.ells  # FIXME: no idea what happens if no hexadecapole is provided
+    mattrs = {name: spectrum.attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
+    los = spectrum.attrs["los"]
+
+    with create_sharding_mesh(meshsize=mattrs.get("meshsize", None)):
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=["IDS"])
+        all_randoms = [particles[1] for particles in all_particles]
+        del all_particles
+
+        binner = BinMesh2SpectrumPoles(mattrs, edges=spectrum.get(0).edges("k"), ells=ells)  # TODO: check edges are ok
+
+        # Make into one big catalog
+        all_randoms = ParticleField.concatenate(*all_randoms)
+
+        # Determine "data" and "randoms" particles among the randoms catalog
+        data_size = int(data_to_randoms_ratio * all_randoms.weights.size)
+        randoms_size = all_randoms.weights.size - data_size
+        rng = mpy.random.MPIRandomState(seed=catalog_split_seed, size=all_randoms.weights.size)
+        mask_is_data = rng.uniform() < (data_size / (data_size + randoms_size))
+        # Create catalogs and append to the lists
+        data = all_randoms[mask_is_data]
+        randoms = all_randoms[~mask_is_data]
+
+        # Split further into pk_regions
+        data = _split_by_region(data, pk_regions)
+        randoms = _split_by_region(randoms, pk_regions)
+
+        # Prepare arguments for the window computation function
+        ric_args = prepare_RIC(data=data, randoms=randoms, regions=ric_regions, n_bins=ric_nbins, apply_to="randoms")
+
+        if amr:
+            amr_args = prepare_AMR(data=data, randoms=randoms, regions_zranges=amr_regions_zranges, apply_to="randoms")
+        else:
+            amr_args = None
+
+        # Turn into FKP fields
+        fkp_fields = tuple(FKPField(data=d, randoms=r, attrs=mattrs) for d, r in zip(data, randoms, strict=True))
+        fkp_norms = tuple(compute_fkp2_normalization(fkp, bin=binner, cellsize=10.0) for fkp in fkp_fields)
+
+        # Compute the geometry-only window spikes with desiwinds
+        _, windows_fm_geo = get_window_spikes(
+            mock_survey=mock_survey_catalog,
+            theory=spectrum,
+            nreal=n_realizations,
+            seeds=seeds,
+            batch_size=batch_size,
+            mock_survey_args=(*fkp_fields,),
+            mock_survey_kwargs={
+                "los": los,
+                "unitary_amplitude": unitary_amplitude,
+                "ric_args": None,
+                "amr_args": None,
+                "nam_args": None,
+                "fkp_norms": fkp_norms,
+                "binner": binner,
+                "estimator_weights": estimator_weights,
+                "data_regions": ric_args.data_regions,
+                "randoms_regions": ric_args.randoms_regions,
+            },
+            static_argnames=["los", "unitary_amplitude", "estimator_weights"],
+            tmpdir=None,  # No temporary output
+            survey_names=pk_regions,
+        )
+
+        # Compute the analytical window with jaxpower
+        # For each pk_region separately
+        windows_analytical = []
+        for _data, _randoms, fkp_norm in zip(data, randoms, fkp_norms, strict=True):
+            data_mesh = _data.paint(resampler="tsc", interlacing=3, compensate=True)
+            randoms_mesh = _randoms.paint(resampler="tsc", interlacing=3, compensate=True)
+            windows_analytical.append(
+                get_window_geometry(
+                    selection2=data_mesh,
+                    selection1=_data.sum() / _randoms.sum() * randoms_mesh,  # tsc
+                    theory_edges=spectrum,
+                    theory_ells=ells,
+                    binner=binner,
+                    norm=fkp_norm,  # cic
+                    flags=(),
+                    los=los,
+                    pbar=False,
+                )
+            )
+            del data_mesh, randoms_mesh
+
+        # Compute the total window with desiwinds
+        _, windows_fm = get_window_spikes(
+            mock_survey=mock_survey_catalog,
+            theory=spectrum,
+            nreal=n_realizations,
+            seeds=seeds,
+            batch_size=batch_size,
+            mock_survey_args=(*fkp_fields,),
+            mock_survey_kwargs={
+                "los": los,
+                "unitary_amplitude": unitary_amplitude,
+                "ric_args": ric_args,
+                "amr_args": amr_args,
+                "nam_args": None,
+                "fkp_norms": fkp_norms,
+                "binner": binner,
+                "estimator_weights": estimator_weights,
+                "data_regions": ric_args.data_regions,
+                "randoms_regions": ric_args.randoms_regions,
+            },
+            static_argnames=["los", "unitary_amplitude", "estimator_weights"],
+            tmpdir=None,  # No temporary output
+            survey_names=pk_regions,
+        )
+
+        # Control variate
+        def _cv(wd_fm, wd_geo, wd_fm_geo):
+            return wd_fm.clone(value=wd_fm.value() - wd_geo.value() + wd_fm_geo.value())
+
+        windows_cv = {}
+        for idx, pk_region in enumerate(pk_regions):
+            windows_cv[pk_region] = [_cv(windows_fm[ireal][idx], windows_analytical[idx], windows_fm_geo[ireal][idx]) for ireal in range(n_realizations)]
+
+        # TODO: do the avg
+        window_cv_avg = {}
+        for pk_region in pk_regions:
+            window_cv_avg[pk_region] = windows_cv[pk_region][0].clone(value=np.mean([window.value() for window in windows_cv[pk_region]], axis=0))
+
+    return window_cv_avg, windows_cv
+
+
 def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: types.WindowMatrix, select: dict=None, theory: str='rept', fixed=tuple(), out: types.Mesh2SpectrumPoles=None):
     """
     Compute a smooth theory spectrum to assume when building the covariance.
