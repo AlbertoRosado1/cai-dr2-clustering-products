@@ -476,6 +476,8 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
 def compute_window_mesh2_spectrum_fm(
     *get_data_randoms: Callable,
     spectrum: types.Mesh2SpectrumPoles,
+    theory: types.Mesh2SpectrumPoles | None,
+    optimal_weights: Callable | None,
     data_to_randoms_ratio: float,
     catalog_split_seed: int,
     ric_nbins: int,
@@ -485,7 +487,6 @@ def compute_window_mesh2_spectrum_fm(
     templates_paths_kwargs: dict | None,
     amr_regions_zranges: list[tuple[str, tuple[float, float]]] | None,
     pk_regions: list[str] | None,
-    estimator_weights: str | None,
     unitary_amplitude: bool = True,
     n_realizations: int,
     seeds: list[int] | None,
@@ -500,6 +501,14 @@ def compute_window_mesh2_spectrum_fm(
         Functions that return tuples of (data, randoms) catalogs.
     spectrum : types.Mesh2SpectrumPoles
         Measured 2-point spectrum multipoles.
+    theory: types.Mesh2SpectrumPoles | None
+        input theory power spectrum, used as a fiducial for the derivative. Attributes (e.g. ells) used for mock survey generation. If ``None``, the input spectrum is used as a fiducial.
+    optimal_weights : Callable or None
+        Function taking (ell, catalog) as input and returning total weights to apply to data and randoms.
+        It can have an optional attribute 'columns' that specifies which additional columns are needed to compute the optimal weights.
+        As a default, ``optimal_weights.columns = ['Z']`` to indicate that redshift information is needed.
+        A dictionary ``catalog`` of columns is provided, containing 'INDWEIGHT' and the requested columns.
+        If ``None``, no optimal weights are applied.
     data_to_randoms_ratio : float
         Population ratio between "data" and "randoms" to pick in the input randoms catalogs. Must be between 0 and 1.
     catalog_split_seed : int
@@ -518,8 +527,6 @@ def compute_window_mesh2_spectrum_fm(
         Regions where to apply the regressions for the AMR, and corresponding redshift ranges. Can be set to ``None`` if ``amr=False``.
     pk_regions : list[str] | None
         Regions for which to compute the window and power spectrum. If ``None``, the whole catalog is used as one region. Typically ``["NGC", "SGC"]``.
-    estimator_weights : str | None
-        Weights to apply right before the power spectrum estimation, e.g. ``"weight_FKP"``, ``weight_OQE``.
     n_realizations : int
         Number of realizations to compute.
     seeds : list[int] | None
@@ -537,7 +544,6 @@ def compute_window_mesh2_spectrum_fm(
     # Notes to self:
     # * RIC not optional
     # * n_randoms is effectively set by the length of get_data_randoms
-    # * regression_maps is not used for now but should probably be passed to prepare_jaxpower_particles down the line
     import mpytools as mpy
     from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
     from desiwinds.window import get_window_geometry, get_window_spikes
@@ -556,33 +562,55 @@ def compute_window_mesh2_spectrum_fm(
         dec = jnp.arcsin(particles.positions[..., 2] / distances) * 180 / jnp.pi
         return tuple(particles[select_region(ra=ra, dec=dec, region=region)] for region in pk_regions)
 
-    pk_regions = pk_regions or []
+    def _update_fkp(data_weights, randoms_weights, fkp_field, estimator_weights):
+        return fkp_field.clone(
+            data=fkp_field.data.clone(
+                weights=data_weights * getattr(fkp_field.data, estimator_weights, 1.0),
+            ),
+            randoms=fkp_field.randoms.clone(
+                weights=randoms_weights * getattr(fkp_field.randoms, estimator_weights, 1.0),
+            ),
+        )
 
-    # Recover mesh attributes from the observed spectrum
+    def _cv(wd_fm, wd_geo, wd_fm_geo):
+        return wd_fm.clone(value=wd_fm.value() - wd_geo.value() + wd_fm_geo.value())
+
+    theory = theory or spectrum  # if None
+    pk_regions = pk_regions or []
+    columns_optimal_weights = []
+    if optimal_weights is not None:
+        columns_optimal_weights += getattr(optimal_weights, "columns", ["Z"])  # to compute optimal weights, e.g. for fnl
+
+    # Recover input ells from the theory spectrum
     # Will also be used as fiducial point
-    ells = spectrum.ells  # FIXME: no idea what happens if no hexadecapole is provided
+    ellsin = theory.ells
+
+    # Recover output and mesh information from the observable spectrum
+    ellsout = spectrum.ells
+    los = spectrum.attrs["los"]  # this has to match with theory input
     mattrs = {name: spectrum.attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
-    los = spectrum.attrs["los"]
 
     with create_sharding_mesh(meshsize=mattrs.get("meshsize", None)):
         if amr:
-            all_particles = prepare_jaxpower_particles(
-                *(lambda: _add_photometric_template_values(get_data_randoms())), mattrs=mattrs, add_randoms=["IDS", *regression_maps]
-            )
-        else:
-            all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=["IDS"])
+
+            def wrap(f):
+                return lambda: _add_photometric_template_values(f())
+
+            get_data_randoms = [wrap(_get_data_randoms) for _get_data_randoms in get_data_randoms]
+
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=["IDS", *regression_maps, *columns_optimal_weights])
         all_randoms = [particles[1] for particles in all_particles]
         del all_particles
-
-        binner = BinMesh2SpectrumPoles(mattrs, edges=spectrum.get(0).edges("k"), ells=ells)  # TODO: check edges are ok
 
         # Make into one big catalog
         all_randoms = ParticleField.concatenate(*all_randoms)
 
+        extra = all_randoms.extra
         if amr:
-            extra = all_randoms.extra
             template_values = jnp.stack([extra.pop(map_name) for map_name in regression_maps], axis=-1)
-            all_randoms = all_randoms.clone(extra={**extra, "template_values": template_values})
+            extra.update({"template_values": template_values})
+        # extra already has weight_FKP, just remove from weights=indweights which contains FKP weights
+        all_randoms = all_randoms.clone(extra=extra, weights=all_randoms.weights / all_randoms.extra["weight_FKP"])
 
         # Determine "data" and "randoms" particles among the randoms catalog
         data_size = int(data_to_randoms_ratio * all_randoms.weights.size)
@@ -606,93 +634,209 @@ def compute_window_mesh2_spectrum_fm(
             amr_args = None
 
         # Turn into FKP fields
-        fkp_fields = tuple(FKPField(data=d, randoms=r, attrs=mattrs) for d, r in zip(data, randoms, strict=True))
-        fkp_norms = tuple(compute_fkp2_normalization(fkp, bin=binner, cellsize=10.0) for fkp in fkp_fields)
+        fkp_fields = [FKPField(data=d, randoms=r, attrs=mattrs) for d, r in zip(data, randoms, strict=True)]
+        del data, randoms
+        # Compute FKP normalization for each region, with the estimator weights, and for each ell if optimal weights are applied
+        if optimal_weights is None:
+            # Using FKP weights which are symetrical, so this remains an autocorr
+            binner = BinMesh2SpectrumPoles(mattrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
 
-        # Compute the geometry-only window spikes with desiwinds
-        _, windows_fm_geo = get_window_spikes(
-            mock_survey=mock_survey_catalog,
-            theory=spectrum,
-            nreal=n_realizations,
-            seeds=seeds,
-            batch_size=batch_size,
-            mock_survey_args=(*fkp_fields,),
-            mock_survey_kwargs={
-                "los": los,
-                "unitary_amplitude": unitary_amplitude,
-                "ric_args": None,
-                "amr_args": None,
-                "nam_args": None,
-                "fkp_norms": fkp_norms,
-                "binner": binner,
-                "estimator_weights": estimator_weights,
-                "data_regions": ric_args.data_regions,
-                "randoms_regions": ric_args.randoms_regions,
-            },
-            static_argnames=["los", "unitary_amplitude", "estimator_weights"],
-            tmpdir=None,  # No temporary output
-            survey_names=pk_regions,
-        )
+            # Temporarily add FKP weights to the fkp_fields weights for norm and analytical computation
+            fkp_norms = [
+                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_FKP"), bin=binner, cellsize=10.0)
+                for fkp in fkp_fields
+            ]
 
-        # Compute the analytical window with jaxpower
-        # For each pk_region separately
-        windows_analytical = []
-        for _data, _randoms, fkp_norm in zip(data, randoms, fkp_norms, strict=True):
-            data_mesh = _data.paint(resampler="tsc", interlacing=3, compensate=True)
-            randoms_mesh = _randoms.paint(resampler="tsc", interlacing=3, compensate=True)
-            windows_analytical.append(
-                get_window_geometry(
-                    selection2=data_mesh,
-                    selection1=_data.sum() / _randoms.sum() * randoms_mesh,  # tsc
-                    theory_edges=spectrum,
-                    theory_ells=ells,
-                    binner=binner,
-                    norm=fkp_norm,  # cic
-                    flags=(),
-                    los=los,
-                    pbar=False,
+            # Compute the analytical window with jaxpower
+            # For each pk_region separately
+            windows_analytical = []
+            for _fkp, fkp_norm in zip(fkp_fields, fkp_norms, strict=True):
+                _fkp = _update_fkp(_fkp.data.weights, _fkp.randoms.weights, _fkp, "weight_FKP")
+                data_mesh = _fkp.data.paint(resampler="tsc", interlacing=3, compensate=True)
+                randoms_mesh = _fkp.randoms.paint(resampler="tsc", interlacing=3, compensate=True)
+                windows_analytical.append(
+                    get_window_geometry(
+                        selection2=data_mesh,
+                        selection1=_fkp.data.sum() / _fkp.randoms.sum() * randoms_mesh,  # tsc
+                        theory_edges=theory,
+                        theory_ells=ellsin,
+                        binner=binner,
+                        norm=fkp_norm,  # cic
+                        flags=(),
+                        los=los,
+                        pbar=False,
+                    )
                 )
-            )
-            del data_mesh, randoms_mesh
+                del data_mesh, randoms_mesh
 
-        # Compute the total window with desiwinds
-        _, windows_fm = get_window_spikes(
-            mock_survey=mock_survey_catalog,
-            theory=spectrum,
-            nreal=n_realizations,
-            seeds=seeds,
-            batch_size=batch_size,
-            mock_survey_args=(*fkp_fields,),
-            mock_survey_kwargs={
+            ## FM based computations
+
+            # Shared window FM arguments
+            window_fm_kw = {
+                "mock_survey": mock_survey_catalog,
+                "theory": theory,
+                "nreal": n_realizations,
+                "seeds": seeds,
+                "batch_size": batch_size,
+                "mock_survey_args": (*fkp_fields,),
+                "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
+                "tmpdir": None,  # No temporary output
+                "survey_names": pk_regions,
+            }
+            mock_survey_kwargs = {
                 "los": los,
                 "unitary_amplitude": unitary_amplitude,
-                "ric_args": ric_args,
-                "amr_args": amr_args,
                 "nam_args": None,
                 "fkp_norms": fkp_norms,
                 "binner": binner,
-                "estimator_weights": estimator_weights,
+                "estimator_weights": "weight_FKP",
                 "data_regions": ric_args.data_regions,
                 "randoms_regions": ric_args.randoms_regions,
-            },
-            static_argnames=["los", "unitary_amplitude", "estimator_weights"],
-            tmpdir=None,  # No temporary output
-            survey_names=pk_regions,
-        )
+            }
 
-        # Control variate
-        def _cv(wd_fm, wd_geo, wd_fm_geo):
-            return wd_fm.clone(value=wd_fm.value() - wd_geo.value() + wd_fm_geo.value())
+            # Compute the geometry-only window spikes with desiwinds
+            _, windows_fm_geo = get_window_spikes(
+                **window_fm_kw,
+                mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
+            )
 
-        windows_cv = {}
-        for idx, pk_region in enumerate(pk_regions):
-            windows_cv[pk_region] = [_cv(windows_fm[ireal][idx], windows_analytical[idx], windows_fm_geo[ireal][idx]) for ireal in range(n_realizations)]
+            # Compute the total window with desiwinds
+            _, windows_fm = get_window_spikes(
+                **window_fm_kw,
+                mock_survey_kwargs=mock_survey_kwargs | {"ric_args": ric_args, "amr_args": amr_args},
+            )
 
-        window_cv_avg = {}
-        for pk_region in pk_regions:
-            window_cv_avg[pk_region] = windows_cv[pk_region][0].clone(value=np.mean([window.value() for window in windows_cv[pk_region]], axis=0))
+            windows_cv = {}
+            for idx, pk_region in enumerate(pk_regions):
+                windows_cv[pk_region] = [_cv(windows_fm[ireal][idx], windows_analytical[idx], windows_fm_geo[ireal][idx]) for ireal in range(n_realizations)]
 
-    return window_cv_avg, windows_cv
+            window_cv_avg = {}
+            for pk_region in pk_regions:
+                window_cv_avg[pk_region] = windows_cv[pk_region][0].clone(value=np.mean([window.value() for window in windows_cv[pk_region]], axis=0))
+
+            return window_cv_avg, windows_cv
+
+        else:
+            # Optimal weights: non symmetrical, so need to compute "cross-correlation" (same tracer, different weights) + not the same for all ells
+            # Proceed ell per ell and sum the windows at the end
+            def _attach_weights(fkp_field, ell):
+                data_w1, data_w2 = optimal_weights(
+                    ell,
+                )
+                randoms_w1, randoms_w2 = optimal_weights(
+                    ell,
+                    {column: fkp_field.data.extra[column] for column in ["INDWEIGHT", *columns_optimal_weights]},
+                )
+                return fkp_field.clone(
+                    data=fkp_field.data.clone(extra=fkp_field.data.extra | {"weight_optimal_1": data_w1, "weight_optimal_2": data_w2}),
+                    randoms=fkp_field.randoms.clone(extra=fkp_field.randoms.extra | {"weight_optimal_1": randoms_w1, "weight_optimal_2": randoms_w2}),
+                )
+
+            windows_analytical = {}
+            windows_fm_geo = {}
+            windows_fm = {}
+
+            for ell in ellsout:
+                binner = BinMesh2SpectrumPoles(mattrs, edges=spectrum.get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
+                fkp_fields = [_attach_weights(fkp_field, ell) for fkp_field in fkp_fields]
+                # Compute FKP normalization for each region, with the estimator weights (cross correlation), and for given ell = binner
+                fkp_norms = [
+                    compute_fkp2_normalization(
+                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_optimal_1"),
+                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_optimal_2"),
+                        bin=binner,
+                        cellsize=10.0,
+                    )
+                    for fkp in fkp_fields
+                ]
+
+                # Compute the analytical window with jaxpower
+                # For each pk_region separately
+                windows_analytical[ell] = []
+                for fkp, fkp_norm in zip(fkp_fields, fkp_norms, strict=True):
+                    _data = fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_1"])
+                    _randoms = fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_2"])
+                    data_mesh = _data.paint(resampler="tsc", interlacing=3, compensate=True)
+                    randoms_mesh = _randoms.paint(resampler="tsc", interlacing=3, compensate=True)
+                    windows_analytical.append(
+                        get_window_geometry(
+                            selection2=data_mesh,
+                            selection1=_data.sum() / _randoms.sum() * randoms_mesh,  # tsc
+                            theory_edges=theory,
+                            theory_ells=ellsin,
+                            binner=binner,
+                            norm=fkp_norm,  # cic
+                            flags=(),
+                            los=los,
+                            pbar=False,
+                        )
+                    )
+                    del data_mesh, randoms_mesh
+
+                # Shared window FM arguments
+                window_fm_kw = {
+                    "mock_survey": mock_survey_catalog,
+                    "theory": theory,
+                    "nreal": n_realizations,
+                    "seeds": seeds,
+                    "batch_size": batch_size,
+                    "mock_survey_args": [(fkp,) * 2 for fkp in fkp_fields],  # same FKP field but with different weights
+                    "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
+                    "tmpdir": None,  # No temporary output
+                    "survey_names": pk_regions,
+                }
+                mock_survey_kwargs = {
+                    "los": los,
+                    "unitary_amplitude": unitary_amplitude,
+                    "nam_args": None,
+                    "fkp_norms": fkp_norms,
+                    "binner": binner,  # one ell only
+                    "estimator_weights": ("weight_optimal_1", "weight_optimal_2"),
+                    "data_regions": ric_args.data_regions,
+                    "randoms_regions": ric_args.randoms_regions,
+                }
+
+                # Compute the geometry window with desiwinds
+                _, _windows_fm_geo = get_window_spikes(
+                    **window_fm_kw,
+                    mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
+                )
+
+                windows_fm_geo[ell] = _windows_fm_geo
+
+                # Compute the total window with desiwinds
+                _, _windows_fm = get_window_spikes(
+                    **window_fm_kw,
+                    mock_survey_kwargs=mock_survey_kwargs | {"ric_args": (ric_args,) * 2, "amr_args": (amr_args,) * 2},
+                )
+
+                windows_fm[ell] = _windows_fm
+
+            # For each region, sum the windows over ells and apply control variate
+            # FIXME: I don't think I can types.join over windows, they are not observables. Concatenate manually
+            windows_analytical = {pk_region: types.join([windows_analytical[ell][idx] for ell in ellsout]) for idx, pk_region in enumerate(pk_regions)}
+            windows_fm_geo = {
+                pk_region: [types.join([windows_fm_geo[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+                for idx, pk_region in enumerate(pk_regions)
+            }
+            windows_fm = {
+                pk_region: [types.join([windows_fm[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+                for idx, pk_region in enumerate(pk_regions)
+            }
+
+            windows_cv = {
+                pk_region: [
+                    _cv(windows_fm[pk_region][ireal], windows_analytical[pk_region], windows_fm_geo[pk_region][ireal]) for ireal in range(n_realizations)
+                ]
+                for pk_region in pk_regions
+            }
+
+            window_cv_avg = {
+                pk_region: windows_cv[pk_region][0].clone(value=np.mean([window.value() for window in windows_cv[pk_region]], axis=0))
+                for pk_region in pk_regions
+            }
+
+            return window_cv_avg, windows_cv
 
 
 def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: types.WindowMatrix, select: dict=None, theory: str='rept', fixed=tuple(), out: types.Mesh2SpectrumPoles=None):
