@@ -813,14 +813,20 @@ def compute_window_mesh2_spectrum_fm(
                 windows_fm[ell] = _windows_fm
 
             # For each region, sum the windows over ells and apply control variate
-            # FIXME: I don't think I can types.join over windows, they are not observables. Concatenate manually
-            windows_analytical = {pk_region: types.join([windows_analytical[ell][idx] for ell in ellsout]) for idx, pk_region in enumerate(pk_regions)}
+
+            def _combine_ells(windows):
+                observables = [window.observable for window in windows]
+                observable = types.join(observables)
+                value = np.concatenate([window.value() for window in windows], axis=0)
+                return windows[0].clone(value=value, observable=observable)  # join multipoles
+
+            windows_analytical = {pk_region: _combine_ells([windows_analytical[ell][idx] for ell in ellsout]) for idx, pk_region in enumerate(pk_regions)}
             windows_fm_geo = {
-                pk_region: [types.join([windows_fm_geo[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+                pk_region: [_combine_ells([windows_fm_geo[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
                 for idx, pk_region in enumerate(pk_regions)
             }
             windows_fm = {
-                pk_region: [types.join([windows_fm[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+                pk_region: [_combine_ells([windows_fm[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
                 for idx, pk_region in enumerate(pk_regions)
             }
 
