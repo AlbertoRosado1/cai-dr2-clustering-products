@@ -598,12 +598,17 @@ def compute_window_mesh2_spectrum_fm(
 
             get_data_randoms = [wrap(_get_data_randoms) for _get_data_randoms in get_data_randoms]
 
-        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=["IDS", *regression_maps, *columns_optimal_weights])
-        all_randoms = [particles[1] for particles in all_particles]
+        all_particles = prepare_jaxpower_particles(
+            *get_data_randoms, mattrs=mattrs, add_randoms=["IDS", "WEIGHT_FKP", *regression_maps, *columns_optimal_weights]
+        )
+        all_randoms = [particles["randoms"] for particles in all_particles]
         del all_particles
 
         # Make into one big catalog
-        all_randoms = ParticleField.concatenate(*all_randoms)
+        if len(all_randoms) > 1:
+            all_randoms = ParticleField.concatenate(*all_randoms)
+        else:
+            all_randoms = all_randoms[0]
 
         extra = all_randoms.extra
         if amr:
