@@ -70,11 +70,7 @@ def prepare_jaxpower_particles(*get_data_randoms, mattrs=None, add_data=tuple(),
                     _add['IDS'] = catalog['TARGETID']
                 for column in add[name]:
                     if column != 'IDS': _add[column] = catalog[column]
-            particle = ParticleField(catalog['POSITION'], indweights, attrs=mattrs, exchange=True, backend=backend, **kwargs)
-            for key, value in _add.items():
-                if isinstance(value, list): value = [particle.exchange_direct(value, pad=0) for value in value]
-                else: value = particle.exchange_direct(value, pad=0)
-                particle.__dict__[key] = value
+            particle = ParticleField(catalog["POSITION"], indweights, attrs=mattrs, exchange=True, backend=backend, extra=_add, **kwargs)
             particles[name] = particle
         all_particles.append(particles)
     if jax.process_index() == 0:
