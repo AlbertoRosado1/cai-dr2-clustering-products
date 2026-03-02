@@ -400,7 +400,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     params : dict
         Dictionary of proposed fiducial parameters for the specified statistic kind and tracer.
     """
-    base = {'catalog': {}, 'particle2_correlation': {}, 'mesh2_spectrum': {}, 'mesh3_spectrum': {}}
+    base = {"catalog": {}, "particle2_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
     propose_fiducial = {
         'BGS': {'nran': 3, 'recon': {'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
         'LRG+ELG': {'nran': 13, 'recon': {'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
@@ -447,6 +447,37 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_fiducial[name] = {}
     propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[tracer]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
+    if "window_mesh2_spectrum_fm" in kind:
+        if tracer not in ["BGS", "LRG", "ELG", "QSO"]:
+            raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
+        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
+        propose_regression_zranges = {
+            "BGS": [(0.1, 0.4)],
+            "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
+            "ELG": [(0.8, 1.1), (1.1, 1.6)],
+            "QSO": [(0.8, 1.3), (1.3, 2.1), (2.1, 3.5)],
+        }[tracer]
+        propose_templates = {
+            "BGS": ['STARDENS','GALDEPTH_R','HI','EBV_DIFF_GR','EBV_DIFF_RZ'],
+            "LRG": ['STARDENS','PSFSIZE_G','PSFSIZE_R','PSFSIZE_Z','GALDEPTH_G','GALDEPTH_R','GALDEPTH_Z','HI','PSFDEPTH_W1','EBV_DIFF_GR','EBV_DIFF_RZ'],
+            "ELG": ['STARDENS','PSFSIZE_G','PSFSIZE_R','PSFSIZE_Z','GALDEPTH_G','GALDEPTH_R','GALDEPTH_Z','EBV_DIFF_GR','EBV_DIFF_RZ','HI'],
+            "QSO": ['PSFDEPTH_W1','PSFDEPTH_W2','STARDENS','PSFSIZE_G','PSFSIZE_R','PSFSIZE_Z','PSFDEPTH_G','PSFDEPTH_R','PSFDEPTH_Z','EBV_DIFF_GR','EBV_DIFF_RZ','HI'],
+            }[tracer]  # fmt: skip
+        propose_fiducial["window_mesh2_spectrum_fm"].update(
+            data_to_randoms_ratio=0.5,
+            catalog_split_seed=975,
+            ric_nbins=1000,
+            ric_regions=propose_photoregions,
+            amr=True,
+            regression_maps=propose_templates,
+            templates_paths_kwargs=None,  # FIXME add
+            amr_regions_zranges=list(itertools.product(propose_photoregions, propose_regression_zranges)),
+            pk_regions=["NGC", "SGC"],
+            unitary_amplitude=True,
+            n_realizations=10,
+            seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
+            batch_size=4,
+        )
     return propose_fiducial[kind]
 
 
@@ -577,6 +608,7 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
             options[stat] = fiducial_options | options.get(stat, {})
             if 'mesh' in stat:
                 if mattrs: options[stat]['mattrs'] = mattrs
+<<<<<<< HEAD
             if stat in ['mesh2_spectrum']:
                 for tracer in tracers:
                     if weights[tracer] is not None:
@@ -587,6 +619,10 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
                             warnings.warn('Removing optimal_weights from mesh2_spectrum as OQE not in weights')
         for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum']:
             spectrum_options = options[stat.replace('window_', '')]
+=======
+        for stat in ["window_mesh2_spectrum", "window_mesh3_spectrum", "window_mesh2_spectrum_fm"]:
+            spectrum_options = options[stat.replace("window_", "").replace("_fm", "")]
+>>>>>>> c8c28b1 (add fiducial window fm info)
             spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['selection_weights', 'optimal_weights', 'basis']}
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | spectrum_options | options.get(stat, {})
@@ -1747,7 +1783,7 @@ def add_photometric_template_values(
     region_north = select_region(ra=catalog["RA"], dec=catalog["DEC"], region="N")
     region_south = select_region(ra=catalog["RA"], dec=catalog["DEC"], region="S")
     assert (region_north | region_south).all(), "Some objects are neither in the North nor in the South region."
-    template_values = np.where(region_north, templates_north[ipix], templates_south[ipix])
+    template_values = np.where(region_north[:, None], templates_north[ipix], templates_south[ipix])
     catalog = catalog.deepcopy()
     for i, name in enumerate(template_names):
         catalog[name] = template_values[:, i]
