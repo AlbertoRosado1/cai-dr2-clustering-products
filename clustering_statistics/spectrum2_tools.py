@@ -610,7 +610,7 @@ def compute_window_mesh2_spectrum_fm(
             template_values = jnp.stack([extra.pop(map_name) for map_name in regression_maps], axis=-1)
             extra.update({"template_values": template_values})
         # extra already has weight_FKP, just remove from weights=indweights which contains FKP weights
-        all_randoms = all_randoms.clone(extra=extra, weights=all_randoms.weights / all_randoms.extra["weight_FKP"])
+        all_randoms = all_randoms.clone(extra=extra, weights=all_randoms.weights / all_randoms.extra["WEIGHT_FKP"])
 
         # Determine "data" and "randoms" particles among the randoms catalog
         data_size = int(data_to_randoms_ratio * all_randoms.weights.size)
@@ -643,7 +643,7 @@ def compute_window_mesh2_spectrum_fm(
 
             # Temporarily add FKP weights to the fkp_fields weights for norm and analytical computation
             fkp_norms = [
-                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_FKP"), bin=binner, cellsize=10.0)
+                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "WEIGHT_FKP"), bin=binner, cellsize=10.0)
                 for fkp in fkp_fields
             ]
 
@@ -651,7 +651,7 @@ def compute_window_mesh2_spectrum_fm(
             # For each pk_region separately
             windows_analytical = []
             for _fkp, fkp_norm in zip(fkp_fields, fkp_norms, strict=True):
-                _fkp = _update_fkp(_fkp.data.weights, _fkp.randoms.weights, _fkp, "weight_FKP")
+                _fkp = _update_fkp(_fkp.data.weights, _fkp.randoms.weights, _fkp, "WEIGHT_FKP")
                 data_mesh = _fkp.data.paint(resampler="tsc", interlacing=3, compensate=True)
                 randoms_mesh = _fkp.randoms.paint(resampler="tsc", interlacing=3, compensate=True)
                 windows_analytical.append(
@@ -689,7 +689,7 @@ def compute_window_mesh2_spectrum_fm(
                 "nam_args": None,
                 "fkp_norms": fkp_norms,
                 "binner": binner,
-                "estimator_weights": "weight_FKP",
+                "estimator_weights": "WEIGHT_FKP",
                 "data_regions": ric_args.data_regions,
                 "randoms_regions": ric_args.randoms_regions,
             }
