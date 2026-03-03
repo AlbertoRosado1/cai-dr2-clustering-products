@@ -476,6 +476,7 @@ def compute_window_mesh2_spectrum_fm(
     optimal_weights: Callable | None,
     data_to_randoms_ratio: float,
     catalog_split_seed: int,
+    geo: bool,
     ric_nbins: int,
     ric_regions: list[str],
     amr: bool,  # is optional
@@ -487,7 +488,7 @@ def compute_window_mesh2_spectrum_fm(
     n_realizations: int,
     seeds: list[int] | None,
     batch_size: int = 4,
-) -> dict[str, types.WindowMatrix] | dict[str, list[types.WindowMatrix]]:
+) -> dict[str, dict[str, list[types.WindowMatrix]]]:
     """
     Compute the 2-point spectrum window with :mod:`desiwinds`.
 
@@ -495,9 +496,9 @@ def compute_window_mesh2_spectrum_fm(
     ----------
     *get_data_randoms : Callable
         Functions that return tuples of (data, randoms) catalogs.
-    spectrum : types.Mesh2SpectrumPoles
+    spectrum : lsstypes.Mesh2SpectrumPoles
         Measured 2-point spectrum multipoles.
-    theory: types.Mesh2SpectrumPoles | None
+    theory: lsstypes.Mesh2SpectrumPoles | None
         input theory power spectrum, used as a fiducial for the derivative. Attributes (e.g. ells) used for mock survey generation. If ``None``, the input spectrum is used as a fiducial.
     optimal_weights : Callable or None
         Function taking (ell, catalog) as input and returning total weights to apply to data and randoms.
@@ -509,6 +510,8 @@ def compute_window_mesh2_spectrum_fm(
         Population ratio between "data" and "randoms" to pick in the input randoms catalogs. Must be between 0 and 1.
     catalog_split_seed : int
         Random seed to use for the random split between "data" and "randoms" in the input randoms catalogs.
+    geo : bool
+        Whether to return the sampled window for the geometry. If False, only the RIC (±AMR) contribution is returned.
     ric_nbins : int
         Number of radial bins to use for the RIC.
     ric_regions : list[str]
@@ -534,15 +537,15 @@ def compute_window_mesh2_spectrum_fm(
 
     Returns
     -------
-    dict[str, types.WindowMatrix] | dict[str, list[types.WindowMatrix]]
-        Average window matrices for each region, and the lists of window matrices for each realization.
+    dict[str, dict[str, list[lsstypes.WindowMatrix]]]
+        Dictionary, per effect included (geometry, RIC, RIC+AMR) and per region, of lists of window matrices (one per realization).
     """
     # Notes to self:
     # * RIC not optional
     # * n_randoms is effectively set by the length of get_data_randoms
     import mpytools as mpy
     from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
-    from desiwinds.window import get_window_geometry, get_window_spikes
+    from desiwinds.window import get_window_spikes
     from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, compute_fkp2_normalization, create_sharding_mesh
 
     from .tools import add_photometric_template_values, select_region
@@ -568,18 +571,11 @@ def compute_window_mesh2_spectrum_fm(
             ),
         )
 
-    def _cv(wd_fm, wd_geo, wd_fm_geo):
-        return wd_fm.clone(value=wd_fm.value() - wd_geo.value() + wd_fm_geo.value())
-
     theory = theory or spectrum  # if None
     pk_regions = pk_regions or []
     columns_optimal_weights = []
     if optimal_weights is not None:
         columns_optimal_weights += getattr(optimal_weights, "columns", ["Z"])  # to compute optimal weights, e.g. for fnl
-
-    # Recover input ells from the theory spectrum
-    # Will also be used as fiducial point
-    ellsin = theory.ells
 
     # Recover output and mesh information from the observable spectrum
     ellsout = spectrum.ells
@@ -630,8 +626,10 @@ def compute_window_mesh2_spectrum_fm(
         ric_args = prepare_RIC(data=data, randoms=randoms, regions=ric_regions, n_bins=ric_nbins, apply_to="randoms")
 
         if amr:
+            extra_effects = "RIC+AMR"
             amr_args = prepare_AMR(data=data, randoms=randoms, regions_zranges=amr_regions_zranges, apply_to="randoms")
         else:
+            extra_effects = "RIC"
             amr_args = None
 
         # Turn into FKP fields
@@ -648,29 +646,8 @@ def compute_window_mesh2_spectrum_fm(
                 for fkp in fkp_fields
             ]
 
-            # Compute the analytical window with jaxpower
-            # For each pk_region separately
-            windows_analytical = []
-            for _fkp, fkp_norm in zip(fkp_fields, fkp_norms, strict=True):
-                _fkp = _update_fkp(_fkp.data.weights, _fkp.randoms.weights, _fkp, "WEIGHT_FKP")
-                data_mesh = _fkp.data.paint(resampler="tsc", interlacing=3, compensate=True)
-                randoms_mesh = _fkp.randoms.paint(resampler="tsc", interlacing=3, compensate=True)
-                windows_analytical.append(
-                    get_window_geometry(
-                        selection2=data_mesh,
-                        selection1=_fkp.data.sum() / _fkp.randoms.sum() * randoms_mesh,  # tsc
-                        theory_edges=theory,
-                        theory_ells=ellsin,
-                        binner=binner,
-                        norm=fkp_norm,  # cic
-                        flags=(),
-                        los=los,
-                        pbar=False,
-                    )
-                )
-                del data_mesh, randoms_mesh
-
             ## FM based computations
+            windows = {}
 
             # Shared window FM arguments
             window_fm_kw = {
@@ -695,11 +672,14 @@ def compute_window_mesh2_spectrum_fm(
                 "randoms_regions": ric_args.randoms_regions,
             }
 
-            # Compute the geometry-only window spikes with desiwinds
-            _, windows_fm_geo = get_window_spikes(
-                **window_fm_kw,
-                mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
-            )
+            if geo:
+                # Compute the geometry-only window spikes with desiwinds
+                _, windows_fm_geo = get_window_spikes(
+                    **window_fm_kw,
+                    mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
+                )
+
+                windows["geometry"] = windows_fm_geo
 
             # Compute the total window with desiwinds
             _, windows_fm = get_window_spikes(
@@ -707,15 +687,9 @@ def compute_window_mesh2_spectrum_fm(
                 mock_survey_kwargs=mock_survey_kwargs | {"ric_args": ric_args, "amr_args": amr_args},
             )
 
-            windows_cv = {}
-            for idx, pk_region in enumerate(pk_regions):
-                windows_cv[pk_region] = [_cv(windows_fm[ireal][idx], windows_analytical[idx], windows_fm_geo[ireal][idx]) for ireal in range(n_realizations)]
+            windows[extra_effects] = windows_fm
 
-            window_cv_avg = {}
-            for pk_region in pk_regions:
-                window_cv_avg[pk_region] = windows_cv[pk_region][0].clone(value=np.mean([window.value() for window in windows_cv[pk_region]], axis=0))
-
-            return window_cv_avg, windows_cv
+            return windows
 
         else:
             # Optimal weights: non symmetrical, so need to compute "cross-correlation" (same tracer, different weights) + not the same for all ells
@@ -733,9 +707,9 @@ def compute_window_mesh2_spectrum_fm(
                     randoms=fkp_field.randoms.clone(extra=fkp_field.randoms.extra | {"weight_optimal_1": randoms_w1, "weight_optimal_2": randoms_w2}),
                 )
 
-            windows_analytical = {}
-            windows_fm_geo = {}
-            windows_fm = {}
+            windows = {extra_effects: {}}
+            if geo:
+                windows["geometry"] = {}
 
             for ell in ellsout:
                 binner = BinMesh2SpectrumPoles(mattrs, edges=spectrum.get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
@@ -750,29 +724,6 @@ def compute_window_mesh2_spectrum_fm(
                     )
                     for fkp in fkp_fields
                 ]
-
-                # Compute the analytical window with jaxpower
-                # For each pk_region separately
-                windows_analytical[ell] = []
-                for fkp, fkp_norm in zip(fkp_fields, fkp_norms, strict=True):
-                    _data = fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_1"])
-                    _randoms = fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_2"])
-                    data_mesh = _data.paint(resampler="tsc", interlacing=3, compensate=True)
-                    randoms_mesh = _randoms.paint(resampler="tsc", interlacing=3, compensate=True)
-                    windows_analytical.append(
-                        get_window_geometry(
-                            selection2=data_mesh,
-                            selection1=_data.sum() / _randoms.sum() * randoms_mesh,  # tsc
-                            theory_edges=theory,
-                            theory_ells=ellsin,
-                            binner=binner,
-                            norm=fkp_norm,  # cic
-                            flags=(),
-                            los=los,
-                            pbar=False,
-                        )
-                    )
-                    del data_mesh, randoms_mesh
 
                 # Shared window FM arguments
                 window_fm_kw = {
@@ -797,13 +748,14 @@ def compute_window_mesh2_spectrum_fm(
                     "randoms_regions": ric_args.randoms_regions,
                 }
 
-                # Compute the geometry window with desiwinds
-                _, _windows_fm_geo = get_window_spikes(
-                    **window_fm_kw,
-                    mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
-                )
+                if geo:
+                    # Compute the geometry window with desiwinds
+                    _, _windows_fm_geo = get_window_spikes(
+                        **window_fm_kw,
+                        mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
+                    )
 
-                windows_fm_geo[ell] = _windows_fm_geo
+                    windows["geometry"][ell] = _windows_fm_geo
 
                 # Compute the total window with desiwinds
                 _, _windows_fm = get_window_spikes(
@@ -811,7 +763,7 @@ def compute_window_mesh2_spectrum_fm(
                     mock_survey_kwargs=mock_survey_kwargs | {"ric_args": (ric_args,) * 2, "amr_args": (amr_args,) * 2},
                 )
 
-                windows_fm[ell] = _windows_fm
+                windows[extra_effects][ell] = _windows_fm
 
             # For each region, sum the windows over ells and apply control variate
 
@@ -821,30 +773,18 @@ def compute_window_mesh2_spectrum_fm(
                 value = np.concatenate([window.value() for window in windows], axis=0)
                 return windows[0].clone(value=value, observable=observable)  # join multipoles
 
-            windows_analytical = {pk_region: _combine_ells([windows_analytical[ell][idx] for ell in ellsout]) for idx, pk_region in enumerate(pk_regions)}
-            windows_fm_geo = {
-                pk_region: [_combine_ells([windows_fm_geo[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+            if geo:
+                windows["geometry"] = {
+                    pk_region: [_combine_ells([windows["geometry"][ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+                    for idx, pk_region in enumerate(pk_regions)
+                }
+
+            windows[extra_effects] = {
+                pk_region: [_combine_ells([windows[extra_effects][ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
                 for idx, pk_region in enumerate(pk_regions)
             }
-            windows_fm = {
-                pk_region: [_combine_ells([windows_fm[ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
-                for idx, pk_region in enumerate(pk_regions)
-            }
 
-            windows_cv = {
-                pk_region: [
-                    _cv(windows_fm[pk_region][ireal], windows_analytical[pk_region], windows_fm_geo[pk_region][ireal]) for ireal in range(n_realizations)
-                ]
-                for pk_region in pk_regions
-            }
-
-            window_cv_avg = {
-                pk_region: windows_cv[pk_region][0].clone(value=np.mean([window.value() for window in windows_cv[pk_region]], axis=0))
-                for pk_region in pk_regions
-            }
-
-            return window_cv_avg, windows_cv
-
+            return windows
 
 def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: types.WindowMatrix, select: dict=None, theory: str='rept', fixed=tuple(), out: types.Mesh2SpectrumPoles=None):
     """
