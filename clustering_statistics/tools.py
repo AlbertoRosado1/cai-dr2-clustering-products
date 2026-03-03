@@ -629,12 +629,13 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
     if cat_dir is None:  # pre-registered paths
         if version == 'data-dr1-v1.5':
-            cat_dir = desi_dir / f'survey/catalogs/Y1/LSS/iron/LSScats'
+            cat_dir = desi_dir / 'survey/catalogs/Y1/LSS/iron/LSScats'
             if 'bitwise' in weight:
                 cat_dir = cat_dir / 'v1.5pip'
             else:
                 cat_dir = cat_dir / 'v1.5'
             ext = 'fits'
+        
         elif version == 'data-dr2-v2':
             cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
             if kind == 'parent_randoms':
@@ -653,6 +654,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
             if kind == 'full_randoms':
                 return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in range(nran)]
+        
         elif version == 'holi-v1-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'fits' if 'full' in kind else 'h5'
@@ -660,9 +662,11 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return cat_dir / f'{tracer}_complete_{region}_clustering.dat.{ext}'
             if kind == 'randoms':
                 return [cat_dir / f'{tracer}_complete_{region}_{iran:d}_clustering.ran.{ext}' for iran in range(nran)]
+        
         elif version == 'holi-v1-altmtl':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'fits' if 'full' in kind else 'h5'
+        
         elif version == 'glam-uchuu-v1-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/GLAM-Uchuu_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'h5'
@@ -670,9 +674,11 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return cat_dir / f'{tracer}_complete_{region}_clustering.dat.{ext}'
             if kind == 'randoms':
                 return [cat_dir / f'{tracer}_complete_{region}_{iran:d}_clustering.ran.{ext}' for iran in range(nran)]
+        
         elif version == 'glam-uchuu-v1-altmtl':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/GLAM-Uchuu_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'h5'
+        
         elif version == 'abacus-2ndgen-complete':
             if 'BGS' in tracer:
                 cat_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummitBGS_v2/mock{imock:d}'
@@ -683,12 +689,14 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return cat_dir / f'{tracer}_complete_clustering.dat.{ext}'
             if kind == 'randoms':
                 return [cat_dir / f'{tracer}_complete_{iran:d}_clustering.ran.{ext}' for iran in range(nran)]
+        
         elif version == 'abacus-2ndgen-altmtl':
             if 'BGS' in tracer:
                 cat_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummitBGS_v2/altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
             else:
                 cat_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummit_v4_1/altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
             ext = 'fits'
+        
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
                 # Do not exist anymore?
@@ -700,6 +708,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_clustering.dat.{ext}')
             if kind == 'randoms':
                 return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in range(nran)]
+    
     cat_dir = Path(cat_dir)
     if kind == 'data':
         return _find_extension(cat_dir / f'{tracer}_{region}_clustering.dat', ext)
