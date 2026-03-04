@@ -91,7 +91,7 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
             options = dict(catalog=dict(cat_dir=cat_dir, tracer=tracer, zrange=zranges, weight=weight, region=region, ext='fits'), 
                            mesh2_spectrum={'cut': False}, window_mesh2_spectrum={'cut': False})
             options = fill_fiducial_options(options, analysis='local_png')
-
+            logger.info(f'Running stats {stats} with options: {options}')
             compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, **options)
 
 
@@ -142,7 +142,7 @@ if __name__ == '__main__':
         logger.info("Create queue with jobs inside using desipipe. Don\'t forget to run `desipipe spawn -q data_png --spawn` to launch the jobs!")
         tm, tm80 = setup_queue()
 
-    todo = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][:1]
+    todo = ['mesh2_spectrum'] #, 'window_mesh2_spectrum', 'covariance_mesh2_spectrum']
     postprocess = ['combine_regions']
     logger.info(f'Running stats {todo} and postprocess {postprocess}')
     
@@ -162,11 +162,11 @@ if __name__ == '__main__':
 
     regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'SGCnoDES', 'DES'][:2]  # + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]]
     logger.info(f'Running on regions: {regions}')
-    postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:1]
+    postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES']
     logger.info(f'Combining postregions: {postregions}') 
 
     # 'LRGxELG_LOP', 'LRGxQSO', 'ELG_LOPxQSO'
-    for tracer in ['LRG', 'LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO', 'QSO_zcmb'][:1]:
+    for tracer in ['LRG', 'LRG_zcmb', 'ELGnotqso', 'QSO', 'QSO_zcmb'][-1:]:
         from clustering_statistics import tools
         logger.info(tracer)
         zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')
@@ -176,21 +176,20 @@ if __name__ == '__main__':
         # Choice of imaging systematics avaialble in the catalogs:
         # https://desi.lbl.gov/trac/wiki/keyprojects/Y3-DR/LSScat/imaging_systematics
         if 'LRG' in tracer:
-            weights = ['default-oqe', 'default-oqe-wsys_WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB'] 
+            weights = ['default-fkp-oqe', 'default-fkp-oqe-wsys_WEIGHT_IMLIN_FINEZBIN_ALLEBVCMB'] #, 'default-fkp']
             if 'zcmb' in tracer:
-                weights += ['default-oqe-wsys_WEIGHT_IMLIN_FINEZBIN_ALLEBV']
+                weights += ['default-fkp-oqe-wsys_WEIGHT_IMLIN_FINEZBIN_ALLEBV']
         elif 'ELG' in tracer:
-            weights = ['default-fkp', 'default-oqe', 'default-oqe-wsys_WEIGHT_IMLIN_NODEBV', 'default-oqe-wsys_WEIGHT_IMLIN_FINEZBIN_NODEBV']
+            weights = ['default-fkp-oqe', 'default-fkp-oqe-wsys_WEIGHT_IMLIN_FINEZBIN_NODEBV'] #'default-fkp' 
         elif 'QSO' in tracer:
-            weights = ['default-oqe']
+            weights = ['default-fkp-oqe', 'default-fkp']  # 'default-fkp'
  
         def get_run_stats():
             if mode == 'interactive':
                 return run_stats
             else: 
                 _tm = tm80
-                if tracer in ['LRG']:
-                    _tm = tm
+                #if tracer in ['LRG']: _tm = tm
                 return _tm.python_app(run_stats)
 
         get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, regions=regions, stats=todo)
