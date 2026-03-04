@@ -450,7 +450,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     if "window_mesh2_spectrum_fm" in kind:
         if tracer not in ["BGS", "LRG", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
-        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
+        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}[tracer]
         propose_regression_zranges = {
             "BGS": [(0.1, 0.4)],
             "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
