@@ -640,7 +640,7 @@ def compute_window_mesh2_spectrum_fm(
         # Compute FKP normalization for each region, with the estimator weights, and for each ell if optimal weights are applied
         if optimal_weights is None:
             # Using FKP weights which are symetrical, so this remains an autocorr
-            binner = BinMesh2SpectrumPoles(mattrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
+            binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
 
             # Temporarily add FKP weights to the fkp_fields weights for norm and analytical computation
             fkp_norms = [
