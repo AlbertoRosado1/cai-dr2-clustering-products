@@ -47,10 +47,10 @@ Therefore, for each statistic:
 * ```pk```: `mesh2_spectrum_poles_{base_filename}.h5`
 * ```bk```: `mesh3_spectrum_{basis}_poles_{base_filename}.h5`
     * `basis`: `sugiyama-diagonal`...
-* ```xi```: `particle2_correlation_{base_filename}_weight-{weight_type}{extra}.h5`
+* ```xi```: `particle2_correlation_{base_filename}.h5`
 
 
-An example of how the full path of a file would look like: 
+An example of how the full path of a file would look: 
 ```
 $BASEDIR/glam-uchuu-v1-altmtl/full_shape/pk/mesh2_spectrum_poles_LRG_z0.4-0.6_GCcomb_weight-default-FKP_thetacut_100.h5
 ```
