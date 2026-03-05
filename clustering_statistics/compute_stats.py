@@ -310,34 +310,36 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 theory_fn = window_options.pop("theory", None)
 
                 if theory_fn is None:
-                    products_fn = {}
-                    # Collect power spectrum and window
-                    for name in ["spectrum", "window"]:
-                        kind_stat = (
-                            stat.replace("window_", "").replace("_fm", "") if name == "spectrum" else stat.replace("window_", f"{name}_").replace("_fm", "")
-                        )
-                        fn = window_options.pop(name, None)
-                        if fn is None:
-                            kw = options[kind_stat] | dict(auw=False, cut=False)
-                            fn = {
-                                (tracer, tracer): get_stats_fn(
-                                    kind=kind_stat,
-                                    catalog=fn_catalog_options[tracer],
-                                    **kw,
-                                )
-                                for tracer in tracers
-                            }
-                            if len(tracers) > 1:
-                                fn[tuple(tracers)] = get_stats_fn(kind=kind_stat, catalog=fn_catalog_options, **kw)
-                        elif not isinstance(fn, dict):
-                            _check_fn(fn, tracers, name=name)
-                        products_fn[name] = fn
+                    products_fn = {pk_region: {} for pk_region in window_options["pk_regions"]}
+                    # Collect power spectrum and window, for each region if relevant
+                    for pk_region in window_options["pk_regions"]:
+                        for name in ["spectrum", "window"]:
+                            kind_stat = (
+                                stat.replace("window_", "").replace("_fm", "") if name == "spectrum" else stat.replace("window_", f"{name}_").replace("_fm", "")
+                            )
+                            fn = window_options.pop(name, None)
+                            if fn is None:
+                                kw = options[kind_stat] | dict(auw=False, cut=False)
+                                fn = {
+                                    (tracer, tracer): get_stats_fn(
+                                        kind=kind_stat,
+                                        catalog=fn_catalog_options[tracer],
+                                        **kw | {"region": pk_region},
+                                    )
+                                    for tracer in tracers
+                                }
+                                if len(tracers) > 1:
+                                    for pk_region in window_options["pk_regions"]:
+                                        fn[tuple(tracers)] = get_stats_fn(kind=kind_stat, catalog=fn_catalog_options, **kw)
+                            elif not isinstance(fn, dict):
+                                _check_fn(fn, tracers, name=name)
+                            products_fn[pk_region][name] = fn
 
                     theory_fn = {}
                     for tracers2 in itertools.combinations_with_replacement(tracers, r=2):
-                        spectrum = _read_tracer(products_fn["spectrum"], tracers2)
-                        window = _read_tracer(products_fn["window"], tracers2)
-                        theory = run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window)
+                        spectra = [_read_tracer(products_fn[pk_region]["spectrum"], tracers2) for pk_region in window_options["pk_regions"]]
+                        windows = [_read_tracer(products_fn[pk_region]["window"], tracers2) for pk_region in window_options["pk_regions"]]
+                        theory = sum([run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window) for spectrum, window in zip(spectra, windows, strict=True)])
                         theory_fn[tracers2] = get_stats_fn(
                             kind=theory_stat,
                             catalog=(
