@@ -723,12 +723,24 @@ def compute_window_mesh2_spectrum_fm(
             # Optimal weights: non symmetrical, so need to compute "cross-correlation" (same tracer, different weights) + not the same for all ells
             # Proceed ell per ell and sum the windows at the end
             def _attach_weights(fkp_field, ell):
-                data_w1, data_w2 = optimal_weights(
-                    ell,
+                data_w1, data_w2 = next(
+                    optimal_weights(
+                        ell,
+                        [
+                            {column: fkp_field.data.extra[column] for column in ["Z", *columns_optimal_weights]}
+                            | {"INDWEIGHT": fkp_field.data.weights * fkp_field.data.extra["WEIGHT_FKP"]}
+                        ],
+                    )
                 )
-                randoms_w1, randoms_w2 = optimal_weights(
-                    ell,
-                    {column: fkp_field.data.extra[column] for column in ["INDWEIGHT", *columns_optimal_weights]},
+
+                randoms_w1, randoms_w2 = next(
+                    optimal_weights(
+                        ell,
+                        [
+                            {column: fkp_field.randoms.extra[column] for column in ["Z", *columns_optimal_weights]}
+                            | {"INDWEIGHT": fkp_field.randoms.weights * fkp_field.randoms.extra["WEIGHT_FKP"]}
+                        ],
+                    )
                 )
                 return fkp_field.clone(
                     data=fkp_field.data.clone(extra=fkp_field.data.extra | {"weight_optimal_1": data_w1, "weight_optimal_2": data_w2}),
