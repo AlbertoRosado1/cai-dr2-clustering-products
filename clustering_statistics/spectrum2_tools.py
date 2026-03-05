@@ -580,6 +580,8 @@ def compute_window_mesh2_spectrum_fm(
     # Recover output and mesh information from the observable spectrum
     ellsout = spectrum.ells
     los = spectrum.attrs["los"]  # this has to match with theory input
+    if los in ["endpoint", "firstpoint"]:
+        los = "local"
     mattrs = {name: spectrum.attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
 
     with create_sharding_mesh(meshsize=mattrs.get("meshsize", None)):
