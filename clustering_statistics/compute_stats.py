@@ -221,7 +221,6 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         funcs = {
             "window_mesh2_spectrum": compute_window_mesh2_spectrum,
             "window_mesh3_spectrum": compute_window_mesh3_spectrum,
-            "window_mesh2_spectrum_fm": compute_window_mesh2_spectrum_fm,
         }
 
         for stat, func in funcs.items():
@@ -239,7 +238,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 spectrum_fn = window_options.pop('spectrum', None)
                 fn_window_options = window_options | dict(auw=False, cut=False)
                 if spectrum_fn is None:
-                    spectrum_stat = stat.replace("window_", "").replace("_fm", "")
+                    spectrum_stat = stat.replace("window_", "")
                     fn_window_options = options[spectrum_stat] | fn_window_options
                     spectrum_fn = get_stats_fn(kind=spectrum_stat, catalog=fn_catalog_options, **(options[spectrum_stat] | dict(auw=False, cut=False)))
                 spectrum = types.read(spectrum_fn)
@@ -266,6 +265,101 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     if 'correlation' in key:  # window functions
                         fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(extra=extra)))
                         tools.write_stats(fn, window[key])
+
+        # Window matrix using forward model
+        funcs = {"window_mesh2_spectrum_fm": compute_window_mesh2_spectrum_fm}
+
+        for stat, func in funcs.items():
+            if stat in stats:
+                window_options = dict(options[stat])
+
+                def get_data(tracer):
+                    czrandoms = Catalog.concatenate(zrandoms[tracer])
+                    toret = {"data": zdata[tracer], "randoms": czrandoms}
+                    if selection_weights:
+                        toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
+                    return toret
+
+                def _check_fn(fn, tracers, name=""):
+                    if len(tracers) == 1:
+                        fn = {(tracer, tracer): fn for tracer in tracers}
+                    else:
+                        raise ValueError(f"provide a dictionary of (tracer1, tracer2): {name} for tracer1, tracer2 in {tracers}")
+                    return fn
+
+                def _read_tracer(fns, tracers2):
+                    if tracers2 not in fns:
+                        tracers2 = tracers2[::-1]
+                    return types.read(fns[tracers2])
+
+                # Get an example of ouput measurement
+                spectrum_fn = window_options.pop("spectrum", None)
+                fn_window_options = window_options | dict(auw=False, cut=False)
+                if spectrum_fn is None:
+                    spectrum_stat = stat.replace("window_", "").replace("_fm", "")
+                    fn_window_options = options[spectrum_stat] | fn_window_options
+                    spectrum_fn = get_stats_fn(
+                        kind=spectrum_stat,
+                        catalog=fn_catalog_options,
+                        **(options[spectrum_stat] | dict(auw=False, cut=False)),
+                    )
+                spectrum = types.read(spectrum_fn)
+
+                # Get fiducial theory for derivative
+                theory_stat = stat.replace("window_", "theory_").replace("_fm", "")
+                theory_fn = window_options.pop("theory", None)
+
+                if theory_fn is None:
+                    products_fn = {}
+                    # Collect power spectrum and window
+                    for name in ["spectrum", "window"]:
+                        kind_stat = (
+                            stat.replace("window_", "").replace("_fm", "") if name == "spectrum" else stat.replace("window_", f"{name}_").replace("_fm", "")
+                        )
+                        fn = window_options.pop(name, None)
+                        if fn is None:
+                            kw = options[kind_stat] | dict(auw=False, cut=False)
+                            fn = {
+                                (tracer, tracer): get_stats_fn(
+                                    kind=kind_stat,
+                                    catalog=fn_catalog_options[tracer],
+                                    **kw,
+                                )
+                                for tracer in tracers
+                            }
+                            if len(tracers) > 1:
+                                fn[tuple(tracers)] = get_stats_fn(kind=kind_stat, catalog=fn_catalog_options, **kw)
+                        elif not isinstance(fn, dict):
+                            _check_fn(fn, tracers, name=name)
+                        products_fn[name] = fn
+
+                    theory_fn = {}
+                    for tracers2 in itertools.combinations_with_replacement(tracers, r=2):
+                        spectrum = _read_tracer(products_fn["spectrum"], tracers2)
+                        window = _read_tracer(products_fn["window"], tracers2)
+                        theory = run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window)
+                        theory_fn[tracers2] = get_stats_fn(
+                            kind=theory_stat,
+                            catalog=(
+                                fn_catalog_options[tracers2[0]] if tracers2[1] == tracers2[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers2}
+                            ),
+                        )
+                        tools.write_stats(theory_fn[tracers2], theory)
+                else:
+                    _check_fn(theory_fn, tracers, name="theory")
+
+                jax.experimental.multihost_utils.sync_global_devices("theory")  # Sync across devices such that theory ready for window
+                fields = {tracer: tools.get_simple_tracer(tracer) for tracer in tracers}
+                theory = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(theory_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
+                theory = types.ObservableTree(list(theory.values()), fields=list(theory.keys()))
+
+                # Now compute window function using forward model
+                window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, **window_options)
+                # This is a dict of dict of lists of windows : {modeled_effect:{pk_region:[window, ...], ...}, ...}
+                for effect in window:  # geo, RIC or RIC+AMR
+                    for pk_region in window[effect]:  # eg NGC, SGC
+                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **(fn_window_options | {"extra": effect, "region": pk_region}))
+                        tools.write_stats(fn, window[effect][pk_region])
 
         # Covariance matrix
         funcs = {'covariance_mesh2_spectrum': compute_covariance_mesh2_spectrum}
