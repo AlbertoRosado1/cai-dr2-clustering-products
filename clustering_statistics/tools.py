@@ -609,7 +609,6 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
             options[stat] = fiducial_options | options.get(stat, {})
             if 'mesh' in stat:
                 if mattrs: options[stat]['mattrs'] = mattrs
-<<<<<<< HEAD
             if stat in ['mesh2_spectrum']:
                 for tracer in tracers:
                     if weights[tracer] is not None:
@@ -618,12 +617,8 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
                         else:
                             options[stat].pop('optimal_weights', None)
                             warnings.warn('Removing optimal_weights from mesh2_spectrum as OQE not in weights')
-        for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum']:
-            spectrum_options = options[stat.replace('window_', '')]
-=======
-        for stat in ["window_mesh2_spectrum", "window_mesh3_spectrum", "window_mesh2_spectrum_fm"]:
-            spectrum_options = options[stat.replace("window_", "").replace("_fm", "")]
->>>>>>> c8c28b1 (add fiducial window fm info)
+        for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'window_mesh2_spectrum_fm']:
+            spectrum_options = options[stat.replace('window_', '').replace('_fm', '')]
             spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['selection_weights', 'optimal_weights', 'basis']}
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | spectrum_options | options.get(stat, {})
