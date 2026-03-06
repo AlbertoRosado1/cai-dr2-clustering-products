@@ -51,7 +51,7 @@ def run_stats(tracer='LRG', zranges=None, version='holi-v4.80', weight='default-
             else:
                 stat = 'mesh3_spectrum'
         for imock in imocks:
-            regions = ['NGC', 'SGC'][:1]
+            regions = ['NGC', 'SGC'][1:]
             for region in regions:
                 options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), mesh2_spectrum={'mattrs': {'boxsize': 10000., 'meshsize': 750}}, **kw)
                 #options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), mesh2_spectrum={}, **kw)
@@ -127,7 +127,7 @@ def fit_large_scales(imock=0, tracer='LRG', zranges=None, version='v4.80', weigh
         zranges = tools.propose_fiducial('zranges', tracer)
 
     for zrange in zranges:
-        for region in ['NGC', 'SGC'][:1]:
+        for region in ['NGC', 'SGC'][1:]:
             kw_catalog = dict(imock=imock, tracer=tracer, zrange=zrange, region=region, version=version, weight=weight)
             # Preliminary fit to the data
             fns = [tools.get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=stats_dir, catalog=kw_catalog | dict(imock=imock)) for imock in range(40)]
@@ -238,7 +238,7 @@ if __name__ == '__main__':
     if 'test' in todo:
         #version = 'v4.00'
         version = 'v4.80'
-        tracers = ['LRG', 'ELG', 'QSO'][:-1]
+        tracers = ['LRG', 'ELG', 'QSO']
         for tracer in tracers:
             imocks = list_existing_imocks(50, version=version, tracers=[tracer], maximock=47)
             zranges = None
@@ -257,7 +257,7 @@ if __name__ == '__main__':
     if 'large_scales' in todo:
         version = 'v4.80'
         #version = 'v4.00'
-        tracers = ['LRG', 'ELG', 'QSO'][-1:]
+        tracers = ['LRG', 'ELG', 'QSO']
         for tracer in tracers:
             zranges = None
             fit_large_scales(imock=1, tracer=tracer, zranges=zranges, version=version, weight='default', stats_dir=stats_dir, plots_dir=plots_dir, get_catalog_fn=get_holi_catalog_fn)

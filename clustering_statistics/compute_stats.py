@@ -85,6 +85,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     cache = cache or {}
     options = fill_fiducial_options(kwargs, analysis=analysis)
     catalog_options = options['catalog']
+    # tracers is a list of tracer1, tracer2, ... for cross-correlations
     tracers = list(catalog_options.keys())
 
     zranges = {tracer: _make_list_zrange(catalog_options[tracer]['zrange']) for tracer in tracers}
@@ -115,6 +116,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             if isinstance(_catalog_options.get('complete', None), dict):
                 _catalog_options.setdefault('reshuffle', {})  # to pass on complete data
             data[tracer] = read_clustering_catalog(kind='data', **_catalog_options, concatenate=True)
+            #_catalog_options.pop('complete', None)
+            #_catalog_options.pop('reshuffle', None)
             randoms[tracer] = read_clustering_catalog(kind='randoms', **_catalog_options, cache=cache, concatenate=False)
 
     if with_stats_blinding:
