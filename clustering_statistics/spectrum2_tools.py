@@ -193,7 +193,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                 results['cut'] = -close.value()
 
             # Then compute the AUW-weighted pairs
-            with_bitweights = 'BITWEIGHT' in all_fkp[0].data.__dict__
+            with_bitweights = 'BITWEIGHT' in all_fkp[0].data.extra
             if auw is not None or with_bitweights:
                 from cucount.jax import WeightAttrs
                 from jaxpower.particle2 import convert_particles
@@ -201,8 +201,8 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                 bitwise = angular = None
                 if with_bitweights:
                     # Order of weights matters
-                    # fkp.data.__dict__['BITWEIGHT'] includes IIP in the first position
-                    all_data = [convert_particles(fkp.data, weights=list(fkp.data.__dict__['BITWEIGHT']) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
+                    # fkp.data.extra['BITWEIGHT'] includes IIP in the first position
+                    all_data = [convert_particles(fkp.data, weights=list(fkp.data.extra['BITWEIGHT']) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
                     bitwise = dict(weights=all_data[0].get('bitwise_weight'))  # sets nrealizations, etc.: fine to use the first
                     if jax.process_index() == 0:
                         logger.info(f'Applying PIP weights {bitwise}.')
@@ -262,7 +262,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                     if all_particles[0] is None:  # shifted is None, yield None
                         while True:
                             yield tuple(None for particles in all_particles)
-                    for all_weights in optimal_weights(ell, [{'INDWEIGHT': particles.weights} | {column: particles.__dict__[column] for column in columns_optimal_weights} for particles in all_particles]):
+                    for all_weights in optimal_weights(ell, [{'INDWEIGHT': particles.weights} | {column: particles.extra[column] for column in columns_optimal_weights} for particles in all_particles]):
                         yield tuple(particles.clone(weights=weights) for particles, weights in zip(all_particles, all_weights))
 
                 result_ell = {}
@@ -341,7 +341,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
 
         def _compute_window_ell(all_randoms, ells, isum=0, fields=None):
             all_randoms = list(all_randoms)
-            seed = [(42, randoms.__dict__['IDS']) for randoms in all_randoms]  # for process invariance
+            seed = [(42, randoms.extra["IDS"]) for randoms in all_randoms]  # for process invariance
             mattrs = all_randoms[0].attrs
             pole = spectrum.get(ells[0])
             bin = BinMesh2SpectrumPoles(mattrs, edges=pole.edges('k'), ells=ells)
@@ -407,7 +407,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
         if optimal_weights is None:
             # Compute effective redshift
             fields = None
-            seed = [(42, randoms.__dict__['IDS']) for randoms in all_randoms]
+            seed = [(42, randoms.extra["IDS"]) for randoms in all_randoms]
             zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=2, split=seed, fields=fields, return_fraction=True)
             results = _compute_window_ell(all_randoms, ells=ells, fields=fields)
             for key in results:
@@ -432,15 +432,21 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                             yield tuple(None for particles in all_particles)
                     def clone(particles, weights):
                         toret = particles.clone(weights=weights)
-                        toret.__dict__.update(particles.__dict__)  # to keep IDS
                         return toret
-                    for all_weights in optimal_weights(ell, [{'INDWEIGHT': particles.weights} | {column: particles.__dict__[column] for column in columns_optimal_weights} for particles in all_particles]):
+
+                    for all_weights in optimal_weights(
+                        ell,
+                        [
+                            {"INDWEIGHT": particles.weights} | {column: particles.extra[column] for column in columns_optimal_weights}
+                            for particles in all_particles
+                        ],
+                    ):
                         yield tuple(clone(particles, weights=weights) for particles, weights in zip(all_particles, all_weights))
 
                 result_ell = {}
                 for isum, all_randoms in enumerate(_get_optimal_weights(all_randoms)):
                     fields = None
-                    seed = [(42, randoms.__dict__['IDS']) for randoms in all_randoms]
+                    seed = [(42, randoms.extra["IDS"]) for randoms in all_randoms]
                     zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=2, split=seed, fields=fields, return_fraction=True)
                     _result = _compute_window_ell(all_randoms, ells=[ell], isum=isum, fields=fields)
                     for key in _result:  # raw, cut, auw
