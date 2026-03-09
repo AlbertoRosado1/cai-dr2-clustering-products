@@ -13,11 +13,22 @@ def _match_observable(obj, target):
     and ``CovarianceMatrix`` require going through ``.at.observable.match()``.
     This helper dispatches to the correct call so callers don't need to care
     about the underlying type.
+
+    For a joint (multi-stat) fit the ``WindowMatrix`` already carries an
+    ``ObservableTree`` observable that covers all stats; in that case we match
+    against the full joint target rather than stripping it to one branch.
     """
     if isinstance(obj, types.ObservableTree):
         return obj.match(target)
     if isinstance(obj, types.WindowMatrix) and isinstance(target, types.ObservableTree):
-        target = next(iter(target))
+        # Only strip the ObservableTree to its first branch when the window covers
+        # a single stat.  A joint window has its observable constructed explicitly
+        # as types.ObservableTree (exact type), while a single-stat window has a
+        # concrete subclass (e.g. Mesh2SpectrumPoles) that also inherits from
+        # ObservableTree but lacks the 'observables' tree dimension.
+        # Use an exact-type check (not isinstance) to distinguish them.
+        if type(obj.observable) is not types.ObservableTree:
+            target = next(iter(target))
     return obj.at.observable.match(target)
 
 
