@@ -372,6 +372,11 @@ def _extract_ps_components(lk):
                 window = window.at.observable.get(observables='spectrum2')
             except ValueError:
                 pass
+        if isinstance(window.theory, types.ObservableTree):
+            try:
+                window = window.at.theory.get(observables='spectrum2')
+            except ValueError:
+                pass
         window = window.at.observable.match(obs)
 
     return obs, cov, window
@@ -408,6 +413,11 @@ def _extract_bs_components(lk):
         if isinstance(window.observable, types.ObservableTree):
             try:
                 window = window.at.observable.get(observables='spectrum3')
+            except ValueError:
+                pass
+        if isinstance(window.theory, types.ObservableTree):
+            try:
+                window = window.at.theory.get(observables='spectrum3')
             except ValueError:
                 pass
         window = window.at.observable.match(obs)
@@ -564,7 +574,14 @@ def set_emulator(observables, emulator_dir='./emulators', order=4):
                 emulated_pt = EmulatedCalculator.load(filename)
             else:
                 print(f'  Fitting {comp.upper()} emulator for {tracer}: {filename}')
-                theory_calc = obs.wmatrix.theory if hasattr(obs, 'wmatrix') and obs.wmatrix is not None else obs
+                # PS observable stores the desilike window matrix as `wmatrix`
+                # (with a .theory attribute pointing to the desilike theory).
+                # BS observable stores the raw lsstypes WindowMatrix as `window`
+                # (no desilike .theory); the desilike theory is at obs.theory.
+                if hasattr(obs, 'wmatrix') and obs.wmatrix is not None:
+                    theory_calc = obs.wmatrix.theory
+                else:
+                    theory_calc = obs.theory
                 emulator = Emulator(
                     theory_calc.pt,
                     engine=TaylorEmulatorEngine(method='finite', order=order),
@@ -651,7 +668,7 @@ def get_likelihood(observables, fit_type):
 
 # ─── MCMC ────────────────────────────────────────────────────────────────────
 
-def run_mcmc(likelihood, chain_name, GR_criteria=0.3):
+def run_mcmc(likelihood, chain_name, GR_criteria=0.1):
     """Run an Emcee MCMC chain until the Gelman-Rubin criterion is met.
 
     Parameters
@@ -758,7 +775,7 @@ if __name__ == '__main__':
         help='Taylor emulator expansion order (default: 4).',
     )
     parser.add_argument(
-        '--GR_criteria', type=float, default=0.3,
+        '--GR_criteria', type=float, default=0.1,
         help='Gelman-Rubin convergence threshold (default: 0.3).',
     )
     parser.add_argument(
