@@ -656,7 +656,8 @@ def compute_window_mesh2_spectrum_fm(
             all_data[iregion] = all_data[iregion].clone(extra=extra, weights=_safe_divide(all_data[iregion].weights, all_data[iregion].extra["WEIGHT_FKP"]))
         del extra
 
-        logger.info("Catalogs ready, starting preparation...")
+        if jax.process_index() == 0:
+            logger.info("Catalogs ready, starting preparation...")
 
         # Prepare arguments for the window computation function
         ric_args = prepare_RIC(data=all_data, randoms=all_randoms, regions=ric_regions, n_bins=ric_nbins, apply_to="randoms")
@@ -682,7 +683,8 @@ def compute_window_mesh2_spectrum_fm(
         del all_data, all_randoms
         # Compute FKP normalization for each region, with the estimator weights, and for each ell if optimal weights are applied
         if optimal_weights is None:
-            logger.info("Using FKP weights, computing window for all ells at once.")
+            if jax.process_index() == 0:
+                logger.info("Using FKP weights, computing window for all ells at once.")
             # Using FKP weights which are symetrical, so this remains an autocorr
             binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
 
@@ -719,7 +721,8 @@ def compute_window_mesh2_spectrum_fm(
             }
 
             if geo:
-                logger.info("Computing geometry window with desiwinds...")
+                if jax.process_index() == 0:
+                    logger.info("Computing geometry window with desiwinds...")
                 _, windows_fm_geo = get_window_spikes(
                     **window_fm_kw,
                     mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
@@ -727,19 +730,22 @@ def compute_window_mesh2_spectrum_fm(
 
                 windows["geometry"] = windows_fm_geo
 
-            logger.info("Computing total window with desiwinds...")
+            if jax.process_index() == 0:
+                logger.info("Computing total window with desiwinds...")
             _, windows_fm = get_window_spikes(
                 **window_fm_kw,
                 mock_survey_kwargs=mock_survey_kwargs | {"ric_args": ric_args, "amr_args": amr_args},
             )
 
             windows[extra_effects] = windows_fm
-            logger.info("desiwinds window computation finished.")
+            if jax.process_index() == 0:
+                logger.info("desiwinds window computation finished.")
 
             return windows
 
         else:
-            logger.info("Using optimal weights, computing windows for each ell separately.")
+            if jax.process_index() == 0:
+                logger.info("Using optimal weights, computing windows for each ell separately.")
             # Optimal weights: non symmetrical, so need to compute "cross-correlation" (same tracer, different weights) + not the same for all ells
             # Proceed ell per ell and sum the windows at the end
             def _attach_weights(fkp_field, ell):
@@ -822,7 +828,8 @@ def compute_window_mesh2_spectrum_fm(
                 }
 
                 if geo:
-                    logger.info("Computing geometry window for ell=%i with desiwinds...", ell)
+                    if jax.process_index() == 0:
+                        logger.info("Computing geometry window for ell=%i with desiwinds...", ell)
                     _, _windows_fm_geo = get_window_spikes(
                         **window_fm_kw,
                         mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None},
@@ -830,7 +837,8 @@ def compute_window_mesh2_spectrum_fm(
 
                     windows["geometry"][ell] = _windows_fm_geo
 
-                logger.info("Computing total window for ell=%i with desiwinds...", ell)
+                if jax.process_index() == 0:
+                    logger.info("Computing total window for ell=%i with desiwinds...", ell)
                 _, _windows_fm = get_window_spikes(
                     **window_fm_kw,
                     mock_survey_kwargs=mock_survey_kwargs | {"ric_args": (ric_args,) * 2, "amr_args": (amr_args,) * 2},
@@ -838,7 +846,8 @@ def compute_window_mesh2_spectrum_fm(
 
                 windows[extra_effects][ell] = _windows_fm
 
-            logger.info("desiwinds window computation finished.")
+            if jax.process_index() == 0:
+                logger.info("desiwinds window computation finished.")
 
             # For each region, sum the windows over ells and apply control variate
 
