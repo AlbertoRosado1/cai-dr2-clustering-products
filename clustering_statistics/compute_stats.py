@@ -10,12 +10,12 @@ import numpy as np
 import jax
 import lsstypes as types
 
-from . import tools
-from .tools import fill_fiducial_options, _merge_options, Catalog, setup_logging
-from .correlation2_tools import compute_angular_upweights, compute_particle2_correlation
-from .spectrum2_tools import compute_mesh2_spectrum, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum
-from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum
-from .recon_tools import compute_reconstruction
+from clustering_statistics import tools
+from clustering_statistics.tools import fill_fiducial_options, _merge_options, Catalog, setup_logging
+from clustering_statistics.correlation2_tools import compute_angular_upweights, compute_particle2_correlation
+from clustering_statistics.spectrum2_tools import compute_mesh2_spectrum, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum
+from clustering_statistics.spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum
+from clustering_statistics.recon_tools import compute_reconstruction
 
 
 logger = logging.getLogger('summary-statistics')

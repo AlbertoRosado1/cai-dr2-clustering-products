@@ -59,18 +59,53 @@ def join_tracers(tracers):
 
 def get_simple_tracer(tracer):
     """Given input tracer, return simple tracer name; e.g. 'ELG_LOPnotqso' would result in 'ELG'."""
-    if 'BGS' in tracer:
-        return 'BGS'
-    elif 'LRG+ELG' in tracer:
-        return 'LRG+ELG'
-    elif 'LRG' in tracer:
-        return 'LRG'
-    elif 'ELG' in tracer:
-        return 'ELG'
-    elif 'QSO' in tracer:
-        return 'QSO'
-    else:
+
+    def _get_simple_tracer(tracer):
+        if 'BGS' in tracer:
+            return 'BGS'
+        elif 'LRG+ELG' in tracer:
+            return 'LRG+ELG'
+        elif 'LRG' in tracer:
+            return 'LRG'
+        elif 'ELG' in tracer:
+            return 'ELG'
+        elif 'QSO' in tracer:
+            return 'QSO'
+        else:
+            raise NotImplementedError(f'tracer {tracer} is unknown')
+    if isinstance(tracer, str):
+        return _get_simple_tracer(tracer)
+    else:  # tuple/list of tracers
+        return type(tracer)(map(_get_simple_tracer, tracer))
+
+
+def get_full_tracer(tracer, version=None):
+    """Given input tracer, return full tracer name; e.g. 'ELG' would result in 'ELG_LOPnotqso'."""
+
+    def _get_full_tracer(tracer):
+        if 'x' in tracer:
+            return 'x'.join(_get_full_tracer(t) for t in tracer.split('x'))
+        if '+' in tracer:
+            return '+'.join(_get_full_tracer(t) for t in tracer.split('+'))
+        if 'LRG' in tracer or 'QSO' in tracer:
+            return tracer
+        if tracer == 'BGS':
+            if 'dr1' in version:
+                return 'BGS_BRIGHT-21.5'
+            return 'BGS_BRIGHT-21.35'
+        if tracer == 'ELG':
+            if version is not None and 'data' in version or 'altmtl' in version:
+                return 'ELG_LOPnotqso'
+            elif version is not None and 'complete' in version:
+                return 'ELG_LOP'
+            else:
+                return 'ELG'
         raise NotImplementedError(f'tracer {tracer} is unknown')
+
+    if isinstance(tracer, str):
+        return _get_full_tracer(tracer)
+    else:  # tuple/list of tracers
+        return type(tracer)(map(_get_full_tracer, tracer))
 
 
 def get_simple_stats(stats):
@@ -81,6 +116,8 @@ def get_simple_stats(stats):
         return 'spectrum3'
     elif stats == 'particle2_correlation':
         return 'correlation2'
+    elif stats == 'particle2_correlation_recon':
+        return 'correlation2recon'
     else:
         raise NotImplementedError(f'stats {stats} is unknown')
 
@@ -386,10 +423,10 @@ def compute_fiducial_png_weights(ell, catalog, tracer='LRG', p=1.):
     if tracers[1] != tracers[0]:
         yield _get_weights(catalogs[::-1], tracers[::-1], ps[::-1])[::-1]
 
-        
+
 def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     """
-    Propose fiducial measurement parameters for given tracer and statistic kind.
+    Propose fiducial measurement options for given tracer and statistic kind.
 
     Parameters
     ----------
@@ -688,7 +725,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             else:
                 cat_dir = cat_dir / 'v1.5'
             ext = 'fits'
-        
+
         elif version == 'data-dr2-v2':
             cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
             if kind == 'parent_randoms':
@@ -707,7 +744,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
             if kind == 'full_randoms':
                 return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in range(nran)]
-        
+
         elif version == 'holi-v1-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'fits' if 'full' in kind else 'h5'
@@ -722,7 +759,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             ext = 'fits' if 'full' in kind else 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
- 
+
         elif version == 'glam-uchuu-v1-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/GLAM-Uchuu_v1'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -740,7 +777,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return cat_dir / f'{tracer}_complete_clustering.dat.{ext}'
             if kind == 'randoms':
                 return [cat_dir / f'{tracer}_complete_{iran:d}_clustering.ran.{ext}' for iran in range(nran)]
-        
+
         elif version == 'abacus-2ndgen-altmtl':
             if 'BGS' in tracer:
                 base_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummitBGS_v2'
@@ -750,7 +787,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return base_dir / f'forFA{imock:d}.fits'
             cat_dir = base_dir / f'altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
             ext = 'fits'
-        
+
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
                 # Do not exist anymore?
@@ -812,14 +849,14 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', kin
         Tracer name.
     region : str
         Region name.
-    zrange : tuple, optional
+    zrange : tuple
         Redshift range.
     auw : bool, optional
         Whether to include angular upweighting.
     cut : bool, optional
         Whether to include theta cut.
     weight : str
-        Weight type. Options are 'default_FKP', 'defaut_FKP_bitwise', etc.
+        Weight type. Options are 'default-FKP', 'defaut-FKP-bitwise', etc.
     imock : int, str, optional
         Mock index (for mock catalogs). If '*', return all existing mock filenames.
     extra : str, optional
@@ -1282,9 +1319,9 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 catalog = complete_data
             else:
                 catalog = _read_catalog(fn, mpicomm=MPI.COMM_SELF)
-            if expand is not None: 
+            if expand is not None:
                 catalog = expand(catalog, ifn)
-            
+
             if reshuffle is not None:
                 if mpicomm.rank == 0:
                     t0 = time.time()
@@ -1292,7 +1329,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 catalog = reshuffle(catalog, 100 * imock + ifn)
                 if mpicomm.rank == 0:
                     logger.info(f'Reshuffling randoms completed in {time.time() - t0:2.1f} s')
-            
+
             columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_COMP', 'WEIGHT_FKP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'BITWEIGHTS', 'FRAC_TLOBS_TILES', 'NTILE', 'NX', 'TARGETID']
             if 'wsys' in weight_type and not 'noimsys' in weight_type:
                 columns.append(f"WEIGHT_{weight_type.split('wsys-')[-1].upper()}")
@@ -1315,7 +1352,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
 
         if 'default' in weight_type:
             individual_weight = catalog['WEIGHT'].copy()
-        else: 
+        else:
             if i == 0: logger.info('Not using WEIGHT column as individual weight')
             individual_weight = np.ones(len(catalog), dtype='f8')
         bitwise_weights = None
@@ -1347,7 +1384,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             new_wsys = weight_type.split('wsys-')[-1]
             if i == 0 and mpicomm.rank == 0:
                 logger.info(f'Use a different wsys weight: WEIGHT_{new_wsys.upper()}')
-            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog[f'WEIGHT_SYS'] 
+            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog[f'WEIGHT_SYS']
 
         if not return_all_columns:
             catalog = catalog[[column for column in ['RA', 'DEC', 'Z', 'NX', 'TARGETID'] if column in catalog]]
@@ -1358,7 +1395,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 catalog[column] = catalog[column].astype('f8')
         if bitwise_weights is not None:
             catalog['BITWEIGHT'] = bitwise_weights
-        
+
         catalog = get_positions_from_rdz(catalog)
         rdzw.append(catalog)
 
