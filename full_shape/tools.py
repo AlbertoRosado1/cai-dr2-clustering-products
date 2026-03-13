@@ -766,6 +766,8 @@ def _get_level(level: int | dict=None):
 def _config_hash(config, length=8):
     """Return a short SHA-256 hash of a canonicalized config dict."""
     def _canonical(obj):
+        if isinstance(obj, Path):
+            return str(obj)
         if isinstance(obj, dict):
             return sorted((_canonical(k), _canonical(v)) for k, v in obj.items())
         if isinstance(obj, (list, tuple)):
