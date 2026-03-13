@@ -198,7 +198,7 @@ def get_theory(stat: str, theory: dict, z: float, cosmo, fiducial):
         if theory_options['model'] == 'reptvelocileptors':
             theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, **theory_options.get('options', {}))
         elif theory_options['model'] in ['folpsD', 'folpsEFT']:
-            kw = {name: theory_options[name] for name in ['damping', 'prior_basis', 'b3_coev']}
+            kw = {name: theory_options[name] for name in ['damping', 'prior_basis', 'b3_coev', 'A_full']}
             theory = FOLPSv2TracerPowerSpectrumMultipoles(template=template, **kw, **theory_options.get('options', {}))
             sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
             params = _get_default_theory_nuisance_priors(theory_options['model'], stat, prior_basis=kw['prior_basis'], b3_coev=kw['b3_coev'], sigma8_fid=sigma8_fid)
@@ -601,8 +601,8 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
     propose_stat = {'mesh2_spectrum': {'select': {0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]}},
                       'mesh3_spectrum': {'select': {(0, 0, 0): [0.02, 0.12, 0.005], (2, 0, 2): [0.02, 0.08, 0.005]},
                                          'basis': 'sugiyama-diagonal'}}
-    propose_theory = {'mesh2_spectrum': {'b3_coev': True},
-                      'mesh3_spectrum': {}}
+    propose_theory = {'mesh2_spectrum': {'b3_coev': True, 'A_full': False},
+                      'mesh3_spectrum': {'A_full': False}}
     for _stat in propose_stat:
         if _stat in stat:
             propose_fiducial['stat'].update(propose_stat[_stat])
