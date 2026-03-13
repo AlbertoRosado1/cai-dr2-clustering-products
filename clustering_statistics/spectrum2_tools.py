@@ -546,6 +546,7 @@ def compute_window_mesh2_spectrum_fm(
     dict[str, dict[str, list[lsstypes.WindowMatrix]]]
         Dictionary, per effect included (geometry, RIC, RIC+AMR) and per region, of lists of window matrices (one per realization).
     """
+    assert len(seeds) == n_realizations if seeds is not None else True, "If seeds are provided, their number must match n_realizations."
     # Notes to self:
     # * RIC not optional
     # * n_randoms is effectively set by the length of get_data_randoms
