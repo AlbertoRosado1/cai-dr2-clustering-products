@@ -449,10 +449,12 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         'LRG': {'nran': 10, 'recon': {'bias': 2.0, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
         'ELG': {'nran': 15, 'recon': {'bias': 1.2, 'smoothing_radius': 15., 'zrange': (0.8, 1.6)}},
         'QSO': {'nran': 4, 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}
+        #'QSO': {'nran': 8, 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}
     }
-    tracers = [get_simple_tracer(tt) for tt in _make_tuple(tracer)] 
-    tracer = join_tracers(tracers)
-    propose_fiducial = base | propose_fiducial[tracer]
+    tracers = _make_tuple(tracer)
+    simple_tracers = [get_simple_tracer(tracer) for tracer in tracers] 
+    simple_tracer = join_tracers(simple_tracers)
+    propose_fiducial = base | propose_fiducial[simple_tracers[0]]
     if 'png' in analysis:
         propose_weight = 'default-fkp-oqe' # use OQE weights by default
         propose_zranges = {'BGS': [(0.1, 0.4)], 'LRG': [(0.4, 1.1), (0.8, 1.1)], 'ELG': [(0.8, 1.6), (0.8, 1.1)], 'QSO': [(0.8, 3.5), (0.8, 1.1), (0.8, 1.6)], 
@@ -461,35 +463,38 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_meshsizes = {'BGS': 700, 'LRG': 700, 'ELG': 700, 'LRG+ELG': 700, 'QSO': 700}
         propose_cellsize = 20.
         propose_p = {'BGS': 1, 'LRG': 1, 'ELG': 1, 'QSO': 1.4}
-    else:
+    else:  # full_shape
         propose_weight = 'default-FKP'
         propose_zranges = {'BGS': [(0.1, 0.4)], 'LRG': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
                            'ELG': [(0.8, 1.1), (1.1, 1.6)], 'LRG+ELG': [(0.8, 1.1)], 'QSO': [(0.8, 2.1)],
-                           'LRGxELG': [(0.8, 1.1)], 'LRGxQSO': [(0.8, 1.1)], 'ELGxQSO': [(0.8, 1.6)]}
+                           'LRGxELG': [(0.8, 1.1)], 'LRGxQSO': [(0.8, 1.1)], 'ELGxQSO': [(0.8, 1.1), (1.1, 1.6)]}
         propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'LRG+ELG': 1e4, 'QSO': 6e3}
         propose_meshsizes = {'BGS': 750, 'LRG': 750, 'ELG': 960, 'LRG+ELG': 750, 'QSO': 1152}
         propose_cellsize = 7.5
-    propose_fiducial.update(zranges=propose_zranges[tracer])
-    propose_fiducial['catalog'].update(weight=propose_weight, nran=propose_fiducial['nran'], zranges=propose_zranges[tracer], FKP_P0=propose_FKP_P0[tracer])
+    propose_fiducial.update(zranges=propose_zranges[simple_tracer])
+    propose_fiducial['catalog'].update(weight=propose_weight, nran=propose_fiducial['nran'], zranges=propose_zranges[simple_tracer], FKP_P0=[propose_FKP_P0[tracer] for tracer in simple_tracers][0])
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
-        propose_fiducial[stat]['mattrs'] = {'meshsize': propose_meshsizes[tracer], 'cellsize': propose_cellsize}
+        propose_fiducial[stat]['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': propose_cellsize}
     if 'png' in analysis:
-        propose_fiducial['mesh2_spectrum'].update(ells=(0, 2), optimal_weights=functools.partial(compute_fiducial_png_weights, tracer=tracers, p=[propose_p[tt] for tt in tracers]))
+        propose_fiducial['mesh2_spectrum'].update(ells=(0, 2), optimal_weights=functools.partial(compute_fiducial_png_weights, tracer=tracers, p=[propose_p[tt] for tt in simple_tracers]))
     else:
         propose_fiducial['mesh2_spectrum'].update(ells=(0, 2, 4))
         propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal', selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
     if 'protected' in analysis:
         propose_fiducial['mesh2_spectrum'].update(ells=(0,), edges={'min': 0.02, 'step': 0.001})
         propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0)])
+    primes, divisors = (2, 3, 5), (2,)
     for stat in ['recon']:
         recon_cellsize = propose_fiducial[stat]['smoothing_radius'] / 3.
-        primes, divisors = (2, 3, 5), (2,)
         propose_fiducial[stat]['mattrs'] = {'boxpad': 1.2, 'cellsize': recon_cellsize, 'primes': primes, 'divisors': divisors}
     for name in list(propose_fiducial):
         propose_fiducial[f'recon_{name}'] = propose_fiducial[name]  # same for post-recon measurements
     for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum']:
         propose_fiducial[name] = {}
-    propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[tracer]
+    propose_meshsizes = {'BGS': 864, 'LRG': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
+    # very stable with nran, cellsize and boxsize
+    propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10., 'primes': primes, 'divisors': divisors}
+    propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
     return propose_fiducial[kind]
 
@@ -639,7 +644,8 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
             spectrum_options = options[stat.replace('covariance_', '')]
             spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            options[stat] = fiducial_options | spectrum_options | options.get(stat, {})
+            # spectrum_options | fiducial_options because we override mattrs if given
+            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
         for stat in ['rotation_mesh2_spectrum']:
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | options.get(stat, {})

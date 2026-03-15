@@ -360,19 +360,23 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
             list_edges = []
             for scale in [1, 4]:
                 mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
+                if jax.process_index() == 0:
+                    logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
                 all_mesh = []
                 for iran, randoms in enumerate(split_particles(all_randoms + [None] * (2 - len(all_randoms)), seed=seed, fields=fields)):
-                    randoms = randoms.exchange(backend='mpi')
+                    randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
                     alpha = pole.attrs['wsum_data'][isum][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
                     all_mesh.append(alpha * randoms.paint(**kw_paint, out='real'))
-                edges = np.arange(0., mattrs2.boxsize.min() / 2., mattrs2.cellsize.min())
+                distmax, cellsize = mattrs2.boxsize.min() / 4., mattrs2.cellsize.min()
+                edges = np.arange(0., distmax + cellsize, cellsize)
                 list_edges.append(edges)
                 sbin = BinMesh2CorrelationPoles(mattrs2, edges=edges, **kw_window, basis='bessel')
                 correlation = jitted_compute_mesh2_correlation(all_mesh, bin=sbin, los=los).clone(norm=[np.mean(norm)] * len(sbin.ells))
                 del all_mesh
+                #if jax.process_index() == 0: correlation.write(f'_tests/window_correlation2_{scale:.0f}.h5')
                 correlation = interpolate_window_function(correlation, coords=coords, order=3)
                 correlations.append(correlation)
-            masks = [coords < edges[-1] for edges in list_edges[:-1]]
+            masks = [coords < edges[-3] for edges in list_edges[:-1]]
             masks.append((coords < np.inf))
             weights = []
             for mask in masks:
@@ -570,21 +574,23 @@ def compute_covariance_mesh2_spectrum(*get_data_randoms, theory=None, fields=Non
     fftlog = True
     if fields is None:
         fields = list(range(1, 1 + len(get_data_randoms)))
+
     results = {}
     with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
         all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
         all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
         mattrs = all_fkp[0].attrs
         kw = dict(edges={'step': mattrs.cellsize.min()}, basis='bessel') if fftlog else dict(edges={})
-        kw.update(los='local', fields=fields)
+        kw.update(los='local', fields=fields, split=[(42, fkp.randoms.__dict__['IDS']) for fkp in all_fkp])
         kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
         windows = compute_fkp2_covariance_window(all_fkp, **kw, **kw_paint)
+        #if jax.process_index() == 0: windows.write(f'_tests/window_correlation.h5')
         if fftlog:
+            # Very robust to this choice
             coords = np.logspace(-2, 8, 8 * 1024)
             windows = windows.map(lambda window: interpolate_window_function(window, coords=coords), level=1)
         results['window_covariance_mesh2_correlation'] = windows
 
-    # delta is the maximum abs(k1 - k2) where the covariance will be computed (to speed up calculation)
     covariance = compute_spectrum2_covariance(windows, theory, flags=['smooth'] + (['fftlog'] if fftlog else []))
     # Update label names
     fields = covariance.observable.fields
