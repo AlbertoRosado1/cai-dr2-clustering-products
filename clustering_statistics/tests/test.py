@@ -267,6 +267,42 @@ def test_norm():
                 assert np.allclose(spectrum.get((0, 0, 0)).values('norm').mean(), 1.28543918)
 
 
+def test_window(tracer='QSO'):
+    stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
+    fiducial = tools.propose_fiducial(kind="window_mesh2_spectrum_fm", tracer=tracer, analysis="png_local")
+    catalog_options = {
+        "version": "holi-v1-altmtl",
+        "tracer": tracer,
+        "zrange": tools.propose_fiducial("zranges", tracer, analysis="png_local"),
+        "region": "ALL",
+        "imock": 451,
+        "nran": 1,
+        "return_all_columns": True,
+        "weight": "default-OQE",
+    }
+    mattrs = {"cellsize": 40.0}
+    extra = f"mytest_tracer_{tracer}"
+
+    for region in ['NGC', 'SGC'][:0]:
+        compute_stats_from_options(["mesh2_spectrum", "window_mesh2_spectrum"],
+            catalog=catalog_options | dict(region=region),
+            mattrs=mattrs,
+            get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
+            mesh2_spectrum={"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),},
+        )
+
+    templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
+    compute_stats_from_options(["window_mesh2_spectrum_fm"],
+        catalog=catalog_options,
+        mattrs=mattrs,
+        get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
+        mesh2_spectrum={"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),},
+        window_mesh2_spectrum_fm=fiducial | {"theory": None, "n_realizations": 1, "seeds": [42],
+        "optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),
+        },
+    )
+
+
 if __name__ == '__main__':
 
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
@@ -278,8 +314,7 @@ if __name__ == '__main__':
     setup_logging()
     jax.distributed.initialize()
 
-    test_complete()
-    exit()
+    test_window()
     #test_blinding()
     #test_covariance()
     #test_rotation()
