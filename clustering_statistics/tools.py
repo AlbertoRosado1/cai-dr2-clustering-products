@@ -379,27 +379,32 @@ def get_interpolator_1d(x: jax.Array, y: jax.Array, order: int=1):
     return interp
 
 
+def bias(z, tracer='QSO', return_params=False):
+    """Bias model for the different DESI tracer (measured from DR2 data (loa/v2))."""
+    params = {'BGS_BRIGHT-21.35': (0.60646037, 0.52389492),
+                'LRG': (0.23553567, 1.3458994),
+                'ELG_LOPnotqso': (0.15066781, 0.59463735),
+                'ELGnotqso': (0.15487521, 0.59464828),
+                'ELG': (0.15487521, 0.59464828),
+                'QSO': (0.25207547, 0.71020952)}
+    params.update({f'{key}_zcmb': value for key, value in params.items()})
+
+    if tracer in params:
+        alpha, beta = params[tracer]
+    else:
+        raise ValueError(f'Bias for {tracer} is not ready!')
+    
+    if return_params:
+        return alpha, beta
+    else:
+        return alpha * (1 + z)**2 + beta
+
+
 def compute_fiducial_png_weights(ell, catalog, tracer='LRG', p=1.):
     """Return total optimal weights for local PNG analysis."""
     from jax import numpy as jnp
     from cosmoprimo.fiducial import DESI
     from interpax import Interpolator1D
-
-    def bias(z, tracer='QSO'):
-        """Bias model for the different DESI tracer (measured from DR2 data (loa/v2))."""
-        params = {'BGS_BRIGHT-21.35': (0.60646037, 0.52389492),
-                  'LRG': (0.23553567, 1.3458994),
-                  'ELG_LOPnotqso': (0.15066781, 0.59463735),
-                  'ELGnotqso': (0.15487521, 0.59464828),
-                  'ELG': (0.15487521, 0.59464828),
-                  'QSO': (0.25207547, 0.71020952)}
-        params.update({f'{key}_zcmb': value for key, value in params.items()})
-
-        if tracer in params:
-            alpha, beta = params[tracer]
-        else:
-            raise ValueError(f'Bias for {tracer} is not ready!')
-        return alpha * (1 + z)**2 + beta
 
     cosmo = DESI()
     zstep = 0.001
