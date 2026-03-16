@@ -416,13 +416,17 @@ def compute_fiducial_png_weights(ell, catalog, tracer='LRG', p=1.):
     catalogs = _make_tuple(catalog, n=2)
     ps = _make_tuple(p, n=2)
 
-    logger.info(f'PNG OQE weights -- tracers: {tracers}, p: {ps}')
+    if jax.process_index() == 0:
+        logger.info(f'PNG OQE weights -- tracers: {tracers}, p: {ps}')
 
     def _get_weights(catalogs, tracers, ps):
-        wtilde = bias(catalogs[0]['Z'], tracer=tracers[0]) - ps[0]
-        w0 = growth_factor(catalogs[1]['Z']) * (bias(catalogs[1]['Z'], tracer=tracers[1]) + growth_rate(catalogs[1]['Z']) / 3)
-        w2 = 2 / 3 * growth_factor(catalogs[1]['Z']) * growth_rate(catalogs[1]['Z'])
-        return catalogs[0]['INDWEIGHT'] * wtilde, catalogs[1]['INDWEIGHT'] * {0: w0, 2: w2}[ell]
+        if ell not in [0, 2]:
+            return catalogs[0]["INDWEIGHT"], catalogs[1]["INDWEIGHT"]
+        else:
+            wtilde = bias(catalogs[0]['Z'], tracer=tracers[0]) - ps[0]
+            w0 = growth_factor(catalogs[1]['Z']) * (bias(catalogs[1]['Z'], tracer=tracers[1]) + growth_rate(catalogs[1]['Z']) / 3)
+            w2 = 2 / 3 * growth_factor(catalogs[1]['Z']) * growth_rate(catalogs[1]['Z'])
+            return catalogs[0]['INDWEIGHT'] * wtilde, catalogs[1]['INDWEIGHT'] * {0: w0, 2: w2}[ell]
 
     yield _get_weights(catalogs, tracers, ps)
     if tracers[1] != tracers[0]:
@@ -447,7 +451,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     params : dict
         Dictionary of proposed fiducial parameters for the specified statistic kind and tracer.
     """
-    base = {'catalog': {}, 'particle2_correlation': {}, 'mesh2_spectrum': {}, 'mesh3_spectrum': {}}
+    base = {"catalog": {}, "particle2_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
     propose_fiducial = {
         'BGS': {'nran': 3, 'recon': {'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
         'LRG+ELG': {'nran': 13, 'recon': {'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
@@ -462,6 +466,11 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     tracer = join_tracers(tracers)
     propose_fiducial = base | propose_fiducial[tracer]
     
+    tracers = _make_tuple(tracer)
+    simple_tracers = [get_simple_tracer(tracer) for tracer in tracers] 
+    simple_tracer = join_tracers(simple_tracers)
+    propose_fiducial = base | propose_fiducial[simple_tracers[0]]
+
     if 'png' in analysis:
         propose_weight = 'default-fkp-oqe' # use OQE weights by default
         propose_zranges = {'BGS': [(0.1, 0.4)], 'LRG': [(0.4, 1.1), (0.8, 1.1)], 'ELG': [(0.8, 1.6), (0.8, 1.1)], 'QSO': [(0.8, 3.5), (0.8, 1.1), (0.8, 1.6)], 
@@ -470,31 +479,32 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_meshsizes = {'BGS': 700, 'LRG': 700, 'ELG': 700, 'LRG+ELG': 700, 'QSO': 700}
         propose_cellsize = 20.
         propose_p = {'BGS': 1, 'LRG': 1, 'ELG': 1, 'QSO': 1.4}
-    else:
+    else:  # full_shape
         propose_weight = 'default-FKP'
         propose_zranges = {'BGS': [(0.1, 0.4)], 'LRG': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
                            'ELG': [(0.8, 1.1), (1.1, 1.6)], 'LRG+ELG': [(0.8, 1.1)], 'QSO': [(0.8, 2.1)],
-                           'LRGxELG': [(0.8, 1.1)], 'LRGxQSO': [(0.8, 1.1)], 'ELGxQSO': [(0.8, 1.6)]}
+                           'LRGxELG': [(0.8, 1.1)], 'LRGxQSO': [(0.8, 1.1)], 'ELGxQSO': [(0.8, 1.1), (1.1, 1.6)]}
         propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'LRG+ELG': 1e4, 'QSO': 6e3}
         propose_meshsizes = {'BGS': 750, 'LRG': 750, 'ELG': 960, 'LRG+ELG': 750, 'QSO': 1152}
         propose_cellsize = 7.5
-    propose_fiducial.update(zranges=propose_zranges[tracer])
-    propose_fiducial['catalog'].update(weight=propose_weight, nran=propose_fiducial['nran'], zranges=propose_zranges[tracer], FKP_P0=[propose_FKP_P0[tt] for tt in tracers])
-    
+
+    propose_fiducial.update(zranges=propose_zranges[simple_tracer])
+    propose_fiducial['catalog'].update(weight=propose_weight, nran=propose_fiducial['nran'], zranges=propose_zranges[simple_tracer], FKP_P0=[propose_FKP_P0[tracer] for tracer in simple_tracers][0])
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
-        propose_fiducial[stat]['mattrs'] = {'meshsize': np.max([propose_meshsizes[tt] for tt in tracers]), 'cellsize': propose_cellsize}
+        propose_fiducial[stat]['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': propose_cellsize}
+
     if 'png' in analysis:
-        propose_fiducial['mesh2_spectrum'].update(ells=(0, 2), optimal_weights=functools.partial(compute_fiducial_png_weights, tracer=tracers, p=[propose_p[tt] for tt in tracers]))
+        propose_fiducial['mesh2_spectrum'].update(norm={'cellsize': 10.}, ells=(0, 2), optimal_weights=functools.partial(compute_fiducial_png_weights, tracer=tracers, p=[propose_p[tt] for tt in simple_tracers]))
     else:
-        propose_fiducial['mesh2_spectrum'].update(ells=(0, 2, 4))
-        propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal', selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
+        propose_fiducial['mesh2_spectrum'].update(norm={'cellsize': 10.}, ells=(0, 2, 4))
+        propose_fiducial['mesh3_spectrum'].update(norm={'cellsize': 10.}, ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal', selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
     if 'protected' in analysis:
         propose_fiducial['mesh2_spectrum'].update(ells=(0,), edges={'min': 0.02, 'step': 0.001})
         propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0)])
-    
+
+    primes, divisors = (2, 3, 5), (2,)
     for stat in ['recon']:
         recon_cellsize = propose_fiducial[stat]['smoothing_radius'] / 3.
-        primes, divisors = (2, 3, 5), (2,)
         propose_fiducial[stat]['mattrs'] = {'boxpad': 1.2, 'cellsize': recon_cellsize, 'primes': primes, 'divisors': divisors}
     
     for name in list(propose_fiducial):
@@ -502,9 +512,55 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     
     for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum']:
         propose_fiducial[name] = {}
-    propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0, 'LRGxELG':0, 'LRGxQSO':0, 'ELGxQSO':0}[tracer]
+
+    propose_meshsizes = {'BGS': 864, 'LRG': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
+    # very stable with nran, cellsize and boxsize
+    propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10., 'primes': primes, 'divisors': divisors}
+    propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
-    
+    if "window_mesh2_spectrum_fm" in kind:
+        # FIXME: for cross-correlations
+        if simple_tracers[0] not in ["BGS", "LRG", "ELG", "QSO"]:
+            raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
+        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}[simple_tracers[0]]
+        propose_regression_zranges = {
+            "BGS": [(0.1, 0.4)],
+            "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
+            "ELG": [(0.8, 1.1), (1.1, 1.6)],
+            "QSO": [(0.8, 1.3), (1.3, 2.1), (2.1, 3.5)],
+        }[simple_tracers[0]]
+        propose_templates = {
+            "BGS": ['STARDENS', 'GALDEPTH_R', 'HI', 'EBV_DIFF_GR', 'EBV_DIFF_RZ'],
+            "LRG": ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'HI', 'PSFDEPTH_W1', 'EBV_DIFF_GR', 'EBV_DIFF_RZ'],
+            "ELG": ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'EBV_DIFF_GR', 'EBV_DIFF_RZ', 'HI'],
+            "QSO": ['PSFDEPTH_W1', 'PSFDEPTH_W2', 'STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'PSFDEPTH_G', 'PSFDEPTH_R', 'PSFDEPTH_Z', 'EBV_DIFF_GR', 'EBV_DIFF_RZ', 'HI'],
+            }[simple_tracers[0]]  # fmt: skip
+        templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
+        translate_template_tracer = {'BGS': 'BGS_BRIGHT', 'ELG_LOPnotqso': 'ELG_LOPnotqso', 'ELG': 'ELG', 'LRG': 'LRG', 'QSO': 'QSO'}
+        for tt, template_tracer in translate_template_tracer.items():
+            if tracers[0] in tt:
+                break
+            else:
+                template_tracer = None
+        if template_tracer is None:
+            raise ValueError(f'template tracer corresponding to {tracers[0]} not found.')
+        propose_fiducial["window_mesh2_spectrum_fm"].update(
+            data_to_randoms_ratio=0.5,
+            catalog_split_seed=975,
+            ric_nbins=1000,
+            ric_regions=propose_photoregions,
+            geo=True,
+            amr=True,
+            regression_maps=propose_templates,
+            templates_paths_kwargs={f'templates_path_{region}': templates_dir / f'{template_tracer}_mapprops_healpix_nested_nside256_{region}.fits' for region in ['N', 'S']},
+            amr_regions_zranges=list(itertools.product(propose_photoregions, propose_regression_zranges)),
+            spectrum_regions=["NGC", "SGC"],
+            unitary_amplitude=True,
+            n_realizations=10,
+            seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
+            batch_size=4,
+        )
+
     return propose_fiducial[kind]
 
 
@@ -644,16 +700,18 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
                             if options[stat].get('optimal_weights', None) is not None:
                                 warnings.warn('Removing optimal_weights from mesh2_spectrum as OQE not in weights')
                             options[stat].pop('optimal_weights', None)
-        for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum']:
-            spectrum_options = options[stat.replace('window_', '')]
+        for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'window_mesh2_spectrum_fm']:
+            spectrum_options = options[stat.replace('window_', '').replace('_fm', '')]
             spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['selection_weights', 'optimal_weights', 'basis']}
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | spectrum_options | options.get(stat, {})
+        options['window_mesh2_spectrum'].setdefault('zeff', options['mesh2_spectrum'].get('norm', {}))
         for stat in ['covariance_mesh2_spectrum']:
             spectrum_options = options[stat.replace('covariance_', '')]
             spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            options[stat] = fiducial_options | spectrum_options | options.get(stat, {})
+            # spectrum_options | fiducial_options because we override mattrs if given
+            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
         for stat in ['rotation_mesh2_spectrum']:
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | options.get(stat, {})
@@ -1890,3 +1948,88 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
     data['WEIGHT_FKP'] = 1 / (1 + P0 * data['NX'])
     data['WEIGHT'] = weight_ntile[data['NTILE']]  # just completeness-weighting
     return data
+
+
+def add_photometric_template_values(
+    catalog: Catalog,
+    template_names: list[str],
+    templates_path_N: str,
+    templates_path_S: str,
+    ebv_path: str | None = None,
+    nside: int = 256,
+    nest: bool = True,
+) -> Catalog:
+    """
+    Add photometric templates values to the input catalog and return a new catalog with the added columns.
+
+    Parameters
+    ----------
+    catalog : Catalog
+        Input catalog with RA and DEC columns.
+    template_names : list[str]
+        Names of the templates to add as columns in the catalog. Must be present in the templates files.
+    templates_path_N : str
+        Path to the Northern region templates file.
+    templates_path_S : str
+        Path to the Southern region templates file.
+    ebv_path : str | None, optional
+        Path to the EBV map file. If None, defaults to a predefined path.
+    nside : int, optional
+        Nside used by the healpix templates files, by default 256
+    nest : bool, optional
+        Whether the templates files used nested scheme, by default True.
+
+    Returns
+    -------
+    Catalog
+        A **new** catalog with the added template columns. The original catalog is not modified.
+
+    Notes
+    -----
+    The templates files are loaded using :fun:`astropy.table.Table.read`. Tested with FITS files.
+    """
+    import healpy as hp
+
+    ebv_path = ebv_path or "/global/cfs/cdirs/desicollab/users/rongpu/data/ebv/desi_stars_y3/v0.1/final_maps/lss/desi_ebv_lss_256.fits"
+
+    def load_templates(path, region):
+        import LSS.common_tools as common
+        from astropy.table import Table
+
+        need_maps = template_names or []
+        sysmaps = Table.read(path)
+
+        debv = common.get_debv(ebv_path)
+        cols = list(sysmaps.dtype.names)  # names of templates
+
+        for col in cols:
+            if "DEPTH" in col:
+                bnd = col.split("_")[-1]
+                sysmaps[col] *= 10 ** (-0.4 * common.ext_coeff[bnd] * sysmaps["EBV"])
+        for ec in ["GR", "RZ"]:
+            sysmaps["EBV_DIFF_" + ec] = debv["EBV_DIFF_" + ec]
+        if "EBV_DIFF_MPF" in need_maps:
+            sysmaps["EBV_DIFF_MPF"] = sysmaps["EBV"] - sysmaps["EBV_MPF_Mean_FW15"]
+
+        if ("SKY_RES_G" in need_maps) or ("SKY_RES_R" in need_maps) or ("SKY_RES_Z" in need_maps):
+            sky_g, sky_r, sky_z = common.get_skyres()
+            if "SKY_RES_G" in need_maps:
+                sysmaps["SKY_RES_G"] = sky_g[region]
+            if "SKY_RES_R" in need_maps:
+                sysmaps["SKY_RES_R"] = sky_r[region]
+            if "SKY_RES_Z" in need_maps:
+                sysmaps["SKY_RES_Z"] = sky_z[region]
+        # Drop unused, reorder, cast to float64 if needed and return as regular numpy array
+        return np.lib.recfunctions.structured_to_unstructured(sysmaps[need_maps].as_array()).astype(float)
+
+    templates_north = load_templates(templates_path_N, "N")
+    templates_south = load_templates(templates_path_S, "S")
+    ipix = hp.ang2pix(nside=nside, theta=catalog["RA"], phi=catalog["DEC"], nest=nest, lonlat=True)
+    region_north = select_region(ra=catalog["RA"], dec=catalog["DEC"], region="N")
+    region_south = select_region(ra=catalog["RA"], dec=catalog["DEC"], region="S")
+    assert (region_north | region_south).all(), "Some objects are neither in the North nor in the South region."
+    template_values = np.where(region_north[:, None], templates_north[ipix], templates_south[ipix])
+    catalog = catalog.deepcopy()
+    for i, name in enumerate(template_names):
+        catalog[name] = template_values[:, i]
+    return catalog

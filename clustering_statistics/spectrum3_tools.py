@@ -100,7 +100,7 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
 
 def _get_window_edges(mattrs, scales: tuple=(1, 4)):
     """Return window edges."""
-    distmax, cellmin = np.sqrt(np.sum(mattrs.boxsize**2)), mattrs.cellsize.min()
+    distmax, cellmin = mattrs.boxsize.min() / 4., mattrs.cellsize.min()
     nsizes, cellsizes = [6] * 5 + [None], [cellmin * 2**i for i in range(6)]
     edges = []
     for scale in scales:
@@ -109,14 +109,14 @@ def _get_window_edges(mattrs, scales: tuple=(1, 4)):
         for nsize, cellsize in zip(nsizes, cellsizes):
             cellsize = cellsize * scale
             if nsize is None:
-                tmp = np.arange(start, distmax * scale / scales[-1] + cellsize, cellsize)
+                tmp = np.arange(start, distmax * scale / scales[0] + cellsize, cellsize)
             else:
                 tmp = start + np.arange(nsize) * cellsize
             if tmp.size:
                 start = tmp[-1] + cellsize
                 edges_scale.append(tmp)
         edges_scale = np.concatenate(edges_scale, axis=0)
-        edges_scale = edges_scale[edges_scale < distmax + cellsize]
+        edges_scale = edges_scale[edges_scale < distmax * scale / scales[0] + cellsize]
         edges.append(edges_scale)
     return edges
 
@@ -195,14 +195,14 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=Non
             # multigrid calculation
             kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
             for scale, edges in zip(list_scales, list_edges):
-                if jax.process_index() == 0:
-                    logger.info(f'Processing scale x{scale:.0f}')
                 mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
+                if jax.process_index() == 0:
+                    logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
                 sbin = BinMesh3CorrelationPoles(mattrs2, edges=edges, **kw, buffer_size=buffer_size)  # kcut=(0., mattrs2.knyq.min()))
                 meshes = []
                 for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
                                                                seed=seed, fields=fields)):
-                    randoms = randoms.exchange(backend='mpi')
+                    randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
                     alpha = pole.attrs['wsum_data'][0][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
                     meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
                 t0 = time.time()
@@ -212,10 +212,13 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=Non
                 if jax.process_index() == 0:
                     logger.info(f"Computed windows {kw['ells']}, scale {scale}, in {time.time() - t0:.2f} s.")
                 correlation = interpolate_window_function(correlation.unravel(), coords=coords, order=3)
+                #if jax.process_index() == 0: correlation.write(f'_tests/window_correlation3_{scale:.0f}.h5')
                 correlations.append(correlation)
 
             coords = list(next(iter(correlations[0])).coords().values())
-            masks = [(coords[0] < edges[-1])[:, None] * (coords[1] < edges[-1])[None, :] for edges in list_edges[:-1]]
+            # -3 to make the connection smooth, independent of the edge
+            # for a cubic spline, 4 neighboring points are used
+            masks = [(coords[0] < edges[-3])[:, None] * (coords[1] < edges[-3])[None, :] for edges in list_edges[:-1]]
             masks.append((coords[0] < np.inf)[:, None] * (coords[1] < np.inf)[None, :])
             weights = []
             for mask in masks:

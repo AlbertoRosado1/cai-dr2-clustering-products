@@ -53,9 +53,9 @@ def run_stats(tracer='LRG', version='abacus-2ndgen-complete', complete=False, im
     setup_logging()
 
     cache = {}
-    zranges = tools.propose_fiducial('zranges', tracer)[-1:]
+    zranges = tools.propose_fiducial('zranges', tracer)
     for imock in imocks:
-        regions = ['NGC', 'SGC'][:1]
+        regions = ['NGC', 'SGC']
         for region in regions:
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, imock=imock), mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True}, window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
             if complete:
@@ -74,7 +74,7 @@ def run_stats(tracer='LRG', version='abacus-2ndgen-complete', complete=False, im
 def postprocess_stats(tracer='LRG', version='abacus-2ndgen-complete', complete=False, imocks=[0], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', postprocess=['combine_regions'], **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     zranges = tools.propose_fiducial('zranges', tracer)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=0), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'window_mesh3_spectrum'][-1:]}, mesh2_spectrum={'cut': True}, window_mesh2_spectrum={'cut': True})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=0), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'window_mesh3_spectrum'][2:]}, mesh2_spectrum={'cut': True}, window_mesh2_spectrum={'cut': True})
     if complete:
         get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra='complete')
     else:
@@ -87,22 +87,22 @@ if __name__ == '__main__':
     mode = 'interactive'
     #mode = 'slurm'
     stats, postprocess = [], []
-    stats = ['mesh2_spectrum'] # 'mesh3_spectrum']
+    #stats = ['mesh2_spectrum'] # 'mesh3_spectrum']
     #stats = ['mesh3_spectrum']
     #stats = ['window_mesh2_spectrum']
     #stats = ['covariance_mesh2_spectrum']
     #stats = ['window_mesh3_spectrum']
-    #postprocess = ['combine_regions']
+    postprocess = ['combine_regions']
     #postprocess = ['rotation_mesh2_spectrum']
     imocks = np.arange(3)
 
     stats_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe')
-    #version = 'abacus-2ndgen-complete'
-    version = 'abacus-2ndgen-altmtl'
+    version = 'abacus-2ndgen-complete'
+    #version = 'abacus-2ndgen-altmtl'
     complete = False
 
-    for tracer in ['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOP', 'QSO'][1:]:
-        if tracer == 'ELG_LOP' and 'altmtl' in version: tracer = 'ELG_LOPnotqso'
+    for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][1:]:
+        tracer = tools.get_full_tracer(tracer, version=version)
         if False:
             exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer, region='NGC', version=version), test_if_readable=False, imock=list(range(1001)))[:2]
             imocks = exists[1]['imock']
