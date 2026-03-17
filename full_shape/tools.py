@@ -23,6 +23,8 @@ import json
 import hashlib
 import logging
 import numbers
+import itertools
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -311,19 +313,22 @@ def combine_covariances(covariances, observable):
     olabels = observable.labels(level=1)
     nblocks = len(olabels)
     value = [[None for i in range(nblocks)] for i in range(nblocks)]
-    for ilabel1, ilabel2 in itertools.product(range(nbocks), repeat=2):
-        label = olabels[ilabel1] + olabels[ilabel2]
+    for ilabel1, ilabel2 in itertools.product(range(nblocks), repeat=2):
+        label1, label2 = (olabels[ilabel] for ilabel in [ilabel1, ilabel2])
         block = None
         for covariance in covariances:
-            if label in covariance.labels(level=1):
-                block = covariance.get(**label)
+            clabels = covariance.observable.labels(level=1)
+            csizes = list(covariance.observable.sizes(level=1))
+            cumsizes = np.cumsum([0] + csizes)
+            if label1 in clabels and label2 in clabels:
+                i1, i2 = clabels.index(label1), clabels.index(label2)
+                block = covariance.value()[cumsizes[i1]:cumsizes[i1 + 1], cumsizes[i2]:cumsizes[i2 + 1]]
                 break
-        if block is not None:
-            value[ilabel1, ilabel2] = block
-        else:
-            warnings.warn(f'block {label} not found, assuming it is 0')
-            shape = tuple(observable.get(**olabels[ilabel]).size for ilabel in [ilabel1, ilabel2])
-            value[ilabel1, ilabel2] = np.zeros(shape)
+        if block is None:
+            warnings.warn(f'block {label1}, {label2} not found, assuming it is 0')
+            shape = tuple(observable.get(**label).size for label in [label1, label2])
+            block = np.zeros(shape)
+        value[ilabel1][ilabel2] = block
     value = np.block(value)
     return types.CovarianceMatrix(observable=observable, value=value)
 
@@ -351,14 +356,15 @@ def _get_covariance_correction_factor(covariance: types.CovarianceMatrix,
         corrections = [corrections]
     corrections = [str(corr).lower() for corr in (corrections or [])]
 
-    nobs = int(covariance.attrs.get('nobs', 0))
-    nbins = int(covariance.value().shape[0])
     factor = 1.
-    metadata = {
-        'nobs': nobs,
-        'nbins': nbins,
-        'corrections': tuple(corrections),
-    }
+    nbins = int(covariance.value().shape[0])
+    nobs = covariance.attrs['nobs']
+    metadata = {'nbins': nbins, 'corrections': tuple(corrections)}
+    if nobs is None:  # analytic covariance matrix
+        return factor, metadata | dict(corrections=tuple())
+
+    nobs = int(nobs)
+    metadata.update(nobs=nobs)
 
     if 'hartlap' in corrections:
         hartlap = get_hartlap2007_factor(nobs, nbins)
@@ -522,6 +528,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         window = types.read(fn).at.observable.match(data.get(**labels))
         windows.append(window)
     window = pack_stats(windows, **joint_labels)
+    print(covariance_options)
     # Analytic covariances
     if covariance_options['source'] == 'jaxpower':
         # WARNING: not tested yet!
@@ -546,8 +553,11 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                 tracers = tracers[0]
             fn = get_stats_fn(kind=f'covariance_{stat}', **(file_kw | dict(tracer=tracers)))
             if fn.exists():
-                covariances.append(covariance.read(fn))
+                covariances.append(types.read(fn))
+        if not covariances:
+            raise ValueError('no covariances found')
         covariance = combine_covariances(covariances, data)
+        covariance.attrs['nobs'] = None
     elif covariance_options['source'] == 'mock':
         # Mock-based covariance
         all_fns = []
@@ -1062,7 +1072,10 @@ def str_from_likelihood_options(likelihood_options, level: int | dict=None):
         out_str.append(_str_from_observable_options(options, level=level))
     if level['covariance'] > 0:
         covariance = likelihood_options.get('covariance', {}) or {}
-        covariance_str = ['cov-' + covariance.get('version', 'none')]
+        covariance_str = []
+        covariance_str.append(covariance.get('source', 'none'))
+        covariance_str.append(covariance.get('version', 'none'))
+        covariance_str = ['cov-' + '-'.join(covariance_str)]
         if level['covariance'] >= 3:
             corrections = covariance.get('corrections', None)
             if isinstance(corrections, str):

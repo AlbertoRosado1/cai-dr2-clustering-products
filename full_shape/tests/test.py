@@ -40,6 +40,16 @@ def test_likelihood():
         likelihood()
 
 
+def test_covariance():
+    options = {}
+    options['likelihoods'] = [generate_likelihood_options_helper(stats=['mesh2_spectrum'], tracer=tracer) for tracer in ['LRG3']]
+    for likelihood_options in options['likelihoods']:
+        likelihood_options['covariance'] = {'source': 'jaxpower', 'version': 'abacus-2ndgen-complete'}
+    options = fill_fiducial_options(options)
+    likelihood = get_likelihood(options['likelihoods'], cache_dir='./_cache')
+    likelihood()
+
+
 def test_options():
     options = {}
     options['likelihoods'] = [generate_likelihood_options_helper(tracer=tracer) for tracer in ['LRG2', 'LRG3']]
@@ -56,4 +66,5 @@ if __name__ == '__main__':
     setup_logging()
     test_str()
     test_likelihood()
+    test_covariance()
     test_options()
