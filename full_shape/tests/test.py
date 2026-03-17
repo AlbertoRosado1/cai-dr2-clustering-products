@@ -1,5 +1,5 @@
 from full_shape import tools
-from full_shape.tools import generate_likelihood_options_helper, str_from_likelihood_options, get_likelihood, fill_fiducial_options, setup_logging
+from full_shape.tools import generate_likelihood_options_helper, str_from_likelihood_options, str_from_options, get_likelihood, fill_fiducial_options, setup_logging
 
 
 def test_str():
@@ -23,11 +23,21 @@ def test_str():
     s = str_from_likelihood_options(likelihood_options, level={'stat': 2})
     assert s == 'LRG3xELG1-S2-ell0-k0.02-0.20-0.005-ell2-k0.02-0.20-0.005+LRG3xELG1-S3-ell000-k0.02-0.12-0.005-ell202-k0.02-0.08-0.005'
 
+    options = {}
+    options['likelihoods'] = [likelihood_options]
+    options = fill_fiducial_options(options)
+    s = str_from_options(options, level=None)
+    assert s == 'cosmo-base_ns-fixed_LRG3xELG1-S2+LRG3xELG1-S3', s
+
 
 def test_likelihood():
-    likelihoods_options = [generate_likelihood_options_helper(tracer=tracer) for tracer in ['LRG2', 'LRG3']]
-    likelihood = get_likelihood(likelihoods_options, cosmo=None, fiducial=None, cache_dir='./_cache')
-    likelihood()
+    options = {}
+    options['likelihoods'] = [generate_likelihood_options_helper(tracer=tracer) for tracer in ['LRG2', 'LRG3']]
+    for template in ['direct', 'shapefit']:
+        options['cosmology'] = {'template': template}
+        options = fill_fiducial_options(options)
+        likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache')
+        likelihood()
 
 
 def test_options():
@@ -44,6 +54,6 @@ def test_options():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_str()
+    test_str()
     test_likelihood()
-    #test_options()
+    test_options()
