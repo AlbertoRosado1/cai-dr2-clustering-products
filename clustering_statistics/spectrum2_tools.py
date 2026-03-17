@@ -997,7 +997,7 @@ def compute_covariance_mesh2_spectrum(*get_data_randoms, theory=None, fields=Non
         all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
         mattrs = all_fkp[0].attrs
         kw = dict(edges={'step': mattrs.cellsize.min()}, basis='bessel') if fftlog else dict(edges={})
-        kw.update(los='local', fields=fields, split=[(42, fkp.randoms.__dict__['IDS']) for fkp in all_fkp])
+        kw.update(los='local', fields=fields, split=[(42, fkp.randoms.extra['IDS']) for fkp in all_fkp])
         kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
         windows = compute_fkp2_covariance_window(all_fkp, **kw, **kw_paint)
         #if jax.process_index() == 0: windows.write(f'_tests/window_correlation.h5')
