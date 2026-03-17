@@ -457,18 +457,12 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         'LRG+ELG': {'nran': 13, 'recon': {'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
         'LRG': {'nran': 10, 'recon': {'bias': 2.0, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
         'ELG': {'nran': 15, 'recon': {'bias': 1.2, 'smoothing_radius': 15., 'zrange': (0.8, 1.6)}},
-        'QSO': {'nran': 4, 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}, 
-        'LRGxELG': {'nran': (10,15), 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}, 
-        'LRGxQSO': {'nran': (10,4), 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}, 
-        'ELGxQSO': {'nran': (15,4), 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}}
-    
-    tracers = [get_simple_tracer(tt) for tt in _make_tuple(tracer)] 
-    tracer = join_tracers(tracers)
-    propose_fiducial = base | propose_fiducial[tracer]
+        'QSO': {'nran': 4, 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}}
     
     tracers = _make_tuple(tracer)
     simple_tracers = [get_simple_tracer(tracer) for tracer in tracers] 
     simple_tracer = join_tracers(simple_tracers)
+
     propose_fiducial = base | propose_fiducial[simple_tracers[0]]
 
     if 'png' in analysis:
@@ -494,10 +488,11 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_fiducial[stat]['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': propose_cellsize}
 
     if 'png' in analysis:
-        propose_fiducial['mesh2_spectrum'].update(norm={'cellsize': 10.}, ells=(0, 2), optimal_weights=functools.partial(compute_fiducial_png_weights, tracer=tracers, p=[propose_p[tt] for tt in simple_tracers]))
+        propose_fiducial['mesh2_spectrum'].update(norm={'cellsize': 20}, ells=(0, 2), optimal_weights=functools.partial(compute_fiducial_png_weights, tracer=tracers, p=[propose_p[tt] for tt in simple_tracers]))
     else:
         propose_fiducial['mesh2_spectrum'].update(norm={'cellsize': 10.}, ells=(0, 2, 4))
         propose_fiducial['mesh3_spectrum'].update(norm={'cellsize': 10.}, ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal', selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
+    
     if 'protected' in analysis:
         propose_fiducial['mesh2_spectrum'].update(ells=(0,), edges={'min': 0.02, 'step': 0.001})
         propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0)])
