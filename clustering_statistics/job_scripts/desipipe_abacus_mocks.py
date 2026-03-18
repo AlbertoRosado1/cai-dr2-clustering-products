@@ -74,7 +74,7 @@ def run_stats(tracer='LRG', version='abacus-2ndgen-complete', complete=False, im
 def postprocess_stats(tracer='LRG', version='abacus-2ndgen-complete', complete=False, imocks=[0], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', postprocess=['combine_regions'], **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     zranges = tools.propose_fiducial('zranges', tracer)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=0), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'window_mesh3_spectrum'][2:]}, mesh2_spectrum={'cut': True}, window_mesh2_spectrum={'cut': True})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'window_mesh3_spectrum'][2:]}, mesh2_spectrum={'cut': True}, window_mesh2_spectrum={'cut': True})
     if complete:
         get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra='complete')
     else:
