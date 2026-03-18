@@ -54,7 +54,7 @@ def run_stats(tracer='LRG', zranges=None, version='holi-v4.80', weight='default'
             regions = ['NGC', 'SGC']
             for region in regions:
                 mattrs = {'boxsize': 10000., 'meshsize': 750}
-                options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), mesh2_spectrum={'mattrs': mattrs}, window_mesh2_spectrum={'mattrs': mattrs}, covariance_mesh2_spectrum={'mattrs': mattrs}, **kw)
+                options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), mesh2_spectrum={'mattrs': mattrs}, covariance_mesh2_spectrum={'mattrs': mattrs}, **kw)
                 #options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), mesh2_spectrum={}, **kw)
                 options = fill_fiducial_options(options, analysis='full_shape_protected' if 'data' in version else 'full_shape')
                 if 'uchuu-hf-complete' in version:
@@ -73,7 +73,7 @@ def run_stats(tracer='LRG', zranges=None, version='holi-v4.80', weight='default'
 def postprocess_stats(tracer='LRG', version='holi-v4.80', weight='default', imocks=[0], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', postprocess=['combine_regions'], **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     zranges = tools.propose_fiducial('zranges', tracer)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'window_mesh3_spectrum'][2:4]})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=1), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'mesh3_spectrum', 'window_mesh3_spectrum'][:3]})
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir)
     postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **options)
                 
@@ -189,12 +189,12 @@ def fit_large_scales(imock=0, tracer='LRG', zranges=None, version='v4.80', weigh
 
 if __name__ == '__main__':
 
-    todo = ['test']
+    todo = ['stats']
     #todo = ['density']
     #todo = ['randoms']
     #todo = ['large_scales']
     weight = 'default'
-    stats = ['mesh2_spectrum', 'mesh3_spectrum_sugiyama', 'mesh3_spectrum_scoccimarro', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][-1:]
+    stats = ['mesh2_spectrum', 'mesh3_spectrum_sugiyama', 'mesh3_spectrum_scoccimarro', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][-2:]
     stats = []
     postprocess = ['combine_regions']
 
@@ -246,7 +246,7 @@ if __name__ == '__main__':
             
             make_merged_random_catalog(imocks=imocks, tracer=tracer, version=version, stats_dir=stats_dir, nran=18, get_catalog_fn=get_holi_catalog_fn)
 
-    if 'test' in todo:
+    if 'stats' in todo:
         #version = 'v4.00'
         version = 'v4.80'
         tracers = ['LRG', 'ELG', 'QSO']
