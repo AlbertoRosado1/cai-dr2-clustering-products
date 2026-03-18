@@ -214,7 +214,6 @@ def get_theory(stat: str, theory_options: dict, z: float, cosmology: object=None
     fiducial = get_fiducial()
     template = None
     theory_options.setdefault('cosmology', {'template': 'direct'})
-    print('LOOOL', theory_options['cosmology']['template'])
     if theory_options['cosmology']['template'] == 'direct':
         template = DirectPowerSpectrumTemplate(fiducial=fiducial, cosmo=cosmology, z=z)
     elif theory_options['cosmology']['template'] == 'shapefit':

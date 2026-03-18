@@ -33,7 +33,7 @@ def test_str():
 def test_likelihood():
     options = {}
     options['likelihoods'] = [generate_likelihood_options_helper(tracer=tracer) for tracer in ['LRG2', 'LRG3']]
-    for template in ['direct', 'shapefit'][1:]:
+    for template in ['direct', 'shapefit']:
         options['cosmology'] = {'template': template}
         options = fill_fiducial_options(options)
         likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache')
