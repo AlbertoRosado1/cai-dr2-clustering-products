@@ -281,7 +281,7 @@ def test_window_fm(tracer='QSO'):
         "region": "ALL",
         "imock": 451,
         "nran": 1,
-        "return_all_columns": True,
+        "keep_columns": True,
         "weight": "default-OQE",
     }
     mattrs = {"cellsize": 40.0}
