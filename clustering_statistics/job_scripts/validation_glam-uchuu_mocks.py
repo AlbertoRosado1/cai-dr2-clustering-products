@@ -85,10 +85,11 @@ if __name__ == '__main__':
     imocks = 100 + np.arange(50)
     stats_dir = Path(os.getenv('SCRATCH')) / 'glam-uchuu_mocks_validation'
 
+    imocks = [100]
     todo = ['stats']
     stats = ['mesh2_spectrum', 'mesh3_spectrum_sugiyama', 'mesh3_spectrum_scoccimarro', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][-2:]
-    #stats = []
-    postprocess = ['combine_regions'][:0]
+    stats = []
+    postprocess = ['combine_regions']
     weight = 'default-FKP'
     version = 'glam-uchuu-v1-altmtl'
 
