@@ -15,14 +15,14 @@ logger = logging.getLogger('spectrum3')
 
 def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
                             basis='sugiyama-diagonal', ells=[(0, 0, 0), (2, 0, 2)], edges=None, los='local',
-                            buffer_size=0, cache=None):
+                            buffer_size=0, norm: dict=None, cache=None):
     r"""
     Compute the 3-point spectrum multipoles using mesh-based FKP fields with :mod:`jaxpower`.
 
     Parameters
     ----------
     get_data_randoms : callables
-        Functions that return tuples of (data, randoms, [shifted]) catalogs.
+        Functions that return dict of 'data', 'randoms' (optionally 'shifted') catalogs.
         See :func:`prepare_jaxpower_particles` for details.
     mattrs : dict, optional
         Mesh attributes to define the :class:`jaxpower.ParticleField` objects. If None, default attributes are used.
@@ -39,6 +39,9 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
         Line-of-sight definition. 'local' uses local LOS, 'x', 'y', 'z' use fixed axes, or provide a 3-vector.
     buffer_size : int, optional
         Buffer size when binning; if the binning is multidimensional, increase for faster computation at the cost of memory.
+    norm : dict, optional
+        Optional arguments for computing normalization.
+        Default is ``{'cellsize': 10.}`` (density computed with ``cellsize = 10.``)
     cache : dict, optional
         Cache to store binning class (can be reused if ``meshsize`` and ``boxsize`` are the same).
         If ``None``, a new cache is created.
@@ -55,42 +58,44 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
         all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
         attrs = _get_jaxpower_attrs(*all_particles)
         attrs.update(los=los)
-        mattrs = all_particles[0][0].attrs
+        mattrs = all_particles[0]['data'].attrs
         # Define the binner
         if cache is None: cache = {}
-        bin = cache.get(f'bin_mesh3_spectrum_{basis}', None)
         if edges is None: edges = {'step': 0.02 if 'scoccimarro' in basis else 0.005}
+        if norm is None: norm = {'cellsize': 10.}
+        kw_norm = dict(norm)
+        bin = cache.get(f'bin_mesh3_spectrum_{basis}', None)
         if bin is None or not np.all(bin.mattrs.meshsize == mattrs.meshsize) or not np.allclose(bin.mattrs.boxsize, mattrs.boxsize):
             bin = BinMesh3SpectrumPoles(mattrs, edges=edges, basis=basis, ells=ells, buffer_size=buffer_size)
         cache.setdefault(f'bin_mesh3_spectrum_{basis}', bin)
-    
+
         # Computing normalization
-        all_fkp = [FKPField(data, randoms) for (data, randoms, _) in all_particles]
-        norm = compute_fkp3_normalization(*all_fkp, bin=bin, split=[(42, fkp.randoms.__dict__['IDS']) for fkp in all_fkp],  # index for process invariance
-                                          cellsize=10)
-    
+        all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
+        norm = compute_fkp3_normalization(*all_fkp, bin=bin, split=[(42, fkp.randoms.extra['IDS']) for fkp in all_fkp],  # index for process invariance
+                                          **kw_norm)
+
         # Computing shot noise
-        all_fkp = [FKPField(data, shifted if shifted is not None else randoms) for (data, randoms, shifted) in all_particles]
+        all_fkp = [FKPField(particles['data'], particles['shifted'] if particles.get('shifted', None) is not None else particles['randoms']) for particles in all_particles]
         del all_particles
         kw = dict(resampler='tsc', interlacing=3, compensate=True)
         num_shotnoise = compute_fkp3_shotnoise(*all_fkp, los=los, bin=bin, **kw)
-    
+
         jax.block_until_ready((norm, num_shotnoise))
         if jax.process_index() == 0:
             logger.info('Normalization and shotnoise computation finished')
-    
+
         # out='real' to save memory
         meshes = [fkp.paint(**kw, out='real') for fkp in all_fkp]
         del all_fkp
-    
+
         jitted_compute_mesh3_spectrum = jax.jit(compute_mesh3_spectrum, static_argnames=['los'])
-    
+
         # out='real' to save memory
         spectrum = jitted_compute_mesh3_spectrum(*meshes, los=los, bin=bin)
         spectrum = spectrum.clone(norm=norm, num_shotnoise=num_shotnoise)
         spectrum = spectrum.map(lambda pole: pole.clone(attrs=attrs))
         spectrum = spectrum.clone(attrs=attrs)
-    
+
         jax.block_until_ready(spectrum)
         if jax.process_index() == 0:
             logger.info('Mesh-based computation finished')
@@ -100,7 +105,7 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
 
 def _get_window_edges(mattrs, scales: tuple=(1, 4)):
     """Return window edges."""
-    distmax, cellmin = np.sqrt(np.sum(mattrs.boxsize**2)), mattrs.cellsize.min()
+    distmax, cellmin = mattrs.boxsize.min() / 4., mattrs.cellsize.min()
     nsizes, cellsizes = [6] * 5 + [None], [cellmin * 2**i for i in range(6)]
     edges = []
     for scale in scales:
@@ -109,19 +114,19 @@ def _get_window_edges(mattrs, scales: tuple=(1, 4)):
         for nsize, cellsize in zip(nsizes, cellsizes):
             cellsize = cellsize * scale
             if nsize is None:
-                tmp = np.arange(start, distmax * scale / scales[-1] + cellsize, cellsize)
+                tmp = np.arange(start, distmax * scale / scales[0] + cellsize, cellsize)
             else:
                 tmp = start + np.arange(nsize) * cellsize
             if tmp.size:
                 start = tmp[-1] + cellsize
                 edges_scale.append(tmp)
         edges_scale = np.concatenate(edges_scale, axis=0)
-        edges_scale = edges_scale[edges_scale < distmax + cellsize]
+        edges_scale = edges_scale[edges_scale < distmax * scale / scales[0] + cellsize]
         edges.append(edges_scale)
     return edges
 
 
-def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=None, computed_batches: list=None, buffer_size=10):
+def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, ibatch: tuple=None, computed_batches: list=None, buffer_size=0):
     r"""
     Compute the 3-point spectrum window with :mod:`jaxpower`.
 
@@ -132,6 +137,9 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=Non
         See :func:`prepare_jaxpower_particles` for details.
     spectrum : Mesh3SpectrumPoles
         Measured 3-point spectrum multipoles.
+    zeff : dict, optional
+        Optional arguments for computing effective redshift.
+        Default is ``{'cellsize': 10.}`` (density computed with ``cellsize = 10.``)
     ibatch : tuple, optional
         To split the window function multipoles to compute in batches, provide (0, nbatches) for the first batch,
         (1, nbatches) for the second, etc; up to (nbatches - 1, nbatches).
@@ -152,13 +160,15 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=Non
     #mattrs['meshsize'] = 256
     los = spectrum.attrs['los']
     kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+    if zeff is None: zeff = {'cellsize': 10.}
+    kw_zeff = dict(zeff)
 
     with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
         all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
-        all_randoms = [particles[1] for particles in all_particles]
+        all_randoms = [particles['randoms'] for particles in all_particles]
         del all_particles
         mattrs = all_randoms[0].attrs
-    
+
         pole = next(iter(spectrum))
         ells, edges, basis = spectrum.ells, pole.edges('k'), pole.basis
         norm = jnp.concatenate([spectrum.get(ell).values('norm') for ell in spectrum.ells])
@@ -170,57 +180,55 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=Non
         step = np.diff(bin.edges1d[0], axis=-1).min()
         edgesin = np.arange(0., 1.5 * stop, step / 2.)
         edgesin = jnp.column_stack([edgesin[:-1], edgesin[1:]])
-    
+
         fields = list(range(len(all_randoms)))
         fields += [fields[-1]] * (3 - len(all_randoms))
-        seed = [(42, randoms.__dict__['IDS']) for randoms in all_randoms]
-        zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed)
-    
+        seed = [(42, randoms.extra['IDS']) for randoms in all_randoms]
+        zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, return_fraction=True, **kw_zeff)
+
         correlations = []
         kw, ellsin = get_smooth3_window_bin_attrs(ells, ellsin=2, fields=fields, return_ellsin=True)
         kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]  # let's remove some terms...
+        kw['ells'] = kw['ells'][:1]  # let's just keep the first term (0, 0, 0) for now
         jitted_compute_mesh3_correlation = jax.jit(compute_mesh3_correlation, static_argnames=['los'], donate_argnums=[0])
         #jitted_compute_mesh3_correlation = compute_mesh3_correlation
-    
+
         coords = jnp.logspace(-3, 5, 1024)
         list_scales = [1, 4]
         list_edges = _get_window_edges(mattrs, scales=list_scales)
-    
+
         ells = kw['ells']
         if ibatch is not None:
             start, stop = ibatch[0] * len(ells) // ibatch[1], (ibatch[0] + 1) * len(ells) // ibatch[1]
             kw['ells'] = ells[start:stop]
         if ells and not bool(computed_batches):
             # multigrid calculation
+            kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
             for scale, edges in zip(list_scales, list_edges):
-                if jax.process_index() == 0:
-                    logger.info(f'Processing scale x{scale:.0f}')
                 mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
-                kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
-                #kw['ells'] = kw['ells'][-1:]
-                #kw['ells'] = [(2, 0, 2)]
-                #kw['ells'] = [(0, 0, 0)]
-                #edges = edges[:5]
-                buffer_size = len(edges) - 1
-                #buffer_size = 0
+                if jax.process_index() == 0:
+                    logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
                 sbin = BinMesh3CorrelationPoles(mattrs2, edges=edges, **kw, buffer_size=buffer_size)  # kcut=(0., mattrs2.knyq.min()))
                 meshes = []
                 for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
                                                                seed=seed, fields=fields)):
-                    randoms = randoms.exchange(backend='mpi')
+                    randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
                     alpha = pole.attrs['wsum_data'][0][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
                     meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
                 t0 = time.time()
-                correlation = jitted_compute_mesh3_correlation(meshes, bin=sbin, los=los).clone(norm=[np.mean(norm)] * len(sbin.ells))
+                correlation = jitted_compute_mesh3_correlation(meshes, bin=sbin, los=los)
+                correlation = correlation.clone(norm=[np.mean(norm)] * len(sbin.ells))
                 jax.block_until_ready(correlation)
                 if jax.process_index() == 0:
                     logger.info(f"Computed windows {kw['ells']}, scale {scale}, in {time.time() - t0:.2f} s.")
-                    #correlation.write(f'_tmp/window_mesh3_correlation_raw_{scale}.h5')
                 correlation = interpolate_window_function(correlation.unravel(), coords=coords, order=3)
+                #if jax.process_index() == 0: correlation.write(f'_tests/window_correlation3_{scale:.0f}.h5')
                 correlations.append(correlation)
-    
+
             coords = list(next(iter(correlations[0])).coords().values())
-            masks = [(coords[0] < edges[-1])[:, None] * (coords[1] < edges[-1])[None, :] for edges in list_edges[:-1]]
+            # -3 to make the connection smooth, independent of the edge
+            # for a cubic spline, 4 neighboring points are used
+            masks = [(coords[0] < edges[-3])[:, None] * (coords[1] < edges[-3])[None, :] for edges in list_edges[:-1]]
             masks.append((coords[0] < np.inf)[:, None] * (coords[1] < np.inf)[None, :])
             weights = []
             for mask in masks:
@@ -230,141 +238,101 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, ibatch: tuple=Non
                     weights.append(mask)
             weights = [np.maximum(mask, 1e-6) for mask in weights]
             correlation = correlations[0].sum(correlations, weights=weights)
-    
+
         if computed_batches:
             correlation = types.join(computed_batches)
             correlation = types.join([correlation.get(ells=[ell]) for ell in ells])  # reorder
-    
+
         jax.block_until_ready(correlation)
         if jax.process_index() == 0:
             logger.info('Window functions computed.')
-    
+
         results = {}
         results['window_mesh3_correlation_raw'] = correlation
         if ibatch is None:
             if jax.process_index() == 0:
                 logger.info('Building window matrix.')
             window = compute_smooth3_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',), batch_size=4)
-            observable = window.observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'), attrs=pole.attrs | dict(zeff=zeff)), input_label=True)
+            observable = window.observable
+            observable = observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'), attrs=pole.attrs | dict(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)), input_label=True)
             window = window.clone(observable=observable, value=window.value() / (norm[..., None] / np.mean(norm)))  # just in case norm is k-dependent
             results['raw'] = window
     return results
+    
 
-
-def compute_box_mesh3_spectrum(get_data, get_shifted=None, basis='scoccimarro', ells=[0, 2], los='z', mask_edges=None, cache=None, **attrs):
-    """
+def compute_box_mesh3_spectrum(*get_data, mattrs=None,
+                                basis='sugiyama-diagonal', ells=[(0, 0, 0), (2, 0, 2)], edges=None, los='z',
+                                buffer_size=0, mask_edges=None, cache=None):
+    r"""
     Compute the 3-point spectrum multipoles for a cubic box using :mod:`jaxpower`.
 
     Parameters
     ----------
-    get_data : callable
-        Function that returns a tuple of (positions, weights) for the data catalog.
-    get_shifted : callable, optional
-        Function that returns a tuple of (positions, weights) for shifted randoms.
-        If None, no shifted randoms are used.
-    basis : str, optional
-        Basis for the 3-point spectrum computation. Default is 'scoccimarro'.
-        Can also be 'sugiyama-diagonal' or other supported bases.
-    ells : list, optional
-        Multipole moments to compute. Default is [0, 2].
-        For scoccimarro basis, use integer ells. For sugiyama basis, use tuples like [(0, 0, 0), (2, 0, 2)].
-    los : {'x', 'y', 'z'}, optional
-        Line-of-sight direction. Default is 'z'.
-    mask_edges : str or None, optional
-        Edge masking specification. Default is None.
+    get_data : callables
+        Functions that return tuples of (data, [shifted]) catalogs.
+        See :func:`prepare_jaxpower_particles` for details.
+    mattrs : dict, optional
+        Mesh attributes to define the :class:`jaxpower.ParticleField` objects.
+        See :func:`prepare_jaxpower_particles` for details.
+    ells : list of int, optional
+        List of multipole moments to compute. Default is (0, 2, 4).
+    edges : dict, optional
+        Edges for the binning; array or dictionary with keys 'start' (minimum :math:`k`), 'stop' (maximum :math:`k`), 'step' (:math:`\Delta k`).
+        If ``None``, default step of :math:`0.001 h/\mathrm{Mpc}` is used.
+        See :class:`jaxpower.BinMesh3SpectrumPoles` for details.
+    los : {'x', 'y', 'z', array-like}, optional
+        Line-of-sight direction. If 'x', 'y', 'z' use fixed axes, or provide a 3-vector.
     cache : dict, optional
         Cache to store binning class (can be reused if ``meshsize`` and ``boxsize`` are the same).
         If ``None``, a new cache is created.
-    **attrs : dict
-        Mesh attributes (boxsize, cellsize, etc.) to pass to :func:`jaxpower.get_mesh_attrs`.
 
     Returns
     -------
     spectrum : Mesh3SpectrumPoles
         The computed 3-point spectrum multipoles.
     """
-    import jax
-    from jaxpower import (ParticleField, FKPField, compute_box3_normalization, compute_fkp3_shotnoise, BinMesh3SpectrumPoles, get_mesh_attrs, compute_mesh3_spectrum)
-    mattrs = get_mesh_attrs(boxcenter=0., **attrs)
-    data = ParticleField(*get_data(), attrs=mattrs, exchange=True, backend='jax')
-    edges = {'step': 0.01 if 'scoccimarro' in basis else 0.005}
-    if cache is None: cache = {}
-    bin = cache.get(f'bin_mesh3_spectrum_{basis}', None)
-    if bin is None: bin = BinMesh3SpectrumPoles(mattrs, edges=edges, basis=basis, ells=ells, buffer_size=16, mask_edges=mask_edges)
-    cache.setdefault(f'bin_mesh3_spectrum_{basis}', bin)
-    norm = compute_box3_normalization(data, bin=bin)
-    if get_shifted is not None:
-        data = FKPField(data, ParticleField(*get_shifted(), attrs=mattrs, exchange=True, backend='jax'))
-    kw = dict(resampler='tsc', interlacing=3, compensate=True)
-    num_shotnoise = compute_fkp3_shotnoise(data, los=los, bin=bin, **kw)
-    jax.block_until_ready((norm, num_shotnoise))
-    if jax.process_index() == 0:
-        logger.info('Normalization and shotnoise computation finished')
-    mesh = data.paint(**kw, out='real')
-    mesh = mesh - mesh.mean()
-    spectrum = compute_mesh3_spectrum(mesh, los=los, bin=bin)
-    spectrum = spectrum.clone(norm=norm, num_shotnoise=num_shotnoise)
-    jax.block_until_ready(spectrum)
-    if jax.process_index() == 0:
-        logger.info('Mesh-based computation finished')
-    return spectrum
+    from jaxpower import (create_sharding_mesh, FKPField, compute_fkp3_shotnoise, compute_box3_normalization, BinMesh3SpectrumPoles, compute_mesh3_spectrum, compute_fkp3_shotnoise)
 
+    mattrs = mattrs or {}
+    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
+        all_particles = prepare_jaxpower_particles(*get_data, mattrs=mattrs)
+        attrs = _get_jaxpower_attrs(*all_particles)
+        attrs.update(los=los)
+        mattrs = all_particles[0]['data'].attrs
 
-def compute_box_mesh3_cross_spectrum(get_data, get_data2, basis='scoccimarro', ells=[0, 2], los='z', mask_edges=None, cache=None, **attrs):
-    """
-    Compute the 3-point cross-spectrum multipoles between two fields in a cubic box using :mod:`jaxpower`.
+        # Define the binner
+        if cache is None: cache = {}
+        bin = cache.get(f'bin_mesh3_spectrum_{basis}', None)
+        if edges is None: edges = {'step': 0.02 if 'scoccimarro' in basis else 0.005}
 
-    Parameters
-    ----------
-    get_data : callable
-        Function that returns a tuple of (positions, weights) for the first data catalog.
-    get_data2 : callable
-        Function that returns a tuple of (positions, weights) for the second data catalog.
-    basis : str, optional
-        Basis for the 3-point spectrum computation. Default is 'scoccimarro'.
-        Can also be 'sugiyama-diagonal' or other supported bases.
-    ells : list, optional
-        Multipole moments to compute. Default is [0, 2].
-        For scoccimarro basis, use integer ells. For sugiyama basis, use tuples like [(0, 0, 0), (2, 0, 2)].
-    los : {'x', 'y', 'z'}, optional
-        Line-of-sight direction. Default is 'z'.
-    mask_edges : str or None, optional
-        Edge masking specification. Default is None.
-    cache : dict, optional
-        Cache to store binning class (can be reused if ``meshsize`` and ``boxsize`` are the same).
-        If ``None``, a new cache is created.
-    **attrs : dict
-        Mesh attributes (boxsize, cellsize, etc.) to pass to :func:`jaxpower.get_mesh_attrs`.
+        if bin is None or not np.all(bin.mattrs.meshsize == mattrs.meshsize) or not np.allclose(bin.mattrs.boxsize, mattrs.boxsize):
+            bin = BinMesh3SpectrumPoles(mattrs, edges=edges, basis=basis, ells=ells, buffer_size=buffer_size, mask_edges=mask_edges)
+        cache.setdefault(f'bin_mesh3_spectrum_{basis}', bin)
 
-    Returns
-    -------
-    spectrum : Mesh3SpectrumPoles
-        The computed 3-point cross-spectrum multipoles.
-    """
-    import jax
-    from jaxpower import (ParticleField, compute_box3_normalization, BinMesh3SpectrumPoles, get_mesh_attrs, compute_mesh3_spectrum)
-    mattrs = get_mesh_attrs(boxcenter=0., **attrs)
-    data = ParticleField(*get_data(), attrs=mattrs, exchange=True, backend='jax')
-    data2 = ParticleField(*get_data2(), attrs=mattrs, exchange=True, backend='jax')
-    edges = {'step': 0.01 if 'scoccimarro' in basis else 0.005}
-    if cache is None: cache = {}
-    bin = cache.get(f'bin_mesh3_spectrum_{basis}', None)
-    if bin is None: bin = BinMesh3SpectrumPoles(mattrs, edges=edges, basis=basis, ells=ells, buffer_size=16, mask_edges=mask_edges)
-    cache.setdefault(f'bin_mesh3_spectrum_{basis}', bin)
-    norm = compute_box3_normalization(data, data2, bin=bin)
-    jax.block_until_ready(norm)
-    if jax.process_index() == 0:
-        logger.info('Normalization and shotnoise computation finished')
-    kw = dict(resampler='tsc', interlacing=3, compensate=True)
-    mesh = data.paint(**kw, out='real')
-    mesh = mesh - mesh.mean()
-    del data
-    mesh2 = data2.paint(**kw, out='real')
-    mesh2 = mesh2 - mesh2.mean()
-    del data2
-    spectrum = compute_mesh3_spectrum(mesh, mesh2, los=los, bin=bin)
-    spectrum = spectrum.clone(norm=norm)
-    jax.block_until_ready(spectrum)
-    if jax.process_index() == 0:
-        logger.info('Mesh-based computation finished')
+        # Computing normalization
+        all_data = [particles['data'] for particles in all_particles]
+        norm = compute_box3_normalization(*all_data, bin=bin)
+
+        # Computing shot noise
+        all_fkp = [FKPField(particles['data'], particles['shifted']) if particles.get('shifted', None) is not None else particles['data'] for particles in all_particles]
+        del all_particles
+        num_shotnoise = compute_fkp3_shotnoise(*all_fkp, bin=bin, fields=None)
+
+        kw = dict(resampler='tsc', interlacing=3, compensate=True)
+        # out='real' to save memory
+        all_mesh = []
+        for fkp in all_fkp:
+            mesh = fkp.paint(**kw, out='real')
+            all_mesh.append(mesh - mesh.mean())
+        del all_fkp
+        # JIT the mesh-based spectrum computation; helps with memory footprint
+        jitted_compute_mesh3_spectrum = jax.jit(compute_mesh3_spectrum, static_argnames=['los'])
+        #jitted_compute_mesh3_spectrum = compute_mesh3_spectrum
+        spectrum = jitted_compute_mesh3_spectrum(*all_mesh, bin=bin, los=los)
+        spectrum = spectrum.clone(norm=norm, num_shotnoise=num_shotnoise)
+        spectrum = spectrum.map(lambda pole: pole.clone(attrs=attrs))
+        spectrum = spectrum.clone(attrs=attrs)
+        jax.block_until_ready(spectrum)
+        if jax.process_index() == 0:
+            logger.info('Mesh-based computation finished')
     return spectrum

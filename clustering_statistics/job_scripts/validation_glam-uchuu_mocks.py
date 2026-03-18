@@ -19,7 +19,7 @@ from clustering_statistics import tools
 setup_logging()
 
 
-def run_stats(tracer='LRG', version='glam-uchuu-v1-altmtl', weight='default-FKP', imocks=[451], meas_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum']):
+def run_stats(tracer='LRG', version='glam-uchuu-v1-altmtl', weight='default-FKP', imocks=[451], meas_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], complete=False):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -43,6 +43,11 @@ def run_stats(tracer='LRG', version='glam-uchuu-v1-altmtl', weight='default-FKP'
         for region in regions:
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), mesh2_spectrum={'cut': True, 'auw': True if 'altmtl' in version else None})
             options = fill_fiducial_options(options)
+            if complete:
+                options['catalog']['complete'] = {}
+                get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra='complete-noshuffle')
+            else:
+                get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir)
             for tracer in options['catalog']:
                 options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran'])}
             combine_stats_from_options(stats, get_stats_fn=functools.partial(tools.get_stats_fn, meas_dir=meas_dir), cache=cache, **options)

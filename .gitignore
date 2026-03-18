@@ -8,6 +8,7 @@ doc/_build/
 **/.cache
 **/.config
 **/.wget*
+**/_cache
 **/_tests
 **/_runs
 **/_tmp

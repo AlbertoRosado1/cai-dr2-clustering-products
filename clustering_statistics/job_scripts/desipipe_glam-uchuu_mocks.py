@@ -73,7 +73,7 @@ def run_stats(tracer='LRG', version='glam-uchuu-v1-altmtl', imocks=[100], stats_
                 mesh2_spectrum = dict(optimal_weights=functools.partial(tools.compute_fiducial_png_weights, tracer=tracer) if 'oqe' in weight else None)
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, imock=imock, weight=weight),
                            mesh2_spectrum=mesh2_spectrum)
-            options = fill_fiducial_options(options,analysis=analysis)
+            options = fill_fiducial_options(options, analysis=analysis)
             for tracer in options['catalog']:
                 if 'glam' in version:
                     options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran'])}
