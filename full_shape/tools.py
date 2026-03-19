@@ -208,15 +208,15 @@ def get_theory(stat: str, theory_options: dict, z: float, cosmology: object=None
     theory : BaseCalculator
         Initialized theory object from desilike for the requested statistic.
     """
-    from desilike.theories.galaxy_clustering import (DirectPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles,
+    from desilike.theories.galaxy_clustering import (DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles,
     FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles)
     theory_options = dict(theory_options)
     fiducial = get_fiducial()
     template = None
-    theory_options.setdefault('template', 'direct')
-    if theory_options['template'] == 'direct':
+    theory_options.setdefault('cosmology', {'template': 'direct'})
+    if theory_options['cosmology']['template'] == 'direct':
         template = DirectPowerSpectrumTemplate(fiducial=fiducial, cosmo=cosmology, z=z)
-    elif theory_options['template'] == 'shapefit':
+    elif theory_options['cosmology']['template'] == 'shapefit':
         template = ShapeFitPowerSpectrumTemplate(fiducial=fiducial, z=z)
     if template is None:
         raise ValueError(f'template not found for {stat} and {repr(theory_options["template"])}')
@@ -677,8 +677,8 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             read_cache = cache_dir is not None and 'r' in cache_mode
             write_cache = cache_dir is not None and 'w' in cache_mode
             cache_dir = Path(cache_dir)
-            _hash = _hash_options({name: observable_options[name] for name in ['cosmology', 'theory', 'catalog']})
-            _str_cosmology = str_from_cosmology_options(observable_options['cosmology'], level=100)
+            _hash = _hash_options({name: observable_options[name] for name in ['theory', 'catalog']})
+            _str_cosmology = str_from_cosmology_options(observable_options['theory']['cosmology'], level=100)
             _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'catalog': 2})
             cache_fn = cache_dir / f'emulator_{_str_cosmology}' / f'emulator_{_str_theory}_{_hash}.npy'
             from desilike.emulators import EmulatedCalculator, Emulator, TaylorEmulatorEngine
@@ -826,7 +826,7 @@ def fill_fiducial_options(options):
         # Add cosmology arguments to each observable
         for likelihood_options in options['likelihoods']:
             for observable_options in likelihood_options['observables']:
-                observable_options['cosmology'] = options['cosmology']
+                observable_options['theory']['cosmology'] = options['cosmology']
     for name in ['sampler', 'profiler']:
         options.setdefault(name, {})
         options[name] = globals()[f'propose_fiducial_{name}_options'](options[name].get(name)) | options[name]

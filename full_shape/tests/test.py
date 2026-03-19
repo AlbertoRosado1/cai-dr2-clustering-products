@@ -9,7 +9,7 @@ def test_str():
         if level is None:
             assert s == 'LRG2-S2+LRG2-S3'
         elif level == 1:
-            assert s == 'LRG2-S2-th-folpsD+LRG2-S3-th-folpsD+cov-holi-v1-altmtl', s
+            assert s == 'LRG2-S2-th-folpsD+LRG2-S3-th-folpsD+cov-mock-holi-v1-altmtl', s
     s = str_from_likelihood_options(likelihood_options, level={'stat': 2})
     assert s == 'LRG2-S2-ell0-k0.02-0.20-0.005-ell2-k0.02-0.20-0.005+LRG2-S3-ell000-k0.02-0.12-0.005-ell202-k0.02-0.08-0.005', s
 
@@ -19,7 +19,7 @@ def test_str():
         if level is None:
             assert s == 'LRG3xELG1-S2+LRG3xELG1-S3'
         elif level == 1:
-            assert s == 'LRG3xELG1-S2-th-folpsD+LRG3xELG1-S3-th-folpsD+cov-holi-v1-altmtl', s
+            assert s == 'LRG3xELG1-S2-th-folpsD+LRG3xELG1-S3-th-folpsD+cov-mock-holi-v1-altmtl', s
     s = str_from_likelihood_options(likelihood_options, level={'stat': 2})
     assert s == 'LRG3xELG1-S2-ell0-k0.02-0.20-0.005-ell2-k0.02-0.20-0.005+LRG3xELG1-S3-ell000-k0.02-0.12-0.005-ell202-k0.02-0.08-0.005'
 
@@ -38,6 +38,11 @@ def test_likelihood():
         options = fill_fiducial_options(options)
         likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache')
         likelihood()
+        print(likelihood.varied_params)
+        if template == 'direct':
+            assert 'h' in likelihood.varied_params
+        elif template == 'shapefit':
+            assert 'df' in likelihood.varied_params
 
 
 def test_covariance():
