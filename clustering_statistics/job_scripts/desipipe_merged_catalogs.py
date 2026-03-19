@@ -36,33 +36,32 @@ tm = tm.clone(scheduler=dict(max_workers=30),
               provider=dict(provider='nersc', time='00:30:00', mpiprocs_per_worker=1, nodes_per_worker=0.2,
                             output=output, error=error, stop_after=1, constraint='cpu'))
 
-@tm.python_app
-def merge_data_catalogs(output_fn, input_fns, merge_catalogs=tools.merge_data_catalogs, read_catalog=tools._read_catalog):
+
+def merge_data_catalogs(output_fn, input_fns, merge_catalogs=tools.merge_data_catalogs, read_catalog=tools._read_catalog, factor=1):
     from clustering_statistics.tools import setup_logging
     setup_logging()
-    merge_catalogs(output_fn, input_fns, read_catalog=read_catalog)
+    merge_catalogs(output_fn, input_fns, read_catalog=read_catalog, factor=factor)
 
 
-@tm.python_app
 def merge_randoms_catalogs(output_fn, input_fns, parent_randoms_fn=None, merge_catalogs=tools.merge_randoms_catalogs,
-                           read_catalog=tools._read_catalog, expand_randoms=tools.expand_randoms, input_data_fns=None):
+                           read_catalog=tools._read_catalog, expand_randoms=tools.expand_randoms, input_data_fns=None, factor=1):
     import functools
     from clustering_statistics.tools import setup_logging
     setup_logging()
     expand_randoms = functools.partial(expand_randoms, from_randoms=['RA', 'DEC'], from_data=['FRAC_TLOBS_TILES'])
-    merge_catalogs(output_fn, input_fns, parent_randoms_fn=parent_randoms_fn, read_catalog=read_catalog, expand_randoms=expand_randoms, input_data_fns=input_data_fns)
+    merge_catalogs(output_fn, input_fns, parent_randoms_fn=parent_randoms_fn, read_catalog=read_catalog, expand_randoms=expand_randoms, input_data_fns=input_data_fns, factor=factor)
 
 
 if __name__ == '__main__':
 
-    mode = 'slurm'
-    # mode = 'interactive'
+    #mode = 'slurm'
+    mode = 'interactive'
 
     version = 'glam-uchuu-v1-altmtl'
-    out_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe/') / version / 'merged'
-    # out_dir = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' / version / 'merged' # / '{noric or ric}'
+    #out_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe/') / version / 'merged'
+    out_dir = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' / version / 'merged' # / '{noric or ric}'
 
-    kinds = ['data', 'single_randoms']
+    kinds = ['data', 'randoms']
     tracers = ['LRG', 'ELG_LOPnotqso', 'QSO']
     # tracers = ['QSO']
     regions = ['NGC', 'SGC']
@@ -80,7 +79,7 @@ if __name__ == '__main__':
                     input_data_fns,_ = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, kind=kind, **catalog_kws),
                                                                            test_if_readable=False, imock=imocks)[0]
                     output_data_fn = tools.get_catalog_fn(kind=kind, cat_dir=out_dir, **catalog_kws)
-                    merge_data_catalogs(output_data_fn, input_data_fns, factor=factor)
+                    (tm.python_app(merge_data_catalogs) if mode == 'slurm' else merge_data_catalogs)(output_data_fn, input_data_fns, factor=factor)
 
                 if 'randoms' in kind:
                     # Merge randoms catalogs
@@ -94,12 +93,11 @@ if __name__ == '__main__':
                     for iran in rerun:
                         if 'glam' in version:
                             # 'glam-uchuu-v1-altmtl' randoms do not have RA and DEC columns so we use `expand_randoms`
-                            parent_randoms_fn = get_single_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=[iran])[0]
+                            parent_randoms_fn = get_single_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=iran)
                         else:
                             expand = None
                         input_randoms_fns, kw_fns = tools.checks_if_exists_and_readable(get_fn=functools.partial(get_single_fn, kind='randoms', nran=iran, **catalog_kws),
                                                                                   test_if_readable=False, imock=imocks)[0]
-                        input_data_fns, _ = tools.checks_if_exists_and_readable(get_fn=functools.partial(get_single_fn, kind=kind, **catalog_kws),
-                                                                           test_if_readable=False, imock=[kw['imock'] for kw in kw_fns])[0]
+                        input_data_fns = [tools.get_catalog_fn(kind='data', **(catalog_kws | dict(region='ALL', imock=imock))) for imock in kw_fns['imock']]
                         output_randoms_fn = get_single_fn(kind=kind, cat_dir=out_dir, nran=iran, **catalog_kws)
-                        merge_randoms_catalogs(output_randoms_fn, input_randoms_fns, parent_randoms_fn=parent_randoms_fn, input_data_fns=input_data_fns, factor=factor)
+                        (tm.python_app(merge_randoms_catalogs) if mode == 'slurm' else merge_randoms_catalogs)(output_randoms_fn, input_randoms_fns, parent_randoms_fn=parent_randoms_fn, input_data_fns=input_data_fns, factor=factor)

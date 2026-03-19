@@ -111,19 +111,20 @@ def test_recon(stat='recon_particle2_correlation'):
             compute_stats_from_options(stat, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={}, particle2_correlation={})
 
 
-def test_complete():
-    if False:
-        tracer = 'LRG'
-        for version, imock in zip(['holi-v1-altmtl', 'glam-uchuu-v1-altmtl'], [460, 128]):
-            catalog_options = dict(version=version, tracer=tracer, zrange=(0.8, 1.1), region='NGC', weight='default', imock=imock, nran=2)
-            for kind in ['forfa_data', 'full_data', 'nz']:
-                fn = tools.get_catalog_fn(kind=kind, **catalog_options)
-                assert fn.exists(), fn
-        complete, reshuffle = {}, {}
-        data = tools.read_clustering_catalog(kind='data', complete=complete, reshuffle=reshuffle, **catalog_options)
-        expand = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
-        randoms = tools.read_clustering_catalog(kind='randoms', complete=complete, reshuffle=reshuffle, expand=expand, **catalog_options)
+def test_complete_catalog():
+    tracer = 'LRG'
+    for version, imock in zip(['holi-v1-altmtl', 'glam-uchuu-v1-altmtl'], [460, 128]):
+        catalog_options = dict(version=version, tracer=tracer, zrange=(0.8, 1.1), region='NGC', weight='default', imock=imock, nran=2)
+        for kind in ['forfa_data', 'full_data', 'nz']:
+            fn = tools.get_catalog_fn(kind=kind, **catalog_options)
+            assert fn.exists(), fn
+    complete, reshuffle = {}, {}
+    data = tools.read_clustering_catalog(kind='data', complete=complete, reshuffle=reshuffle, **catalog_options)
+    expand = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
+    randoms = tools.read_clustering_catalog(kind='randoms', complete=complete, reshuffle=reshuffle, expand=expand, **catalog_options)
 
+
+def test_complete_stats():
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     stat = 'mesh2_spectrum'
     for tracer in ['LRG']:
@@ -139,7 +140,31 @@ def test_complete():
                 assert np.allclose(np.mean(spectrum.value()), 7226.4642021336085)
 
 
-def test_expand_randoms(stat='mesh2_spectrum'):
+def test_expand_randoms_catalog():
+    stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
+    for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO']:
+        for zrange in tools.propose_fiducial('zranges', tracer):
+            for region in ['NGC', 'SGC']:
+                version = 'data-dr2-v2'
+                catalog_options = dict(version=version, tracer=tracer, zrange=zrange, region=region, weight='default-FKP', nran=1)
+                data = tools.read_clustering_catalog(kind='data', keep_columns=True, **catalog_options)
+                expand = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version=version, tracer=tracer, nran=catalog_options['nran']),
+                         'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
+                randoms_ref = tools.read_clustering_catalog(kind='randoms', keep_columns=True, **catalog_options)
+                randoms = tools.read_clustering_catalog(kind='randoms', expand=expand, keep_columns=True, **catalog_options)
+                assert not np.allclose(randoms['FRAC_TLOBS_TILES'], 1.)
+                regions = ['N', 'S']
+                if tracer == 'QSO':
+                    regions = ['N', 'SnoDES', 'DES']
+                for region in regions:
+                    mask_region = tools.select_region(randoms['RA'], randoms['DEC'], region)
+                    if not mask_region.any(): continue
+                    ratio = randoms['FRAC_TLOBS_TILES'][mask_region] / randoms_ref['FRAC_TLOBS_TILES'][mask_region]
+                    alpha = np.nanmean(ratio)
+                    assert np.allclose(randoms['FRAC_TLOBS_TILES'][mask_region], randoms_ref['FRAC_TLOBS_TILES'][mask_region] * alpha, equal_nan=True, rtol=1e-4)
+
+
+def test_expand_randoms_stats(stat='mesh2_spectrum'):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     stat = 'mesh2_spectrum'
     for tracer in ['LRG']:
@@ -316,7 +341,11 @@ if __name__ == '__main__':
     #config.update('jax_platform_name', 'cpu')
 
     setup_logging()
-    jax.distributed.initialize()
+    #jax.distributed.initialize()
+    test_complete_catalog()
+    #test_expand_randoms_catalog()
+    #test_complete_stats()
+    #test_expand_stats()
 
     #test_window()
     #test_blinding()
@@ -326,7 +355,7 @@ if __name__ == '__main__':
     #test_stats_fn()
     #test_auw(stats=['mesh2_spectrum'])
     #test_bitwise(stats=['mesh2_spectrum'])
-    #test_expand_randoms()
+    #test_expand_randoms_stats()
     #test_optimal_weights()
     #test_cross()
     #test_window()

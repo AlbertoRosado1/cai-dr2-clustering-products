@@ -1204,25 +1204,24 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
     randoms : Catalog
         Expanded randoms catalog.
     """
-    if len(from_randoms) != 0:
+    special_columns = []
+    from_data, from_randoms = list(from_data), list(from_randoms)
+    for special in ['FRAC_TLOBS_TILES']:
+        if special in from_data:
+            special_columns.append(special)
+            from_data.remove(special)
+            if 'NTILE' not in randoms: from_randoms.append('NTILE')
+
+    if len(from_randoms):
         _, randoms_index, parent_index = np.intersect1d(randoms['TARGETID'], parent_randoms['TARGETID'], return_indices=True)
         randoms = randoms[randoms_index]
         for column in from_randoms:
             if column != 'TARGETID':
                 randoms[column] = parent_randoms[column][parent_index]
 
-    if len(from_data):
-        def _get(data, from_data):
-            from_data = list(from_data)
-            columns = [column for column in from_data if column in data]
-            if columns != from_data:
-                warnings.warn(f'could not take all data columns {columns} != {from_data}')
-            return data[columns]
-
+    if len(from_data) or len(special_columns):
         if isinstance(data, (list, tuple)):  # NGC + SGC
-            data = Catalog.concatenate([_get(dd, list(from_data) + ['TARGETID']) for dd in data])
-        else:
-            data = _get(data, list(from_data) + ['TARGETID'])
+            data = Catalog.concatenate(data)
         data['TARGETID_DATA'] = data.pop('TARGETID')
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
             lookup = np.arange(1 + data['TARGETID_DATA'].max())
@@ -1232,15 +1231,21 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
             sorted_index = np.argsort(data['TARGETID_DATA'])
             index_in_sorted = np.searchsorted(data['TARGETID_DATA'], randoms['TARGETID_DATA'], sorter=sorted_index)
             index = sorted_index[index_in_sorted]
-        for column in data:
-            if column != 'TARGETID':
-                randoms[column] = data[column][index]
-        if 'FRAC_TLOBS_TILES' in from_data:
+        for column in from_data:
+            randoms[column] = data[column][index]
+        if 'FRAC_TLOBS_TILES' in special_columns:
+            # It would have been so much simpler if data had the column TILES!
             # Total random weights is FRAC_TLOBS_TILES * (WEIGHT_SYS * WEIGHT_COMP * WEIGHT_ZFAIL coming from z shuffling) * overall region-based normalization factor
-            data_weights = data['WEIGHT_SYS'] * data['WEIGHT_COMP'] * data['WEIGHT_ZFAIL']
-            randoms_data_weights = data_weights[index]
             # Correct up to a given region-based normalization factor
-            randoms['FRAC_TLOBS_TILES'] = randoms['WEIGHT'] / randoms_data_weights
+            data_wtotp = data['WEIGHT_COMP'] * data['WEIGHT_SYS'] * data['WEIGHT_ZFAIL']
+            randoms['FRAC_TLOBS_TILES'] = randoms.ones()
+            for region in ['NGC', 'SGC']:
+                mask_region_data = select_region(data['RA'], data['DEC'], region)
+                mask_region_randoms = select_region(randoms['RA'], randoms['DEC'], region)
+                data_wcomp_ntile = _compute_binned_weight(data['NTILE'][mask_region_data], data_wtotp[mask_region_data] / data['WEIGHT'][mask_region_data])
+                randoms['FRAC_TLOBS_TILES'][mask_region_randoms] = randoms['WEIGHT'][mask_region_randoms] / data_wtotp[index[mask_region_randoms]] * data_wcomp_ntile[randoms['NTILE'][mask_region_randoms]]
+            #data_wcomp_ntile = _compute_binned_weight(data['NTILE'], data_wtotp / data['WEIGHT'])
+            #randoms['FRAC_TLOBS_TILES'] = randoms['WEIGHT'] / data_wtotp[index] * data_wcomp_ntile[randoms['NTILE']]
     return randoms
 
 
@@ -1343,7 +1348,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 expand['data_fn'] = get_complete_data()
 
     if kind == 'randoms' and isinstance(expand, dict):
-        from_data = expand.get('from_data', ['Z', 'WEIGHT_SYS'])
+        from_data = expand.get('from_data', ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES'][:-1])
         # No need to import anything from data if reshuffling is performed
         if isinstance(reshuffle, dict): from_data = []
         from_randoms = expand.get('from_randoms', ['RA', 'DEC', 'NTILE'])
@@ -1469,7 +1474,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             new_wsys = weight_type.split('wsys-')[-1]
             if i == 0 and mpicomm.rank == 0:
                 logger.info(f'Use a different wsys weight: WEIGHT_{new_wsys.upper()}')
-            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog[f'WEIGHT_SYS']
+            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog['WEIGHT_SYS']
 
         if not keep_all_columns:
             catalog = catalog[[column for column in keep_columns if column in catalog]]
@@ -1804,6 +1809,7 @@ def merge_data_catalogs(output_fn: str | Path, input_fns: list[str | Path], fact
     if keep_columns is None:
         keep_columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_FKP', 'MASK']
         keep_columns += ['WEIGHT_COMP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'NX', 'NZ']
+    keep_columns = list(keep_columns)
     rng = np.random.RandomState(seed=seed)
 
     with MemoryMonitor() as mem:
@@ -1814,11 +1820,20 @@ def merge_data_catalogs(output_fn: str | Path, input_fns: list[str | Path], fact
             if 'NZ' in keep_columns and 'NZ' not in catalog:
                 data = catalog  # assumes data
                 data_wtotp = data['WEIGHT_COMP'] * data['WEIGHT_SYS'] * data['WEIGHT_ZFAIL']
-                data_ftile_ntile = _compute_binned_weight(data['NTILE'], data['FRAC_TLOBS_TILES'])
-                data_wcomp_ntile = _compute_binned_weight(data['NTILE'], data_wtotp / data['WEIGHT'])
-                # Inverse NX for NZ, Eq. 7.4 of https://arxiv.org/pdf/2405.16593
-                catalog['NZ'] = catalog['NX'] / (data_ftile_ntile[data['NTILE']] / data_wcomp_ntile[data['NTILE']])
+                catalog['NZ'] = - catalog.ones()
+                for region in ['NGC', 'SGC']:
+                    mask_data = select_region(data['RA'], data['DEC'], region=region)
+                    if not mask_data.any(): continue
+                    data_ntile = data['NTILE'][mask_data]
+                    # <wcomp>(ntile)
+                    data_wcomp_ntile = _compute_binned_weight(data_ntile, data_wtotp[mask_data] / data['WEIGHT'][mask_data])
+                    # <ftile>(ntile)
+                    data_ftile_ntile = _compute_binned_weight(data_ntile, data['FRAC_TLOBS_TILES'][mask_data])
+                    # Reconstruct n(z) from Eq. 7.4 of https://arxiv.org/pdf/2405.16593
+                    catalog['NZ'] = catalog['NX'][mask_data] / (data_ftile_ntile[data_ntile] / data_wcomp_ntile[data_ntile])
             columns = [column for column in keep_columns if column in catalog]
+            if columns != keep_columns:
+                warnings.warn(f'Could only get columns {columns} among the requested {keep_columns}.')
             catalogs.append(catalog[columns][mask])
             mem()
     merged = Catalog.concatenate(catalogs, intersection=True)
@@ -1868,12 +1883,13 @@ def merge_randoms_catalogs(output_fn: str | Path, input_fns: list[str | Path], p
     - This function isn't MPI-friendly (call from one process only).
     - Duplicate objects (same RA/DEC) are removed across catalogs to avoid double-counting.
     """
-    inputs = list(inputs)
-    ncatalogs = len(inputs)
+    input_fns = list(input_fns)
+    ncatalogs = len(input_fns)
     rng = np.random.RandomState(seed=seed)
 
     if keep_columns is None:
         keep_columns = ['RA', 'DEC', 'NX', 'TARGETID', 'TARGETID_DATA', 'WEIGHT', 'FRAC_TLOBS_TILES']
+    keep_columns = list(keep_columns)
 
     if parent_randoms_fn is not None:
         parent_randoms = read_catalog(parent_randoms_fn)
@@ -1903,6 +1919,8 @@ def merge_randoms_catalogs(output_fn: str | Path, input_fns: list[str | Path], p
                 logger.info(f'Expanding {input_fn}')
                 catalog = expand(catalog, input_data_fn=input_data_fn)
             columns = [column for column in keep_columns if column in catalog]
+            if columns != keep_columns:
+                warnings.warn(f'Could only get columns {columns} among the requested {keep_columns}.')
             if merged is None:
                 mask = rng.uniform(0., 1., catalog.size) < factor / ncatalogs
                 merged = catalog[columns][mask]
@@ -1946,26 +1964,32 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         merged_data = data
 
     data_wtotp = data['WEIGHT_COMP'] * data['WEIGHT_SYS'] * data['WEIGHT_ZFAIL']
+    merged_data_wtotp = merged_data['WEIGHT_COMP'] * merged_data['WEIGHT_SYS'] * merged_data['WEIGHT_ZFAIL']
     # Recomputing <wcomp>(ntile) from Eq. 7.3 of https://arxiv.org/pdf/2405.16593
     #data_wcomp_ntile = data_wtotp / data['WEIGHT']
     #merged_data_wcomp_ntile = merged_data_wtotp / merged_data['WEIGHT']
 
-    # This makes things work with complete_from_full_data below
-    data_wcomp_ntile = _compute_binned_weight(data['NTILE'], data_wtotp / data['WEIGHT'])
-    #print(data_wcomp_ntile[data['NTILE']] / (data_wtotp / data['WEIGHT']))
-
-    # <ftile>(ntile)
-    data_ftile_ntile = _compute_binned_weight(data['NTILE'], data['FRAC_TLOBS_TILES'])
-    # Reconstruct n(z) from Eq. 7.4 of https://arxiv.org/pdf/2405.16593
-    if merged_data is data:
-        merged_data_nz = data['NX'] / (data_ftile_ntile[data['NTILE']] / data_wcomp_ntile[data['NTILE']])
-    elif 'NZ' in merged_data:
-        merged_data_nz = merged_data['NZ']
-    else:
-        merged_data_wtotp = merged_data['WEIGHT_COMP'] * merged_data['WEIGHT_SYS'] * merged_data['WEIGHT_ZFAIL']
-        merged_data_wcomp_ntile = _compute_binned_weight(merged_data['NTILE'], merged_data_wtotp / merged_data['WEIGHT'])
-        merged_data_ftile_ntile = _compute_binned_weight(merged_data['NTILE'], merged_data['FRAC_TLOBS_TILES'])
-        merged_data_nz = merged_data['NX'] / (merged_data_ftile_ntile[merged_data['NTILE']] / merged_data_wcomp_ntile[merged_data['NTILE']])
+    data_wcomp_ntile, data_ftile_ntile = {}, {}
+    merged_data_nz = -data.ones()
+    # It looks like this operation was done for NGC, SGC separately
+    for region in ['NGC', 'SGC']:
+        mask_data = select_region(data['RA'], data['DEC'], region=region)
+        data_ntile = data['NTILE'][mask_data]
+        # <wcomp>(ntile)
+        data_wcomp_ntile[region] = _compute_binned_weight(data_ntile, data_wtotp[mask_data] / data['WEIGHT'][mask_data])
+        # <ftile>(ntile)
+        data_ftile_ntile[region] = _compute_binned_weight(data_ntile, data['FRAC_TLOBS_TILES'][mask_data])
+        # Reconstruct n(z) from Eq. 7.4 of https://arxiv.org/pdf/2405.16593
+        if merged_data is data:
+            merged_data_nz[mask_data] = data['NX'][mask_data] / (data_ftile_ntile[region][data_ntile] / data_wcomp_ntile[region][data_ntile])
+        elif 'NZ' in merged_data:
+            merged_data_nz = merged_data['NZ']
+        else:
+            mask_merged_data = select_region(merged_data['RA'], merged_data['DEC'], region=region)
+            merged_data_ntile = merged_data['NTILE'][mask_merged_data]
+            merged_data_wcomp_ntile = _compute_binned_weight(merged_data_ntile, merged_data_wtotp[mask_merged_data] / merged_data['WEIGHT'][mask_merged_data])
+            merged_data_ftile_ntile = _compute_binned_weight(merged_data_ntile, merged_data['FRAC_TLOBS_TILES'][mask_merged_data])
+            merged_data_nz[mask_merged_data] = merged_data['NX'][mask_merged_data] / (merged_data_ftile_ntile[merged_data_ntile] / merged_data_wcomp_ntile[merged_data_ntile])
 
     # P0 = np.rint(np.mean((1. / merged_data['WEIGHT_FKP'] - 1.) / merged_data['NX']))
     randoms['Z'] = -randoms.ones() # place holder, since will be filled with 'Z' from merged_data anyway
@@ -1987,6 +2011,8 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         randoms['WEIGHT'] = randoms.ones()
     else:
         randoms['WEIGHT'] = randoms[column]
+    randoms['WEIGHT_SYS'] = randoms.zeros()
+
     for region in regions:
         mask_data = select_region(data['RA'], data['DEC'], region=region)
         mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
@@ -2012,13 +2038,17 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
         randoms['WEIGHT'][mask_randoms] *= alpha
 
-    # @Ashley, is this is done *after* above renormalization?
     # Divide back by wcomp_ntile, Eq. 7.3 of https://arxiv.org/pdf/2405.16593
-    randoms_wcomp = data_wcomp_ntile[randoms['NTILE']]
-    randoms_ftile = data_ftile_ntile[randoms['NTILE']]
-    randoms['WEIGHT'] /= randoms_wcomp
-    # Recompute NX, Eq. 7.4 of https://arxiv.org/pdf/2405.16593
-    randoms['NX'] = randoms['NZ'] * (randoms_ftile / randoms_wcomp)
+    # @Ashley, is this is done *after* above renormalization?
+    randoms['NX'] = randoms.zeros()
+    for region in data_wcomp_ntile:
+        mask_region = select_region(randoms['RA'], randoms['DEC'], region=region)
+        randoms_wcomp = data_wcomp_ntile[region][randoms['NTILE'][mask_region]]
+        randoms_ftile = data_ftile_ntile[region][randoms['NTILE'][mask_region]]
+        randoms['WEIGHT'][mask_region] /= randoms_wcomp
+        # Recompute NX, Eq. 7.4 of https://arxiv.org/pdf/2405.16593
+        randoms['NX'][mask_region] = randoms['NZ'][mask_region] * (randoms_ftile / randoms_wcomp)
+
     randoms['WEIGHT_FKP'] = 1. / (1. + randoms['NX'] * P0)
     del randoms['NZ']
 

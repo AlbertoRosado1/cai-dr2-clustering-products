@@ -63,11 +63,11 @@ def run_stats(tracer='LRG', version='abacus-2ndgen-complete', complete=False, im
                 get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra='complete')
             else:
                 get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir)
-            #    options['catalog']['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'] | dict(region='ALL')))}
-            #    get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra='reshuffle')
+                options['catalog']['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'] | dict(region='ALL')))}
+                get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra='reshuffle')
             options = fill_fiducial_options(options)
-            #for tracer in options['catalog']:
-            #    options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran'])}
+            for tracer in options['catalog']:
+                options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
             compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, **options)
 
 
@@ -97,8 +97,8 @@ if __name__ == '__main__':
     imocks = np.arange(3)
 
     stats_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe')
-    version = 'abacus-2ndgen-complete'
-    #version = 'abacus-2ndgen-altmtl'
+    #version = 'abacus-2ndgen-complete'
+    version = 'abacus-2ndgen-altmtl'
     complete = False
 
     for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][1:]:
