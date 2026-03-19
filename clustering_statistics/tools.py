@@ -935,6 +935,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         Weight type. Options are 'default-FKP', 'defaut-FKP-bitwise', etc.
     imock : int, str, optional
         Mock index (for mock catalogs). If '*', return all existing mock filenames.
+        If `project` is an empty str the imock tag will be in the filename, otherwise the tag is used to identify a subdirectory named 'mock{imock}' within `project`.
     extra : str, optional
         Extra string to append to filename.
     ext : str
@@ -959,10 +960,10 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
     imock = catalog_options['imock']
     if imock[0] and imock[0] == '*':
         ntracers = len(catalog_options['tracer'])
-        fns = [get_stats_fn(stats_dir=stats_dir, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options | dict(imock=(imock,) * ntracers), **kwargs) for imock in range(2001)]
+        fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options | dict(imock=(imock,) * ntracers), **kwargs) for imock in range(2001)]
         return [fn for fn in fns if os.path.exists(fn)]
 
-    stats_dir = Path(stats_dir)
+    stats_dir = Path(stats_dir) / project
 
     def join_if_not_none(f, key):
         items = catalog_options.get(key, (None,))
@@ -975,9 +976,11 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         assert all(item is not None for item in items), f'provide {key}'
         return items
 
-    stats_dir = stats_dir / project
     version = join_if_not_none(str, 'version')
     if version: stats_dir = stats_dir / version
+    imock = join_if_not_none(str, 'imock')
+    if (project != '') and imock: stats_dir = stats_dir / f'mock{imock}'
+    imock = f'_{imock}' if imock and (project == '') else ''
     tracer = join_tracers(check_is_not_none('tracer'))
     zrange = join_if_not_none(lambda zrange: f'z{float2str(zrange[0], 1, 3)}-{float2str(zrange[1], 1, 3)}', 'zrange')
     zrange = f'_{zrange}' if zrange else ''
@@ -986,8 +989,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
     auw = '_auw' if auw else ''
     cut = '_thetacut' if cut else ''
     extra = f'_{extra}' if extra else ''
-    imock = join_if_not_none(str, 'imock')
-    imock = f'_{imock}' if imock else ''
+       
     corr_type = 'smu'
     battrs = kwargs.get('battrs', None)
     if battrs is not None: corr_type = ''.join(list(battrs))
