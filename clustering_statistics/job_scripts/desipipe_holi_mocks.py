@@ -36,7 +36,7 @@ tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
 tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='00:10:00',
                 mpiprocs_per_worker=2250, nodes_per_worker=25, output=output, error=error, stop_after=1, constraint='cpu'))
 
-def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], analysis='full_shape', ibatch=None, **kwargs):
+def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], analysis='full_shape', ibatch=None, postprocess=None, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -50,7 +50,7 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
     try: jax.distributed.initialize()
     except RuntimeError: print('Distributed environment already initialized')
     else: print('Initializing distributed environment')
-    from clustering_statistics import tools, setup_logging, compute_stats_from_options, fill_fiducial_options
+    from clustering_statistics import tools, setup_logging, compute_stats_from_options, fill_fiducial_options, postprocess_stats_from_options
     setup_logging()
 
     cache = {}
@@ -75,6 +75,11 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
                 for tracer in options['catalog']:
                     options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
             compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, **options)
+       
+        # postprocess
+        if postprocess:
+            postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True})    
+            postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
 def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], postprocess=['combine_regions'], **kwargs):
@@ -95,22 +100,28 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 
 if __name__ == '__main__':
 
-    # mode = 'interactive'
-    mode = 'slurm'
-    stats, postprocess = [], []
-    stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    # # mode = 'interactive'
+    # mode = 'slurm'
+    # stats, postprocess = [], []
+    # stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['mesh3_spectrum']
     #stats = ['window_mesh2_spectrum']
     #stats = ['covariance_mesh2_spectrum']
     #stats = ['window_mesh3_spectrum']
-    postprocess = ['combine_regions']
+    # postprocess = ['combine_regions']
     #postprocess = ['rotation_mesh2_spectrum']
-    imocks = np.arange(1001)
+    # imocks = np.arange(1001)
     # imocks = [0]
 
     # stats_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe')
     # version = 'holi-v1-altmtl'
     # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
+    # to run job
+    mode = 'slurm'
+    stats, postprocess = [], []
+    stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    postprocess = ['combine_regions']
+    imocks = np.arange(1001)
     stats_dir = tools.base_stats_dir
     analysis = 'full_shape'
     project = f'{analysis}/base'
@@ -136,7 +147,7 @@ if __name__ == '__main__':
                 _tm = tmw
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
        
-        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly)
+        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, postprocess=postprocess)
         if any('window' in stat for stat in stats):
             _imocks = [201]
             nbatches = 1
@@ -153,5 +164,5 @@ if __name__ == '__main__':
             batch_imocks = np.array_split(imocks, max(len(imocks) // 10, 1)) if len(imocks) else []
             for _imocks in batch_imocks:
                 get_run_stats()(imocks=_imocks, **run_stats_kws)
-        if postprocess:
-            postprocess_stats(imocks=imocks, postprocess=postprocess, **run_stats_kws)
+        # if postprocess:
+        #     postprocess_stats(imocks=imocks, postprocess=postprocess, **run_stats_kws)
