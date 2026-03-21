@@ -619,7 +619,7 @@ def _unzip_catalog_options(catalog):
     return toret
 
 
-def _zip_catalog_options(catalog, squeeze=True):
+def _zip_catalog_options(catalog, squeeze=True, unique=True):
     """From {tracer: {nran:..., zrange: ...}}, return {tracer: tuple or single tracer if same, nran: tuple or single number if same}"""
     tracers = tuple(catalog.keys())
     toret = {key: [] for tracer in tracers for key in catalog[tracer]}
@@ -627,6 +627,7 @@ def _zip_catalog_options(catalog, squeeze=True):
     for tracer in tracers:
         for key in toret:
             value = catalog[tracer].get(key, None)
+            if unique and value in toret[key]: continue
             toret[key].append(value)
             num[key] += 1
     toret = {key: tuple(value) if len(tracers) > 1 or not squeeze else value[0] for key, value in toret.items()}
@@ -837,6 +838,21 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
 
+        elif version == 'holi-v3-complete':
+            cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v3/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5' if 'full' in kind else 'h5'
+            if kind == 'data':
+                return cat_dir / f'{tracer}_complete_{region}_clustering.dat.{ext}'
+            if kind == 'randoms':
+                return [cat_dir / f'{tracer}_complete_{region}_{iran:d}_clustering.ran.{ext}' for iran in range(nran)]
+
+        elif version == 'holi-v3-altmtl':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v3'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5' if 'full' in kind else 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
+ 
         elif version == 'glam-uchuu-v1-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/GLAM-Uchuu_v1'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -867,8 +883,11 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
-                # Do not exist anymore?
-                cat_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
+                #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
+                cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
+            elif 'complete' in version:
+                #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
+                cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
             else:
                 cat_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/complete/')
             ext = 'fits'
@@ -877,6 +896,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'randoms':
                 return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
 
+    print(version)
     if cat_dir is None:
         raise ValueError('provide either cat_dir or version')
 
@@ -955,13 +975,12 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         catalog_options = _merge_catalog_options(catalog_options, {key: kwargs.pop(key) for key in list(kwargs) if key in _default_options}, zipped=[None, True])
         for tracer in catalog_options:
             catalog_options[tracer].setdefault('imock', None)
-    catalog_options = _zip_catalog_options(catalog_options, squeeze=False)
-    imock = catalog_options['imock']
-    if imock[0] and imock[0] == '*':
-        ntracers = len(catalog_options['tracer'])
-        fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options | dict(imock=(imock,) * ntracers), **kwargs) for imock in range(2001)]
+    imock = next(iter(catalog_options.values()))['imock']
+    if imock and imock == '*':
+        fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options, imock=imock, **kwargs) for imock in range(2001)]
         return [fn for fn in fns if os.path.exists(fn)]
 
+    catalog_options = _zip_catalog_options(catalog_options, squeeze=False, unique=True)
     stats_dir = Path(stats_dir) / project
 
     def join_if_not_none(f, key):
@@ -1227,8 +1246,7 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
     if len(from_data) or len(special_columns):
         if isinstance(data, (list, tuple)):  # NGC + SGC
             data = Catalog.concatenate(data)
-        if 'TARGETID' in data:
-            data['TARGETID_DATA'] = data.pop('TARGETID')
+        data['TARGETID_DATA'] = data.pop('TARGETID')
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
             lookup = np.arange(1 + data['TARGETID_DATA'].max())
             lookup[data['TARGETID_DATA']] = np.arange(len(data))
@@ -1988,6 +2006,8 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         # Reconstruct n(z) from Eq. 7.4 of https://arxiv.org/pdf/2405.16593
         if merged_data is data:
             merged_data_nz[mask_data] = data['NX'][mask_data] / (data_ftile_ntile[region][data_ntile] / data_wcomp_ntile[region][data_ntile])
+            #print(merged_data_nz[mask_data] / data['NZ'][mask_data])
+            #print(data_wcomp_ntile[region][data_ntile], 1. / data['WEIGHT'][mask_data])
         elif 'NZ' in merged_data:
             merged_data_nz = merged_data['NZ']
         else:
@@ -2011,11 +2031,12 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
 
     sum_data_weights, sum_randoms_weights = [], []
     column = 'FRAC_TLOBS_TILES'
-    if column not in randoms:
-        if not np.allclose(data.get(column, 1.), 1.):
-            warnings.warn(f"{column} not in randoms, but it isn't trivially one in the data; the reshuffled randoms will most likely not match the data")
+    if column in data and np.allclose(data[column], 1.):  # check for complete_from_full_data
         randoms['WEIGHT'] = randoms.ones()
-    else:
+    elif column not in randoms:
+        warnings.warn(f"{column} not in randoms, but it isn't trivially one in the data; the reshuffled randoms will most likely not match the data")
+        randoms['WEIGHT'] = randoms.ones()
+    else:  # let's trust the column in the randoms
         randoms['WEIGHT'] = randoms[column]
     randoms['WEIGHT_SYS'] = randoms.zeros()
 
@@ -2039,7 +2060,6 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
     alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
     # logger.info('alpha before renormalization: {}'.format(alphas))
-
     for region, alpha in zip(regions, alphas):
         mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
         randoms['WEIGHT'][mask_randoms] *= alpha
@@ -2049,8 +2069,9 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     randoms['NX'] = randoms.zeros()
     for region in data_wcomp_ntile:
         mask_region = select_region(randoms['RA'], randoms['DEC'], region=region)
-        randoms_wcomp = data_wcomp_ntile[region][randoms['NTILE'][mask_region]]
-        randoms_ftile = data_ftile_ntile[region][randoms['NTILE'][mask_region]]
+        randoms_ntile = randoms['NTILE'][mask_region]
+        randoms_wcomp = data_wcomp_ntile[region][randoms_ntile]
+        randoms_ftile = data_ftile_ntile[region][randoms_ntile]
         randoms['WEIGHT'][mask_region] /= randoms_wcomp
         # Recompute NX, Eq. 7.4 of https://arxiv.org/pdf/2405.16593
         randoms['NX'][mask_region] = randoms['NZ'][mask_region] * (randoms_ftile / randoms_wcomp)
@@ -2117,23 +2138,23 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
         mask_assigned = data['ZWARN'] != 999999
     else:
         mask_assigned = data.ones(dtype=bool)
-    weight_ntile = np.bincount(data['NTILE'], weights=mask_assigned)
-    mask_ntile = weight_ntile > 0
-    weight_ntile[mask_ntile] /= np.bincount(data['NTILE'])[mask_ntile]
-    for name in ['WEIGHT_COMP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'FRAC_TLOBS_TILES']:
+    for name in ['WEIGHT', 'WEIGHT_COMP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'FRAC_TLOBS_TILES']:
         data[name] = data.ones()
-    data['NZ'] = data.zeros()
+    for name in ['NZ', 'NX']:
+        data[name] = data.zeros()
     for region in nz:  # NGC, SGC
         mask_region = select_region(data['RA'], data['DEC'], region)
+        data_ntile = data['NTILE'][mask_region]
+        weight_ntile = _compute_binned_weight(data_ntile, mask_assigned[mask_region])
         zedges = np.insert(nz[region][2], 0, nz[region][1][0])
         idx = np.digitize(data['Z'][mask_region], zedges, right=False) - 1
         mask = (idx >= 0) & (idx < nz[region][3].size)
         tmpnz = np.zeros_like(idx, dtype=data['WEIGHT_COMP'].dtype)
         tmpnz[mask] = nz[region][3][idx[mask]]
         data['NZ'][mask_region] = tmpnz
-    data['NX'] = weight_ntile[data['NTILE']] * data['NZ']
+        data['NX'][mask_region] = weight_ntile[data_ntile] * tmpnz
+        data['WEIGHT'][mask_region] = weight_ntile[data_ntile]  # just completeness-weighting
     data['WEIGHT_FKP'] = 1 / (1 + P0 * data['NX'])
-    data['WEIGHT'] = weight_ntile[data['NTILE']]  # just completeness-weighting
     return data
 
 
