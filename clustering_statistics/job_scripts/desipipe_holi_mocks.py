@@ -2,7 +2,7 @@
 Script to create and spawn desipipe tasks to compute clustering measurements on HOLI mocks.
 To create and spawn the tasks on NERSC, use the following commands:
 ```bash
-salloc -N 1 -C "gpu&hbm80g" -t 01:00:00 --gpus 4 --qos interactive --account desi_g
+salloc -N 1 -C "gpu&hbm80g" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 export PYTHONPATH=$HOME/cai-dr2-clustering-products/:$PYTHONPATH
 python desipipe_holi_mocks.py         # create the list of tasks
@@ -29,7 +29,7 @@ output, error = 'slurm_outputs/holi_mocks/slurm-%j.out', 'slurm_outputs/holi_moc
 kwargs = {}
 environ = Environment('nersc-cosmodesi')
 tm = TaskManager(queue=queue, environ=environ)
-tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='01:30:00',
+tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu'))
 tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
@@ -76,10 +76,10 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
                     options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
             compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, **options)
        
-        # postprocess
-        if postprocess:
-            postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True})    
-            postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
+    # postprocess
+    if postprocess:
+        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True})    
+        postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
 def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], postprocess=['combine_regions'], **kwargs):
