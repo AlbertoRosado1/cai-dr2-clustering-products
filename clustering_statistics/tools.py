@@ -1251,6 +1251,8 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
     if len(from_data) or len(special_columns):
         if isinstance(data, (list, tuple)):  # NGC + SGC
             data = Catalog.concatenate(data)
+        else:
+            data = data.copy()  # shallow copy
         data['TARGETID_DATA'] = data.pop('TARGETID')
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
             lookup = np.arange(1 + data['TARGETID_DATA'].max())
