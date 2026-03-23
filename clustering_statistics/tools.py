@@ -511,7 +511,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
 
     if 'png' in analysis:
         # very stable with nran, cellsize and boxsize
-        propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': 750, 'cellsize': 20.}
+        propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': 700, 'cellsize': 20.}
     else:
         propose_meshsizes = {'BGS': 864, 'LRG': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
         # very stable with nran, cellsize and boxsize
@@ -1251,8 +1251,6 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
     if len(from_data) or len(special_columns):
         if isinstance(data, (list, tuple)):  # NGC + SGC
             data = Catalog.concatenate(data)
-        else:
-            data = data.copy()  # shallow copy
         data['TARGETID_DATA'] = data.pop('TARGETID')
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
             lookup = np.arange(1 + data['TARGETID_DATA'].max())
@@ -1668,6 +1666,8 @@ def compute_fkp_effective_redshift(*fkps, cellsize=10., order=2, split=None, fie
 
     Parameters
     ----------
+    fkps : FKPField, ParticleField
+        Input fields.
     cellsize : float, default=10.
         Cellsize to use for mesh assignment in Mpc/h.
     order : int, default=2
