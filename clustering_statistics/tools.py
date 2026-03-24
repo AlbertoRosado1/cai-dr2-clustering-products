@@ -880,7 +880,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
 
-        elif version == 'abacus-2ndgen-complete':
+        elif version == 'abacus-2ndgen-dr2-complete':
             if 'BGS' in tracer:
                 cat_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummitBGS_v2/mock{imock:d}'
             else:
@@ -891,7 +891,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'randoms':
                 return [cat_dir / f'{tracer}_complete_{iran:d}_clustering.ran.{ext}' for iran in nrans]
 
-        elif version == 'abacus-2ndgen-altmtl':
+        elif version == 'abacus-2ndgen-dr2-altmtl':
             if 'BGS' in tracer:
                 base_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummitBGS_v2'
             else:
@@ -901,6 +901,11 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             cat_dir = base_dir / f'altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
             ext = 'fits'
 
+        elif version == 'abacus-hf-dr2-v2-altmtl':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5'
+        
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
@@ -916,7 +921,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'randoms':
                 return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
 
-    print(version)
+    # print(version)
     if cat_dir is None:
         raise ValueError('provide either cat_dir or version')
 
@@ -1266,6 +1271,8 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
     if len(from_data) or len(special_columns):
         if isinstance(data, (list, tuple)):  # NGC + SGC
             data = Catalog.concatenate(data)
+        else:
+            data = data.copy()  # shallow copy
         data['TARGETID_DATA'] = data.pop('TARGETID')
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
             lookup = np.arange(1 + data['TARGETID_DATA'].max())
@@ -1471,6 +1478,11 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
 
             if zrange is not None:
                 catalog = catalog[(catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])]
+                if np.any(catalog['NX']==0):
+                    # remove entries with NX=0
+                    if mpicomm.rank == 0:
+                        logger.info(f'Found and removed {(catalog['NX']==0).sum()} objects with NX=0 from {fn}')
+                    catalog = catalog[catalog['NX']!=0]
             if 'bitwise' in weight_type:
                 # ADM: I guess this is because we want to restrict to TILE-intersections where we have observed something?
                 catalog = catalog[(catalog['FRAC_TLOBS_TILES'] != 0)]

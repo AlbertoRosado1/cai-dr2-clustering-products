@@ -36,7 +36,7 @@ tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
 tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='00:10:00',
                 mpiprocs_per_worker=2250, nodes_per_worker=25, output=output, error=error, stop_after=1, constraint='cpu'))
 
-def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], analysis='full_shape', ibatch=None, postprocess=None, **kwargs):
+def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], analysis='full_shape', ibatch=None, postprocess=None, zranges=None, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -54,7 +54,8 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
     setup_logging()
 
     cache = {}
-    zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+    if zranges is None:
+        zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
     for imock in imocks:
         regions = ['NGC', 'SGC']
         for region in regions: 
@@ -82,9 +83,10 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
         postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
-def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], postprocess=['combine_regions'], **kwargs):
+def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], postprocess=['combine_regions'], zranges=None, **kwargs):
     from clustering_statistics import postprocess_stats_from_options
-    zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+    if zranges is None:
+        zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
     options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True})    
     stats_dir_kws = dict(stats_dir=stats_dir, project=project)
     if onthefly == 'complete':
@@ -121,15 +123,25 @@ if __name__ == '__main__':
     stats, postprocess = [], []
     stats = ['mesh2_spectrum', 'mesh3_spectrum']
     postprocess = ['combine_regions']
-    imocks = np.arange(1001)
+    imocks = np.arange(60)
     stats_dir = tools.base_stats_dir
     analysis = 'full_shape'
     project = f'{analysis}/base'
     version = 'holi-v3-altmtl'
     onthefly = None
+    zranges = None
 
-    for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO']:
+    for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO'][:2]:
         if True:
+            # Rerun stats for high-z
+            if 'LRG' in tracer:
+                zranges = [(0.8,1.1)]
+            elif 'ELG' in tracer:
+                zranges = [(1.1,1.6)]
+            else:
+                zranges = None
+                
+        if False:
             exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer, region='NGC', version=version), test_if_readable=False, imock=list(range(1001)))[:2]
             imocks = exists[1]['imock']
             rerun = []
@@ -147,7 +159,7 @@ if __name__ == '__main__':
                 _tm = tmw
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
        
-        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, postprocess=postprocess)
+        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, postprocess=postprocess)
         if any('window' in stat for stat in stats):
             _imocks = [201]
             nbatches = 1
