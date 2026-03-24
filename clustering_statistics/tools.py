@@ -117,7 +117,7 @@ def get_simple_stats(stats):
         return 'spectrum3'
     elif stats == 'particle2_correlation':
         return 'correlation2'
-    elif stats == 'particle2_correlation_recon':
+    elif stats == 'recon_particle2_correlation':
         return 'correlation2recon'
     else:
         raise NotImplementedError(f'stats {stats} is unknown')
@@ -453,11 +453,11 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     """
     base = {"catalog": {}, "particle2_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
     propose_fiducial = {
-        'BGS': {'nran': 3, 'recon': {'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
-        'LRG+ELG': {'nran': 13, 'recon': {'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
-        'LRG': {'nran': 10, 'recon': {'bias': 2.0, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
-        'ELG': {'nran': 15, 'recon': {'bias': 1.2, 'smoothing_radius': 15., 'zrange': (0.8, 1.6)}},
-        'QSO': {'nran': 4, 'recon': {'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}}
+        'BGS': {'nran': 3, 'recon': {'mode': 'recsym', 'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
+        'LRG+ELG': {'nran': 13, 'recon': {'mode': 'recsym', 'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
+        'LRG': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 2.0, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
+        'ELG': {'nran': 15, 'recon': {'mode': 'recsym', 'bias': 1.2, 'smoothing_radius': 15., 'zrange': (0.8, 1.6)}},
+        'QSO': {'nran': 4, 'recon': {'mode': 'recsym', 'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}}
 
     tracers = _make_tuple(tracer)
     simple_tracers = [get_simple_tracer(tracer) for tracer in tracers]
@@ -538,7 +538,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
         translate_template_tracer = {'BGS': 'BGS_BRIGHT', 'ELG_LOPnotqso': 'ELG_LOPnotqso', 'ELG': 'ELG', 'LRG': 'LRG', 'QSO': 'QSO'}
         for tt, template_tracer in translate_template_tracer.items():
-            if tracers[0] in tt:
+            if tt in tracers[0]:
                 break
             else:
                 template_tracer = None
@@ -803,6 +803,26 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             else:
                 cat_dir = cat_dir / 'v1.5'
             ext = 'fits'
+
+        elif version == 'data-dr2-v1.1':
+            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v1.1'
+            ext = 'fits'
+            if kind == 'parent_randoms':
+                program = 'bright' if 'BGS' in tracer else 'dark'
+                return [cat_dir / f'{program}_{iran}_full_noveto.ran.{ext}' for iran in nrans]
+            if 'bitwise' in weight:
+                data_dir = cat_dir / 'PIP'
+            else:
+                data_dir = cat_dir / 'nonKP'
+            ext = 'fits'
+            if kind == 'data':
+                return data_dir / f'{tracer}_{region}_clustering.dat.{ext}'
+            if kind == 'randoms':
+                return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{ext}' for iran in nrans]
+            if kind == 'full_data':
+                return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
+            if kind == 'full_randoms':
+                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
 
         elif version == 'data-dr2-v2':
             cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'

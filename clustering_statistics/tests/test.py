@@ -123,8 +123,8 @@ def test_correlation():
         for region in ['NGC', 'SGC']:
             catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=451, nran=2)
             catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
-            #compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), particle2_correlation={})
-
+            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), particle2_correlation={})
+    exit()
     options = dict(catalog=catalog_options, combine_regions={'stats': ['particle2_correlation']})
     postprocess_stats_from_options(['combine_regions'], get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **options)
 
@@ -362,9 +362,8 @@ if __name__ == '__main__':
     setup_logging()
 
     jax.distributed.initialize()
-    #test_correlation()
-    test_covariance()
-    exit()
+    test_correlation()
+    #test_covariance()
     #test_stats_fn()
     #test_complete_catalog()
     #test_expand_randoms_catalog()
