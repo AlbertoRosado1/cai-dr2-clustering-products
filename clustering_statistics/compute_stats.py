@@ -648,7 +648,7 @@ def main(**kwargs):
     parser.add_argument('--boxsize',  help='box size', type=float, default=None)
     parser.add_argument('--cellsize', help='cell size', type=float, default=None)
     parser.add_argument('--nran', help='number of random files to combine together (1-18 available)', type=int, default=None)
-    parser.add_argument('--make_complete', help='make on-the-fly (completeness-weighted) complete catalogs', type=str, default=None)
+    parser.add_argument('--make_complete', help='make on-the-fly (completeness-weighted) complete catalogs', action='store_true', default=None)
     parser.add_argument('--expand_randoms', help='expand catalog of randoms; provide version of parent randoms (must be registered in get_catalog_fn)', type=str, default=None)
     meas_dir = Path(os.getenv('SCRATCH')) / 'measurements'
     parser.add_argument('--stats_dir',  help=f'base directory for measurements, default is {meas_dir}', type=str, default=meas_dir)
