@@ -37,7 +37,6 @@ def default_mpicomm(func: Callable):
     @functools.wraps(func)
     def wrapper(*args, mpicomm=None, **kwargs):
         if mpicomm is None:
-            from mpi4py import MPI
             mpicomm = MPI.COMM_WORLD
         return func(*args, mpicomm=mpicomm, **kwargs)
 
@@ -775,9 +774,10 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
     Returns
     -------
-    fn : Path, list
+    fn : Path, tuple, list
         Catalog file name(s).
-        Multiple file names are returned as a list when region is 'ALL' or when kind is 'randoms' or 'full_randoms', or imock is '*'.
+        Return tuple of file names for each region if relevant. (e.g. 'ALL' => ['NGC', 'SGC'])
+        Return list of file names when kind is 'randoms' or 'full_randoms', or imock is '*'.
     """
     if region in ['N', 'NGC', 'NGCnoN']: region = 'NGC'
     elif region in ['SGC', 'SGCnoDES', 'DES', 'SSGC']: region = 'SGC'
@@ -790,7 +790,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         if any(isinstance(fn_list, list) for fn_list in fn_lists):
             return list(zip(*fn_lists)) # return list of tuples (filename_NGC, filename_SGC)
         else:
-            return fn_lists
+            return tuple(fn_lists)
     nrans = nran
     if not isinstance(nran, list):
         nrans = list(range(nran))
@@ -1346,13 +1346,13 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
     assert kind in ['data', 'randoms'], 'provide kind (data or randoms)'
     zrange, region, weight_type, imock, tracer = (kwargs.get(key) for key in ['zrange', 'region', 'weight', 'imock', 'tracer'])
     assert weight_type is not None, 'provide weight'
-    reshuffle_condition = (kind == 'randoms') and (isinstance(reshuffle, dict) or (reshuffle is not None))
+    reshuffle_condition = (kind == 'randoms') and (reshuffle is not None)
     if reshuffle_condition:
         # if randoms are going to be reshuffled, all regions are needed so we force it.
         fns = get_catalog_fn(kind=kind, **(kwargs | dict(region='ALL')))
     else:
         fns = get_catalog_fn(kind=kind, **kwargs)
-    if not isinstance(fns, (tuple, list)): fns = [fns]
+    if not isinstance(fns, list): fns = [fns]
     exists = {ff: os.path.exists(ff) for fn in fns for ff in (fn if isinstance(fn, (list, tuple)) else [fn])}
     if not all(exists.values()):
         raise IOError(f'Catalogs {[fn for fn, ex in exists.items() if not ex]} do not exist!')
@@ -1369,8 +1369,6 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
     if isinstance(complete, dict):
 
         def get_complete_data():
-            if complete_data is not None:
-                return complete_data
             full_data_fn = get_catalog_fn(kind='full_data', **(kwargs | dict(region='ALL')))
             forfa_data_fn = get_catalog_fn(kind='forfa_data', **(kwargs | dict(region='ALL')))
             nz = {region: np.loadtxt(get_catalog_fn(kind='nz', **(kwargs | dict(region=region))), unpack=True) for region in ['NGC', 'SGC']}
@@ -1378,7 +1376,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             forfa_data = _read_catalog(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
             return complete_from_full_data(forfa_data, full_data, nz=nz, tracer=tracer,
                                     with_completeness=complete.get('with_completeness', True),
-                                    seed=42)
+                                    seed=complete.get('seed', 100 * imock))
 
         if kind == 'data':
             logger.info('On-the-fly complete data.')
@@ -1386,6 +1384,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             if isinstance(reshuffle, dict):
                 # To avoid recreating data
                 reshuffle['data_fn'] = complete_data
+            fns = [None]  # just one data catalog, already computed!
         elif kind == 'randoms':
             # Force reshuffling
             if not isinstance(reshuffle, dict):
@@ -1394,22 +1393,22 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 warnings.warn('When creating complete data on-the-fly, '
                               'pass a reshuffle dictionary when reading data catalog '
                               'to avoid recomputing data for randoms shuffling')
-                reshuffle['data_fn'] = complete_data = get_complete_data()
+                reshuffle['data_fn'] = get_complete_data()
             reshuffle.setdefault('merged_data_fn', reshuffle['data_fn'])
             logger.info('Reshuffling randoms to match on-the-fly complete data.')
             if isinstance(expand, dict):
-                expand['data_fn'] = get_complete_data()
+                expand['data_fn'] = reshuffle['data_fn']
 
     if kind == 'randoms' and isinstance(expand, dict):
-        from_data = expand.get('from_data', ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES'][:-1])
         # No need to import anything from data if reshuffling is performed
-        if isinstance(reshuffle, dict): from_data = []
+        from_data = expand.get('from_data', [] if isinstance(reshuffle, dict) else ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES'][:-1])
         from_randoms = expand.get('from_randoms', ['RA', 'DEC', 'NTILE'])
         parent_randoms_fn = expand['parent_randoms_fn']
         if not isinstance(parent_randoms_fn, (tuple, list)):
             parent_randoms_fn = [parent_randoms_fn]
         if mpicomm.rank == 0:
             logger.info('Expanding randoms')
+        # WARNING: order matters!
         parent_randoms = []
         for ifn, fn in enumerate(parent_randoms_fn):
             if fn not in expand:
@@ -1446,8 +1445,9 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             if mpicomm.rank == 0:
                 logger.info('Reshuffling randoms')
             merged_data = _read_catalog(merged_data_fn, mpicomm=MPI.COMM_SELF)
-        def reshuffle(catalog, seed):
-            return reshuffle_randoms(catalog, merged_data=merged_data, data=data, tracer=tracer, seed=seed)
+        seed = reshuffle.get('seed', 100 * imock)
+        def reshuffle(catalog, ifn, seed=seed):
+            return reshuffle_randoms(catalog, merged_data=merged_data, data=data, tracer=tracer, seed=seed + ifn)
     else:
         reshuffle = None
 
@@ -1468,7 +1468,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 if mpicomm.rank == 0:
                     t0 = time.time()
                     logger.info('Reshuffling randoms started.')
-                catalog = reshuffle(catalog, 100 * imock + ifn)
+                catalog = reshuffle(catalog, ifn)
                 if mpicomm.rank == 0:
                     logger.info(f'Reshuffling randoms completed in {time.time() - t0:2.1f} s')
 
@@ -1480,7 +1480,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
 
             if zrange is not None:
                 catalog = catalog[(catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])]
-                if np.any(catalog['NX'] == 0):
+                if 'NX' in catalog and np.any(catalog['NX'] == 0):
                     # remove entries with NX=0
                     if mpicomm.rank == 0:
                         logger.info(f'Found and removed {(catalog['NX'] == 0).sum()} objects with NX=0 from {fn}')
