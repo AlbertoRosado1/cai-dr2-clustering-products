@@ -2027,7 +2027,7 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     #merged_data_wcomp_ntile = merged_data_wtotp / merged_data['WEIGHT']
 
     data_wcomp_ntile, data_ftile_ntile = {}, {}
-    merged_data_nz = -data.ones()
+    merged_data_nz = -merged_data.ones()
     # It looks like this operation was done for NGC, SGC separately
     for region in ['NGC', 'SGC']:
         mask_data = select_region(data['RA'], data['DEC'], region=region)
