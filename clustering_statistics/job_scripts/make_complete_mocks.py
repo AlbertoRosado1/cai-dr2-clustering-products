@@ -55,9 +55,14 @@ if __name__ == '__main__':
     imocks = 150 + np.arange(50)
     nran = 18
     version = 'glam-uchuu-v2-altmtl'
+    if 'altmtl' in version:
+        complete_version = str(version).replace('altmtl','') 
+    else:
+        complete_version = version
     # output_cat_dir = Path(os.getenv('SCRATCH')) / 'clustering_catalogs' / f'{version}_complete'
-    output_cat_dir = tools.base_stats_dir / 'auxiliary_data' / f'{version}-complete'
+    output_cat_dir = tools.base_stats_dir / 'auxiliary_data' / f'{complete_version}-complete'
 
     for tracer in tracers:
         for imock in imocks:
-            make_complete_catalogs(tracer=tracer, imock=imock, version=version, output_cat_dir=output_cat_dir / f'complete{imock:d}', nran=nran)
+            full_output_cat_dir = output_cat_dir / f'complete{imock:d}/loa-v1/mock{imock:d}/LSScats/'
+            make_complete_catalogs(tracer=tracer, imock=imock, version=version, output_cat_dir=full_output_cat_dir, nran=nran)
