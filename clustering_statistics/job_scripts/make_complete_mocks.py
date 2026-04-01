@@ -1,7 +1,8 @@
 """
 Run with:
 ```bash
-salloc -N 1 -C cpu -t 02:00:00 --qos interactive
+salloc -N 1 -C cpu -t 04:00:00 --qos interactive
+source /global/common/software/desi/users/adematti/cosmodesi_environment.sh new
 srun -n 18 python make_complete_mocks.py
 ```
 """
@@ -51,10 +52,11 @@ if __name__ == '__main__':
     setup_logging()
 
     tracers = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    imocks = 100 + np.arange(50)
+    imocks = 150 + np.arange(50)
     nran = 18
-    version = 'glam-uchuu-v1-altmtl'
-    output_cat_dir = Path(os.getenv('SCRATCH')) / 'clustering_catalogs' / f'{version}_complete'
+    version = 'glam-uchuu-v2-altmtl'
+    # output_cat_dir = Path(os.getenv('SCRATCH')) / 'clustering_catalogs' / f'{version}_complete'
+    output_cat_dir = tools.base_stats_dir / 'auxiliary_data' / f'{version}-complete'
 
     for tracer in tracers:
         for imock in imocks:
