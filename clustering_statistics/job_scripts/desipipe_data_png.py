@@ -108,7 +108,6 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
 
                 options['window_mesh2_spectrum_fm']['n_realizations'] = 1
                 options['window_mesh2_spectrum_fm']['seeds'] = [1]
-
                 # update tje template as function of the weight use here:
                 #options['window_mesh2_spectrum_fm']['regression_maps'] = xxx
             
@@ -213,7 +212,6 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')
             #zranges = [0.4, 3.5]
             logger.info(f'zranges: {zranges}')
-
             weights = ['default-fkp-oqe', 'default-fkp'][:1]
             # Choice of imaging systematics avaialble in the catalogs: https://desi.lbl.gov/trac/wiki/keyprojects/Y3-DR/LSScat/imaging_systematics
             # if tracer in ['LRG', 'LRG_zcmb']:
