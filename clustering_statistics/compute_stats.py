@@ -30,7 +30,7 @@ import jax.experimental.multihost_utils
 import lsstypes as types
 
 from . import tools
-from .tools import fill_fiducial_options, _merge_options, Catalog, setup_logging
+from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, setup_logging
 from .correlation2_tools import compute_angular_upweights, compute_particle2_correlation
 from .spectrum2_tools import (
     compute_mesh2_spectrum,
@@ -359,8 +359,10 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         # Extract basis from spectrum if available
                         basis = getattr(next(iter(window[key].observable)), 'basis', None)
                         if basis is not None: kw['basis'] = basis
-                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
-                        tools.write_stats(fn, window[key])
+                        # Also save under "geometry", to assemble with forward-modeled window "window_mesh2_spectrum_fm"
+                        for suffix in ['', '_geometry']:
+                            fn = get_stats_fn(kind=stat + suffix, catalog=fn_catalog_options, **kw)
+                            tools.write_stats(fn, window[key])
 
                 # Write raw correlation functions (intermediate products) to disk
                 for key in window:
@@ -460,7 +462,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
                 # Now compute window function using forward model with derivatives
                 window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, theory=theory, **window_options)
-                # This is a dict of dict of lists of windows : {modeled_effect:{spectrum_region:[window, ...], ...}, ...}
+                # This is a dict of dict of lists of windows : {modeled_effect: {spectrum_region: [window, ...], ...}, ...}
                 for effect in window:  # geo, RIC or RIC+AMR
                     for spectrum_region in window[effect]:  # eg NGC, SGC
                         for i, seed in enumerate(window_options["seeds"]):
@@ -604,7 +606,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
     ----------
     postprocess : str or list of str
         Postprocessing.
-        Choices: ['combine_regions', 'rotation_mesh2_spectrum']
+        Choices: ['combine_regions', 'combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum']
     analysis : str, optional
         Type of analysis, 'full_shape' or 'png_local', to set fiducial options.
     get_stats_fn : callable, optional
@@ -679,6 +681,36 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                         # Measurements need to loop over mocks
                         for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options)):
                             _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **_options)
+
+        if 'combine_window_mesh2_spectrum' in postprocess:
+            # Combine base window calculation with forward-modeled windows
+            stat = 'window_mesh2_spectrum'
+            combine_options = dict(options.get('combine_window_mesh2_spectrum', {}))
+            effect = combine_options.pop('effect', 'RIC+AMR')
+            kw_interpolate = dict(combine_options)
+            window_options = options.get(stat, {})
+            window_fm_options = options.get(f'{stat}_fm', {})
+            window_fm = None
+            # Iterate on cut = False, True
+            for window_geometry_fn, kw in list_stats(f'{stat}_base', get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **window_options):
+                window_geometry = types.read(window_geometry_fn)
+                if window_fm is None:
+                    window_realizations = []
+                    for i, seed in enumerate(window_fm_options['seeds']):
+                        diff = []
+                        for _effect in ['geo', effect]:
+                            if window_fm_options['ellsout'] is None:
+                                extra = f"{_effect}_seed={seed}"
+                            else:
+                                listell = "".join(map(str, window_fm_options['ellsout']))
+                                extra = f'{_effect}_{listell}_seed={seed}'
+                            diff.append(types.read(get_stats_fn(kind=f'{stat}_fm', **(kw | {"extra": extra}))))
+                        window_realizations.append(diff[0].clone(value=diff[1].value() - diff[0].value()))
+                    window_fm = interpolate_window_realizations(window_geometry, window_realizations=window_realizations, **kw_interpolate)
+                fn = get_stats_fn(kind=stat, **kw)
+                # Adding all effects
+                window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
+                tools.write_stats(fn, window)
 
         if 'rotation_mesh2_spectrum' in postprocess:
             # Compute rotation matrix for power spectrum (corrections for systematic effects)
