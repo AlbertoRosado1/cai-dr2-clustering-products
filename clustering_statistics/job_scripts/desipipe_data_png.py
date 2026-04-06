@@ -106,6 +106,8 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
                 options['window_mesh2_spectrum_fm']['ric'] = kwargs.get('ric', True)
                 options['window_mesh2_spectrum_fm']['ellsout'] = kwargs.get('ellsout', None)
 
+                options['window_mesh2_spectrum_fm']['seeds'] = 1
+
                 # update tje template as function of the weight use here:
                 #options['window_mesh2_spectrum_fm']['regression_maps'] = xxx
             
@@ -152,7 +154,7 @@ if __name__ == '__main__':
     source /global/homes/e/edmondc/.bash_profile
     export HDF5_USE_FILE_LOCKING=TRUE
     
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo
     
     """
     from clustering_statistics import setup_logging
