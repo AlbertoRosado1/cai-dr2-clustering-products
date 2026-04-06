@@ -336,29 +336,25 @@ def test_window_fm(tracer='QSO'):
         "imock": 451,
         "nran": 1,
         "keep_columns": True,
-        "weight": "default-OQE",
+        "weight": "default-oqe",
     }
     mattrs = {"cellsize": 40.0}
     extra = f"mytest_tracer_{tracer}"
+    options = {'catalog': catalog_options, 'mattrs': mattrs,
+               'mesh2_spectrum': {"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer)},
+               'window_mesh2_spectrum': {"method": "exact"},
+               'combine_window_mesh2_spectrum': {},
+               'window_mesh2_spectrum_fm': {"theory": None, "n_realizations": 2, "seeds": [42, 84]}}
 
-    for region in ['NGC', 'SGC'][:0]:
+    get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
+    for region in ['NGC', 'SGC']:
         compute_stats_from_options(["mesh2_spectrum", "window_mesh2_spectrum"],
-            catalog=catalog_options | dict(region=region),
-            mattrs=mattrs,
-            get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
-            mesh2_spectrum={"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),},
-        )
+            get_stats_fn=get_stats_fn,
+            **(options | {'catalog': catalog_options | dict(region=region)}))
 
-    templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
-    compute_stats_from_options(["window_mesh2_spectrum_fm"],
-        catalog=catalog_options,
-        mattrs=mattrs,
-        get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
-        mesh2_spectrum={"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),},
-        window_mesh2_spectrum_fm=fiducial | {"theory": None, "n_realizations": 1, "seeds": [42],
-        "optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),
-        },
-    )
+    compute_stats_from_options(["window_mesh2_spectrum_fm"], get_stats_fn=get_stats_fn, **options)
+    for region in ['NGC', 'SGC']:
+        postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}))
 
 
 if __name__ == '__main__':
