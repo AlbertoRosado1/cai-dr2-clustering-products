@@ -21,6 +21,7 @@ doc/_build/
 **/_plots/*
 
 **/log
+**/tmp
 
 # Unit test / coverage reports
 **/.coverage
