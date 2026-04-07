@@ -479,8 +479,8 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
             # Get normalization from input power spectrum
             norm = jnp.concatenate([spectrum.get(ell).values('norm') for ell in ells], axis=0)
 
+            results = {}
             if method == 'smooth':
-                results = {}
                 correlations = []
                 # Get window basis attributes (which multipoles to compute in correlation space)
                 kw_window = get_smooth2_window_bin_attrs(ells, ellsin)
@@ -546,6 +546,8 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                 window = window.clone(value=window.value() / (norm[..., None] / np.mean(norm)))
             elif method == 'exact':
                 all_mesh = []
+                if jax.process_index() == 0:
+                    logger.info(f'Using {mattrs}')
                 # Paint random catalogs on mesh
                 for iran, randoms in enumerate(split_particles(all_randoms + [None] * (2 - len(all_randoms)), seed=seed, fields=fields)):
                     # Redistribute particles to mesh and exchange across MPI processes
@@ -554,8 +556,9 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                     alpha = pole.attrs['wsum_data'][isum][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
                     # Paint random particles with proper normalization onto mesh
                     all_mesh.append(alpha * randoms.paint(**kw_paint, out='real'))
-                window = compute_mesh2_spectrum_window(*all_mesh, edgesin=edgesin, ellsin=ellsin, los=los, bin=bin, pbar=True, flags=('infinite',), norm=1.)
-                window = window.clone(value=window.value() / norm[..., None])
+                window = compute_mesh2_spectrum_window(*all_mesh, edgesin=edgesin, ellsin=ellsin, los=los, bin=bin, pbar=False, flags=('infinite',), norm=1.)
+                # FIXME
+                window = window.clone(value=window.value().real / norm[..., None])
 
             # Update window with spectrum normalization from input power spectrum
             observable = window.observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'), attrs=pole.attrs), input_label=True)
@@ -564,6 +567,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
             if cut:
                 # Compute theta-cut contribution to window
                 sattrs = {'theta': (0., 0.05)}
+                kw_window = get_smooth2_window_bin_attrs(ells, ellsin)
                 #pbin = BinParticle2SpectrumPoles(mattrs, edges=bin.edges, xavg=bin.xavg, sattrs=sattrs, **kw_window)
                 # Use correlation binning for close pairs (finer bins than spectrum)
                 pbin = BinParticle2CorrelationPoles(mattrs, edges={'step': 0.1}, sattrs=sattrs, **kw_window)
@@ -576,17 +580,17 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                 # Count close pairs directly
                 correlation = compute_particle2(*all_particles, bin=pbin, los=los)
                 # Attach normalization and shot noise
-                correlation = correlation.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields), norm=[np.mean(norm)] * len(sbin.ells))
+                correlation = correlation.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields), norm=[np.mean(norm)] * len(pbin.ells))
                 pole = next(iter(correlation))
                 # Interpolate close pair correlation to logarithmic grid
                 coords = jnp.logspace(-3, 5, 4 * 1024)
                 correlation = interpolate_window_function(correlation, coords=coords, order=3)
                 results['window_mesh2_correlation_cut'] = correlation
-                # Combine raw and close-pair correlations (add contributions)
-                correlation = correlation.clone(value=results['window_mesh2_correlation_raw'].value() + correlation.value())
+                ## Combine raw and close-pair correlations (add contributions)
+                #correlation = correlation.clone(value=results['window_mesh2_correlation_raw'].value() + correlation.value())
                 # Convert combined correlation to power spectrum window
                 window = compute_smooth2_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',))
-                results['cut'] = window.clone(observable=results['raw'].observable, value=window.value() / (norm[..., None] / np.mean(norm)))
+                results['cut'] = window.clone(observable=results['raw'].observable, value=results['raw'].value() + window.value() / (norm[..., None] / np.mean(norm)))
             # Convert correlation results to observable tree structure (for consistency with other outputs)
             for key, result in results.items():
                 if 'correlation' in key:
@@ -829,8 +833,8 @@ def compute_window_mesh2_spectrum_fm(
         all_particles = prepare_jaxpower_particles(
             *get_data_randoms,
             mattrs=mattrs,
-            add_randoms=["IDS", "WEIGHT_FKP", "Z", *regression_maps, *columns_optimal_weights],
-            add_data=["WEIGHT_FKP", "Z", *regression_maps, *columns_optimal_weights])
+            add_randoms=["IDS", "WEIGHT_FKP", "Z", *columns_optimal_weights] + (list(regression_maps) if amr else []),
+            add_data=["WEIGHT_FKP", "Z", *columns_optimal_weights] + (list(regression_maps) if amr else []))
 
         all_randoms = [particles["randoms"] for particles in all_particles]
         all_data = [particles["data"] for particles in all_particles]
@@ -892,8 +896,9 @@ def compute_window_mesh2_spectrum_fm(
             binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
 
             # Temporarily add FKP weights to the fkp_fields weights for norm and analytical computation
+            # FIXME: cellsize (actually, read normalization from data pk as in compute_mesh2_window_spectrum)
             fkp_norms = [
-                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "WEIGHT_FKP"), bin=binner, cellsize=10.0)
+                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "WEIGHT_FKP"), bin=binner, cellsize=20.0)
                 for fkp in fkp_fields]
 
             ## FM based computations
@@ -965,7 +970,7 @@ def compute_window_mesh2_spectrum_fm(
             if geo:
                 windows["geometry"] = {}
             if ric:
-                windows['extrac_effects'] = {}
+                windows[extra_effects] = {}
 
             for ell in ellsout:
                 binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
