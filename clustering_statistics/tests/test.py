@@ -351,7 +351,7 @@ def test_window_fm(tracer='QSO'):
                'window_mesh2_spectrum_fm': {"theory": None, "n_realizations": 2, "seeds": [42, 84]}}
 
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
-    for region in ['NGC', 'SGC'][:0]:
+    for region in ['NGC', 'SGC']:
         compute_stats_from_options(["mesh2_spectrum", "window_mesh2_spectrum"],
             get_stats_fn=get_stats_fn,
             **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
