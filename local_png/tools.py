@@ -32,6 +32,7 @@ def rebin_data(pk, window, cov, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=2e-2,
     """
     tracers = tuple(tracer.split('x')) 
     if len(tracers) == 1: tracers *= 2
+    tracers = (tracers[0][:3], tracers[1][:3])  # LRG_zcmb -> LRG, ELGnotqso -> ELG, ... 
 
     # Let's rebin the power spectrum : 
     # print(f'Original k shape (ell=0): {pk.get(0).k.shape[0]}')
@@ -49,6 +50,140 @@ def rebin_data(pk, window, cov, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=2e-2,
     logger.info(f'After rebinning and k range selection: {pk.get(0).k.shape[0]} and {pk.get(2).k.shape[0] if use_ell2 else "Not used"} data points.')
 
     return pk, window, cov
+
+
+def _rescale_bias_params(likelihood, tracer, zeff):
+    """ 
+    Fix the bias parameters in the likelihood according to the redshift dependence of the bias.
+
+    Args:
+        likelihood: The likelihood object.
+        tracer: The tracer for which to fix the bias parameters.
+        zeff: The effective redshifts.
+    """
+    from clustering_statistics import tools        
+    # b(z) = alpha * (1 + z)**2 + beta
+    alpha, beta = tools.bias(1, tracer=tracer[0][:3], return_params=True)  
+    factor = (alpha * (1 + zeff[1])**2 + beta) / (alpha * (1 + zeff[0])**2 + beta)
+    likelihood.all_params[f"{tracer[1]}.b1"].update(value=factor * likelihood.all_params[f"{tracer[0]}.b1"].value)
+
+
+def get_obervable_and_likelihood(pk, window, cov, tracer, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, fix_fnl=False, engine='class', **kwargs):
+    """
+    Get the observable and likelihood for a given tracer. Each multipole is treated as a different observable, but they share the same parameters in the theory.
+
+    Args:
+        pk: lsstypes Mesh2SpectrumPoles observable containing the power spectrum multipoles.
+        window: lsstypes WindowMatrix matches the power spectrum multipoles.
+        cov: lsstypes CovarianceMatrix matches the power spectrum multipoles.
+        tracer: name of the tracer used to define the parameters in the theory and avoid duplicates when combining the different observables.
+        p (dict, optional): Value of p parameter. Defaults to {'LRG': 1., 'ELG': 1., 'QSO': 1.4}.
+        fix_fnl (bool, optional): If true do not fit for $f_{\rm NL}^{\rm loc}$. Defaults to False.
+        engine (str, optional): Solver for perturbation theory computation ('class', 'camb' or either that works in cosmoprimo). Defaults to 'class'.
+        
+    Kwargs:
+         kwargs[f"LRG_cross_ell0.b1"] value used to fix one of the two b1 in the cross-correlation otherwise fix it to 1 (the damping term is set to 0).
+
+    Returns:
+       observables: list of monopole and quadrupole (if used) desilike observables.
+       likelihood: desilike likelihood to run profer or MCMC on.
+    """
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, PNGTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from cosmoprimo.fiducial import DESI
+
+    tracers = tuple(tracer.split('x'))
+    if len(tracers) == 1: tracers *= 2
+    tracers = (tracers[0][:3], tracers[1][:3])  # LRG_zcmb -> LRG, ELGnotqso -> ELG, ...
+
+    cross_correlation = (tracers[0] != tracers[1])
+
+    observables = []
+    zeff = []
+
+    for ell in pk.ells:
+        zeff.append(window.observable.get(ell).attrs['zeff'])   
+        if cross_correlation: 
+            tracers_theo = [tracer + f'_cross_ell{ell}' for tracer in tracers]
+        else:
+            tracers_theo = [tracer + f'_ell{ell}' for tracer in tracers]
+        if not cross_correlation: tracers_theo = tracers_theo[:1]
+        logger.info(f'{tracers_theo=}, {ell=}, zeff={zeff[-1]:2.4}')
+
+        # extract only the mulitpole ell: 
+        data = pk.get(ells=[ell])
+        wmatrix = window.at.observable.match(data)
+        covariance = cov.at.observable.get(observables='spectrum2', tracers=tracers)  # for the cross-covariance
+        covariance = covariance.at.observable.match(data)
+
+        # Define Template and Theory:
+        template = FixedPowerSpectrumTemplate(z=zeff[-1], fiducial=DESI(engine=engine))
+        theory = PNGTracerPowerSpectrumMultipoles(template=template, mode="b-p", tracers=tracers_theo)
+        # Fix some parameters:
+        theory.params['fnl_loc'].update(value=0.0, fixed=fix_fnl)
+        if ell == 2: theory.params[f"{'x'.join(tracers_theo)}.sn0"].update(value=0, fixed=True)
+        for tracer in tracers_theo:
+            theory.params[f'{tracer}.p'].update(value=p[tracer.split('_')[0]], fixed=True)
+
+        # Don't forget to give different name for the observable in order to stack them together in the likelihood:
+        name = 'pk_' + 'x'.join(tracers) + f'_ell{ell}'
+        observables += [TracerPowerSpectrumMultipolesObservable(name=name, data=data, window=wmatrix, covariance=covariance, theory=theory)] 
+
+    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=cov.at.observable.get(tracers=tracers).value(), scale_covariance=1)
+
+    # let ell2.b1 / ell2.sigmas be derived by ell0.b1 / ell0.sigmas: 
+    if len(pk.ells) > 1:
+        _rescale_bias_params(likelihood, tracer=[f"{tracer.split('_ell')[0]}_ell0", f"{tracer.split('_ell')[0]}_ell2"], zeff=zeff)  
+        for tracer in np.unique(tracers_theo):
+            # logger.warning('we neglect the redshift dependence of the damping term, for now')
+            likelihood.all_params[f"{tracer.split('_ell')[0]}_ell2.sigmas"].update(derived='{' + f"{tracer.split('_ell')[0]}_ell0.sigmas" + '}')
+        
+    # For the cross-correlation, we fix the first b1 (1 or value provided) and damping term (0) to avoid degeneracy:
+    if cross_correlation: 
+        default_b1 = kwargs.get(f"{tracers_theo[0].split('_ell')[0]}_ell0.b1", 1)
+        likelihood.all_params[f"{tracers_theo[0].split('_ell')[0]}_ell0.b1"].update(value=default_b1, fixed=True)    
+        likelihood.all_params[f"{tracers_theo[0].split('_ell')[0]}_ell0.sigmas"].update(value=0, fixed=True)
+
+    likelihood()
+
+    return observables, likelihood
+
+
+def run_profiler(likelihood, fn_output=None):
+    """ 
+    Run the iminuit profiler on the likelihood, the results are saved in a text file if output_name is provided. fn_output should be a .txt file. 
+    """
+    from desilike.profilers import MinuitProfiler
+
+    profiler = MinuitProfiler(likelihood, seed=7)
+    profiler.maximize(niterations=20)
+    logger.info(f'\n{profiler.profiles.to_stats(tablefmt="pretty")}')
+
+    if fn_output is not None:
+        _ = profiler.profiles.to_stats(fn=fn_output)
+        np.savetxt(fn_output.replace('.txt', '_list.txt'), profiler.profiles.to_stats(tablefmt='list')[0], fmt='%s')
+
+
+def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False, nchains=1, max_iterations=1e5, check_every=1000):
+    """Run the MCMC sampler on the likelihood, the results are saved in a text file if fn_output is provided. 
+
+    Args:
+        likelihood: Desilike Likelihood object to run the MCMC on.
+        fn_output (str, optional): Where the chains will be saved (need to have *). Defaults to 'tmp/mcmc_output_*.npy'.
+        extend_chains (bool, optional): If True, it will extend the existing chains (saved in fn_output) by running new iterations. Defaults to False.
+        nchains (int, optional): Number of chains to run. Defaults to 1.
+        max_iterations (int, optional): Maximum number of iterations to run. Defaults to 1e5.
+        check_every (int, optional): How often to check the convergence + save the current state of the chains. Defaults to 1000.
+
+    """
+    from desilike.samplers import EmceeSampler
+    chains = [fn_output.replace('*', f'{i}') for i in range(nchains)] if extend_chains else nchains
+
+    sampler = EmceeSampler(likelihood, seed=31, chains=chains, save_fn=fn_output)  
+    sampler.run(max_iterations=max_iterations, check_every=check_every)
+
+    return sampler
 
 
 def plot_observables(observables):
@@ -93,55 +228,6 @@ def plot_observables(observables):
     plt.show()
 
 
-def run_profiler(likelihood, fn_output=None):
-    """ 
-    Run the iminuit profiler on the likelihood, the results are saved in a text file if output_name is provided. fn_output should be a .txt file. 
-    """
-    from desilike.profilers import MinuitProfiler
-
-    profiler = MinuitProfiler(likelihood, seed=7)
-    profiler.maximize(niterations=20)
-    logger.info(f'\n{profiler.profiles.to_stats(tablefmt="pretty")}')
-
-    if fn_output is not None:
-        _ = profiler.profiles.to_stats(fn=fn_output)
-        np.savetxt(fn_output.replace('.txt', '_list.txt'), profiler.profiles.to_stats(tablefmt='list')[0], fmt='%s')
-
-
-    """"""
-    
-    """ 
-
-    nchains
-    """
-
-    """_summary_
-
-    Returns:
-        _type_: _description_
-    """
-
-def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False, nchains=1, max_iterations=1e5, check_every=1000):
-    """Run the MCMC sampler on the likelihood, the results are saved in a text file if fn_output is provided. 
-
-    Args:
-        likelihood: Desilike Likelihood object to run the MCMC on.
-        fn_output (str, optional): Where the chains will be saved (need to have *). Defaults to 'tmp/mcmc_output_*.npy'.
-        extend_chains (bool, optional): If True, it will extend the existing chains (saved in fn_output) by running new iterations. Defaults to False.
-        nchains (int, optional): Number of chains to run. Defaults to 1.
-        max_iterations (int, optional): Maximum number of iterations to run. Defaults to 1e5.
-        check_every (int, optional): How often to check the convergence + save the current state of the chains. Defaults to 1000.
-
-    """
-    from desilike.samplers import EmceeSampler
-    chains = [fn_output.replace('*', f'{i}') for i in range(nchains)] if extend_chains else nchains
-
-    sampler = EmceeSampler(likelihood, seed=31, chains=chains, save_fn=fn_output)  
-    sampler.run(max_iterations=max_iterations, check_every=check_every)
-
-    return sampler
-
-
 def get_getdist_plotter(fig_width_inch=5, fontsize=14, legend_fontsize=12, axes_labelsize=12, axes_fontsize=14, line_lables=True):
     """Wrapper around getdist to get a plotter with the desired settings."""
     from getdist import plots as gdplt
@@ -162,9 +248,8 @@ def get_getdist_plotter(fig_width_inch=5, fontsize=14, legend_fontsize=12, axes_
 
 
 def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\rm loc}$', r'$b_1$', r'$s_{n,0}$', r'$\Sigma_s$'], 
-                  contour_colors=None, filled=True, contour_ls=None, g=None, fn_output=None):
+                  contour_colors=None, filled=True, contour_ls=None, g=None, fn_output=None, return_fig=False):
     """ Wrapper around getdist's plot_triangle to plot the contours of the different chains."""
-    
     from desilike.samples import plotting
     
     if g is None: g = get_getdist_plotter()
@@ -179,94 +264,8 @@ def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\r
                 g.subplots[i, 0].set_ylabel(xlabels[i])
 
     if fn_output is not None: plt.savefig(fn_output)
-    plt.show()
-
-
-def get_obervable_and_likelihood(pk, window, cov, tracer, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, fix_fnl=False, engine='class', **kwargs):
-    """_summary_
-
-    Args:
-        pk: lsstypes Mesh2SpectrumPoles observable containing the power spectrum multipoles.
-        window: lsstypes WindowMatrix matches the power spectrum multipoles.
-        cov: lsstypes CovarianceMatrix matches the power spectrum multipoles.
-        tracer: name of the tracer used to define the parameters in the theory and avoid duplicates when combining the different observables.
-        p (dict, optional): Value of p parameter. Defaults to {'LRG': 1., 'ELG': 1., 'QSO': 1.4}.
-        fix_fnl (bool, optional): If true do not fit for $f_{\rm NL}^{\rm loc}$. Defaults to False.
-        engine (str, optional): Solver for perturbation theory computation ('class', 'camb' or either that works in cosmoprimo). Defaults to 'class'.
-        
-    Kwargs:
-         kwargs[f"{tracers_theo[0].split('_ell')[0]}_ell0.b1"] value used to fix one of the two b1 in the cross-correlation.
-
-    Returns:
-       observables: list of monopole and quadrupole (if used) desilike observables.
-       likelihood: desilike likelihood to run profer or MCMC on.
-    """
-    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, PNGTracerPowerSpectrumMultipoles
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood
-    from cosmoprimo.fiducial import DESI
-
-    tracers = tuple(tracer.split('x'))
-    cross_correlation = True
-    if len(tracers) == 1: 
-        tracers *= 2
-        cross_correlation = False
-
-    observables = []
-    zeff = []
-
-    for ell in pk.ells:
-        zeff.append(window.observable.get(ell).attrs['zeff'])   
-        if cross_correlation: 
-            tracers_theo = [tracer + f'_cross_ell{ell}' for tracer in tracers]
-        else:
-            tracers_theo = [tracer + f'_ell{ell}' for tracer in tracers]
-        if not cross_correlation: tracers_theo = tracers_theo[:1]
-        logger.info(f'{tracers_theo=}, {ell=}, zeff={zeff[-1]:2.4}')
-
-        data = pk.get(ells=[ell])
-        # extract only the mulitpole ell: 
-        wmatrix = window.at.observable.match(data)
-        covariance = cov.at.observable.at(observables='spectrum2', tracers=tracers).match(data)
-        # subselect only the covariance for the cross-tracers (if tracer is a cross-tracer):
-        covariance = covariance.at.observable.get(observables='spectrum2', tracers=tracers)
-        
-        # data, wmatrix, covariance live in this loop:
-        # print(data.value().shape, wmatrix.value().shape, covariance.value().shape)
-        # print(np.linalg.inv(cov.value()))
-
-        cosmo = DESI(engine=engine)
-        template = FixedPowerSpectrumTemplate(z=zeff[-1], fiducial=cosmo)
-        theory = PNGTracerPowerSpectrumMultipoles(template=template, mode="b-p", tracers=tracers_theo)
-        
-        theory.params['fnl_loc'].update(value=0.0, fixed=fix_fnl)
-        if ell == 2: theory.params[f"{'x'.join(tracers_theo)}.sn0"].update(value=0, fixed=True)
-        for tracer in tracers_theo:
-            theory.params[f'{tracer}.p'].update(value=p[tracer.split('_')[0]], fixed=True)
-
-        # Don't forget to give different name for the observable in order to stack them together in the likelihood:
-        observables += [TracerPowerSpectrumMultipolesObservable(name=f'pk_{tracer}', data=data, window=wmatrix, covariance=covariance, theory=theory)] 
-
-    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=cov.at.observable.get(tracers=tracers).value(), scale_covariance=1)
-
-    # let ell2.b1 / sigmas be derived by ell0.b1 / sigmas: 
-    if len(pk.ells) > 1:
-        from clustering_statistics import tools        
-        for tracer in np.unique(tracers_theo):
-            alpha, beta = tools.bias(1, tracer=tracer.split('_')[0], return_params=True)  # b(z) = alpha * (1 + z)**2 + beta
-            factor = (alpha * (1 + zeff[1])**2 + beta) / (alpha * (1 + zeff[0])**2 + beta)
-            likelihood.all_params[f"{tracer.split('_ell')[0]}_ell2.b1"].update(derived='{' + f"{tracer.split('_ell')[0]}_ell0.b1" + '}' + f' * {factor}')
-            logger.warning('we neglect the redshift dependence of the damping term, for now')
-            likelihood.all_params[f"{tracer.split('_ell')[0]}_ell2.sigmas"].update(derived='{' + f"{tracer.split('_ell')[0]}_ell0.sigmas" + '}')
-        
-    if cross_correlation: 
-        if f"{tracers_theo[0].split('_ell')[0]}_ell0.b1" in kwargs:
-            default_b1 = kwargs[f"{tracers_theo[0].split('_ell')[0]}_ell0.b1"] 
-        else:
-            default_b1 = 1
-        likelihood.all_params[f"{tracers_theo[0].split('_ell')[0]}_ell0.b1"].update(value=default_b1, fixed=True)    
-        likelihood.all_params[f"{tracers_theo[0].split('_ell')[0]}_ell0.sigmas"].update(value=0, fixed=True)
-
-    likelihood()
-
-    return observables, likelihood
+    
+    if return_fig:
+        return g.fig
+    else:
+        plt.show()
