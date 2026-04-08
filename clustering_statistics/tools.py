@@ -2359,9 +2359,13 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
     for window_realization in window_realizations:
 
         def add_mask(pole):
-            return types.ObservableLeaf(value=pole.value(), mask=np.ones_like(pole.value(), dtype=int),
-                                        **pole.coords(), **{f'{coord}_edges': edge for coord, edge in pole.edges()},
-                                        coords=list(pole.coords()))
+            return types.ObservableLeaf(
+                value=pole.value(),
+                mask=np.ones_like(pole.value(), dtype=int),
+                **pole.coords(),
+                **{f'{coord}_edges': edge for coord, edge in pole.edges().items()},
+                coords=list(pole.coords()),
+            )
         # add_mask to keep track of the theory bins where the window was computed
         window_realization = window_realization.clone(theory=window_realization.theory.map(lambda pole: add_mask(pole), level=None))
         window_realization = window_realization.at.theory.match(window_geometry.theory)
