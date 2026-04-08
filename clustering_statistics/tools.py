@@ -2368,7 +2368,9 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
             )
         # add_mask to keep track of the theory bins where the window was computed
         window_realization = window_realization.clone(theory=window_realization.theory.map(lambda pole: add_mask(pole), level=None))
-        window_realization = window_realization.at.theory.match(window_geometry.theory)
+        window_realization = window_realization.at.theory.match(
+            types.Mesh2CorrelationPoles([window_geometry.theory.get(ells=ell, wa_orders=0) for ell in window_geometry.theory.ells], window_geometry.theory.ells)
+        )
         values.append(window_realization.value())
         weights.append(np.ones(window_geometry.observable.size)[:, None] * np.concatenate([pole.values('mask') for pole in window_realization.theory.flatten()]))
 
