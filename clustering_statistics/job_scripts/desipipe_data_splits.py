@@ -2,7 +2,7 @@
 salloc -N 1 -C "gpu&hbm80g" -t 02:00:00 --gpus 4 --qos interactive --account desi_g
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 or source /global/homes/s/shengyu/env.sh 2pt_env
-python job_scripts/desipipe_data_splits.py
+srun -n 4 python desipipe_data_splits.py
 desipipe tasks -q data_splits  # check the list of tasks
 desipipe spawn -q data_splits --spawn  # spawn the jobs
 desipipe queues -q data_splits  # check the queue
@@ -62,7 +62,6 @@ def run_stats(version='data-dr2-v2', tracer='LRG', regions=['NGC', 'SGC'], weigh
         options = fill_fiducial_options(options)
         compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, **options)
 
-
 def postprocess_stats(version='data-dr2-v2', tracer='LRG', regions=['GCcomb'], weight='weight-FKP', stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', postprocess=['combine_regions'], **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     zranges = tools.propose_fiducial('zranges', tracer)
@@ -71,7 +70,6 @@ def postprocess_stats(version='data-dr2-v2', tracer='LRG', regions=['GCcomb'], w
         options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight), combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'window_mesh3_spectrum']}, mesh2_spectrum={'cut': True}, window_mesh2_spectrum={'cut': True})
         postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **options)
 
-
 ########################################################################################################################################################################################
 if __name__ == '__main__':
     import argparse
@@ -79,10 +77,10 @@ if __name__ == '__main__':
     # parser.add_argument('--zrange', nargs='+', type=str, default=(0.1, 0.4), help='Redshift bins')
     # parser.add_argument('--regions', nargs='+', type=str, default=['NGC'], help='Sky regions to include.')  
     # parser.add_argument('--subver', default=None, choices=['zcmb', None], help='sub version for data catalogs')
-    parser.add_argument('--tracers', nargs='+', type=str, default=['LRG'], choices=['BGS', 'LRG', 'ELG_LOPnotqso', 'QSO'], help='Tracers')
+    parser.add_argument('--tracers', nargs='+', type=str, default=['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOPnotqso', 'QSO'], choices=['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOPnotqso', 'QSO'], help='Tracers')
     parser.add_argument('--versions', nargs='+', type=str,  default=['data-dr2-v2'], choices=['data-dr2-v2'], help='Catalog versions to use.')
-    parser.add_argument('--weight_types', nargs='+', type=str, default=['default_fkp'],
-                        choices=['default', 'default_fkp', 'default_thetacut', 'default_auw', 'bitwise', 'bitwise_auw'], help='Weighting schemes to use.')
+    parser.add_argument('--weight_types', nargs='+', type=str, default=['bitwise'],
+                        choices=['default', 'default-FKP', 'default_thetacut', 'default_auw', 'bitwise', 'bitwise-FKP', 'bitwise_auw'], help='Weighting schemes to use.')
     parser.add_argument('--todo', nargs='+', type=str, default=['mesh2_spectrum'],
                         choices=['auw', 'mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'count2_correlation', 'blinded_mesh2_spectrum'], help='Which processing steps to run.')
     args = parser.parse_args()
@@ -91,14 +89,12 @@ if __name__ == '__main__':
     stats = args.todo
     postprocess = ['combine_regions']
 
-    regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'][:2] #galactic and imaging regions
-    # regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
-    postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:1]
+    regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'] #galactic and imaging regions
+    regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
+    postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES']
 
     for version, tracer, weight_type in itertools.product(args.versions, args.tracers, args.weight_types):
-        # stats_dir = Path(f'/global/cfs/projectdirs/desi/mocks/cai/mock-challenge-cutsky-dr2/blinded_data/{version}/data_splits')
-        stats_dir = Path(os.getenv('SCRATCH', '.')) / 'Y3_blinded/tests'
-        if version == 'data-dr2-v2' and 'mesh2_spectrum' in stats: raise ValueError('dr2 is not unblinded yet')
+        stats_dir = Path(f'/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/full_shape/data_splits/blinded_data')
         def get_run_stats():
             _tm = tm80
             if tracer in ['LRG']:
