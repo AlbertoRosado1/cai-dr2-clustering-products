@@ -565,8 +565,8 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                 # Interpolate close pair correlation to logarithmic grid
                 correlation = interpolate_window_function(correlation, coords=coords, order=3)
                 results['window_mesh2_correlation_cut'] = correlation
-                # Combine raw and close-pair correlations (add contributions)
-                correlation = correlation.clone(value=results['window_mesh2_correlation_raw'].value() + correlation.value())
+                # Combine raw and close-pair correlations (remove contributions)
+                correlation = correlation.clone(value=results['window_mesh2_correlation_raw'].value() - correlation.value())
                 # Convert combined correlation to power spectrum window
                 window = compute_smooth2_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',))
                 results['cut'] = window.clone(observable=results['raw'].observable, value=window.value() / (norm[..., None] / np.mean(norm)))
@@ -1062,10 +1062,6 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
     covariance = covariance.at.observable.match(data)
     # Extract effective redshift from window
     z = window.observable.get(ells=0).attrs['zeff']
-
-    import numpy as np
-    # FIXME
-    np.trapz = np.trapezoid
 
     # Import clustering theory classes from desilike
     from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles
