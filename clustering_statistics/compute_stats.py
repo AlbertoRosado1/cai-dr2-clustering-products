@@ -698,7 +698,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                     window_realizations = []
                     for i, seed in enumerate(window_fm_options['seeds']):
                         diff = []
-                        for _effect in ['geo', effect]:
+                        for _effect in ['geometry', effect]:
                             if window_fm_options['ellsout'] is None:
                                 extra = f"{_effect}_seed={seed}"
                             else:
