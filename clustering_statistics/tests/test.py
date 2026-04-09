@@ -8,6 +8,7 @@ import sys
 import copy
 import functools
 from pathlib import Path
+from unittest import mock
 
 import jax
 import numpy as np
@@ -51,7 +52,7 @@ def test_auw(stats=['mesh2_spectrum']):
             compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'cut': True, 'auw': True}, particle2_correlation={'auw': True})
 
 
-def test_blinding(stats=['mesh2_spectrum']):
+def test_blinding(stats=['mesh2_spectrum', 'mesh3_spectrum']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in ['LRG']:
         zrange = tools.propose_fiducial('zranges', tracer)[0]
