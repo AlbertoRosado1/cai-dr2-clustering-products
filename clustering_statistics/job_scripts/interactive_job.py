@@ -37,7 +37,7 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
 
     cache = {}
     if zranges is None:
-        zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+        raise ValueError('Please provide zranges.')
     for imock in imocks:
         for region in regions:
             mesh2_spectrum = {'cut': True, 
@@ -46,7 +46,7 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             window_mesh2_spectrum = {'cut': True, 
                                      'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer) if 'oqe' in weight else None}
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
-                           mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum, 
+                           mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
 
             stats_dir_kws = dict(stats_dir=stats_dir, project=project)
@@ -59,16 +59,17 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             else:
                 get_stats_fn = functools.partial(tools.get_stats_fn, **stats_dir_kws)
 
-            options = fill_fiducial_options(options)
+            options = fill_fiducial_options(options, analysis=analysis)
             if True: #onthefly:
                 for tracer in options['catalog']:
                     options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
-            compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, **options)
+            compute_stats_from_options(stats, analysis=analysis, get_stats_fn=get_stats_fn, cache=cache, **options)
 
     # postprocess
     if postprocess:
-        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True})
-        postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
+        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, 
+                                   combine_regions={'stats': stats}, mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum)
+        postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
 def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', postprocess=['combine_regions'], zranges=None, **kwargs):
@@ -84,7 +85,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     else:
         get_stats_fn = functools.partial(tools.get_stats_fn, **stats_dir_kws)
 
-    postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **options)
+    postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **options)
 
 
 
@@ -103,13 +104,14 @@ if __name__ == '__main__':
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
-    postprocess = ['combine_regions']
-    analysis = 'full_shape'
-    project  = f'{analysis}/base'
-    weight   = 'default-FKP'
-    regions  = ['NGC','SGC']
-    max_mocks_per_batch = 10
+    # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
+    # postprocess = ['combine_regions']
+    # analysis = 'full_shape'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-FKP'
+    # regions  = ['NGC','SGC']
+    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
+    # max_mocks_per_batch = 10
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
@@ -117,26 +119,32 @@ if __name__ == '__main__':
     # project = f'{analysis}/data_splits'
     # weight  = 'default-FKP'
     # regions = ['N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
+    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
     # max_mocks_per_batch = 5 
 
     # run fiducial local_png
-    # stats       = ['mesh2_spectrum']
-    # postprocess = ['combine_regions']
-    # analysis = 'local_png'
-    # project  = f'{analysis}/base'
-    # weight   = 'default-FKP-oqe'
-    # regions  = ['NGC','SGC']
-    # max_mocks_per_batch = 10
+    stats       = ['mesh2_spectrum']
+    postprocess = ['combine_regions']
+    analysis = 'local_png'
+    project  = f'{analysis}/base'
+    weight   = 'default-fkp-oqe'
+    regions  = ['NGC','SGC']
+    tracers  = ['LRG', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')] # 'ELGnotqso' for z0.8-1.6 gives out of memory error
+    max_mocks_per_batch = 10
 
     onthefly = None
-    zranges  = None
     
-    for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO']:
+    for tracer in tracers:
+        if 'png' in analysis:
+            # do not compute measurements for overlapping redshifts
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
+        else:
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
         if check_for_existing_measurements:
             exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer, region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
             imocks = exists[1]['imock']
             rerun = []
-            for zrange in tools.propose_fiducial('zranges', tracer, analysis=analysis):
+            for zrange in zranges:
                 for kind in stats:
                     stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')), 
                                      tracer=tracer, region=regions[-1], weight=weight, zrange=zrange, version=version, project=project)
