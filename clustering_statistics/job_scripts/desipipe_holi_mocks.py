@@ -59,10 +59,8 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
     for imock in imocks:
         for region in regions:
             mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
-                              'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None,
-                              'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer) if 'oqe' in weight else None}
-            window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
-                                     'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer) if 'oqe' in weight else None}
+                              'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
+            window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None}
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
