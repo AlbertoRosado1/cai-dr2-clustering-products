@@ -52,9 +52,17 @@ def run_fit_from_options(actions,
         elif action == 'sample':
             sampler_options = dict(options['sampler'])
             cls = tools.get_sampler_cls(sampler_options.pop('sampler', 'emcee'))
+            resume = sampler_options.pop('resume', False)
             save_fn = [get_fits_fn(kind='chain', **options, ichain=ichain)\
                        for ichain in range(sampler_options['nchains'])]
-            sampler = cls(likelihood, **sampler_options['init'], save_fn=save_fn)
+            sampler_kwargs = dict(sampler_options['init'], save_fn=save_fn)
+            if resume:
+                missing = [fn for fn in save_fn if not Path(fn).exists()]
+                if missing:
+                    missing_str = ', '.join(str(fn) for fn in missing)
+                    raise FileNotFoundError(f'cannot resume sampling; missing chain file(s): {missing_str}')
+                sampler_kwargs['chains'] = save_fn
+            sampler = cls(likelihood, **sampler_kwargs)
             sampler.run(**sampler_options['run'])
         elif action == 'profile':
             profiler_options = dict(options['profiler'])
