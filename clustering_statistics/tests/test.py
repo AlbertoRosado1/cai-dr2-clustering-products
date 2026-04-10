@@ -58,21 +58,23 @@ def test_blinding(stats=['mesh2_spectrum', 'mesh3_spectrum']):
         zrange = tools.propose_fiducial('zranges', tracer)[0]
         for region in ['NGC', 'SGC'][:1]:
             options = dict(catalog=dict(version='data-dr2-v2', tracer=tracer, zrange=zrange, region=region, nran=2))
-            fiducial_options = tools.fill_fiducial_options(options)
-            compute_stats_from_options(stats, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **fiducial_options)
+            blinded_options = tools.fill_fiducial_options(options)
+            compute_stats_from_options(stats, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **blinded_options)
             options2 = copy.deepcopy(options)
             options2['catalog'].update(version=None, cat_dir=tools.desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2/nonKP', ext=None)
-            fiducial_options = tools.fill_fiducial_options(options2)
-            compute_stats_from_options(stats, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **fiducial_options)
+            unversioned_options = tools.fill_fiducial_options(options2)
+            compute_stats_from_options(stats, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **unversioned_options)
             analysis = 'full_shape_protected'
-            fiducial_options = tools.fill_fiducial_options(options, analysis=analysis)
-            compute_stats_from_options(stats, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir / 'protected'), analysis=analysis, **fiducial_options)
+            protected_options = tools.fill_fiducial_options(options, analysis=analysis)
+            compute_stats_from_options(stats, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir / 'protected'), analysis=analysis, **protected_options)
             for stat in stats:
-                catalog = fiducial_options['catalog']
-                blinded_fn = tools.get_stats_fn(kind=stat, stats_dir=stats_dir, catalog=catalog)
-                blinded_fn2 = tools.get_stats_fn(kind=stat, stats_dir=stats_dir, catalog=catalog, version=None)
+                stat_kwargs = {}
+                if stat == 'mesh3_spectrum':
+                    stat_kwargs['basis'] = blinded_options[stat].get('basis')
+                blinded_fn = tools.get_stats_fn(kind=stat, stats_dir=stats_dir, catalog=blinded_options['catalog'], **stat_kwargs)
+                blinded_fn2 = tools.get_stats_fn(kind=stat, stats_dir=stats_dir, catalog=blinded_options['catalog'], version=None, **stat_kwargs)
                 assert blinded_fn2 != blinded_fn
-                protected_fn = tools.get_stats_fn(kind=stat, stats_dir=stats_dir / 'protected', catalog=catalog)
+                protected_fn = tools.get_stats_fn(kind=stat, stats_dir=stats_dir / 'protected', catalog=protected_options['catalog'], **stat_kwargs)
                 blinded = types.read(blinded_fn)
                 assert len(blinded.ells) > 1
                 blinded2 = types.read(blinded_fn2)
