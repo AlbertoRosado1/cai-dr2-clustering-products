@@ -570,14 +570,14 @@ def check_if_stats_requires_blinding(analysis='full_shape', **catalog_options):
 
 
 def apply_blinding(data, tracer, zrange):
-    """Apply data-vector-level blinding."""
-    labels = {('BGS', (0.1, 0.4)): 'BGS_z0',
-             ('LRG', (0.4, 0.6)): 'LRG_z0',
-             ('LRG', (0.6, 0.8)): 'LRG_z1',
-             ('LRG', (0.8, 1.1)): 'LRG_z2',
-             ('ELG', (0.8, 1.1)): 'ELG_z0',
-             ('ELG', (1.1, 1.6)): 'ELG_z1',
-             ('QSO', (0.8, 2.1)): 'QSO_z0'}
+    """Apply power-spectrum or bispectrum data-vector blinding using canonical tracer-bin names from :mod:`desiblind`."""
+    labels = {('BGS', (0.1, 0.4)): 'BGS1',
+            ('LRG', (0.4, 0.6)): 'LRG1',
+            ('LRG', (0.6, 0.8)): 'LRG2',
+            ('LRG', (0.8, 1.1)): 'LRG3',
+            ('ELG', (0.8, 1.1)): 'ELG1',
+            ('ELG', (1.1, 1.6)): 'ELG2',
+            ('QSO', (0.8, 2.1)): 'QSO1'}
     stracer = get_simple_tracer(join_tracers(tracer))
     zmean = np.mean(zrange)
     label = None
@@ -587,9 +587,14 @@ def apply_blinding(data, tracer, zrange):
             break
     if label is None:
         raise ValueError(f'Could not find blinding for {tracer} in {zrange}. Please open a github issue.')
-    from desiblind import TracerPowerSpectrumMultipolesBlinder
+    from desiblind import TracerPowerSpectrumMultipolesBlinder, TracerBispectrumMultipolesBlinder
     if isinstance(data, types.Mesh2SpectrumPoles):
         return TracerPowerSpectrumMultipolesBlinder.apply_blinding(name=label, data=data)
+    if isinstance(data, types.Mesh3SpectrumPoles):
+        basis = getattr(next(iter(data)), 'basis', None)
+        if basis != 'sugiyama-diagonal':
+            raise ValueError('On-the-fly bispectrum blinding only supports diagonal Sugiyama multipoles.')
+        return TracerBispectrumMultipolesBlinder.apply_blinding(name=label, data=data)
     else:
         raise NotImplementedError
 
