@@ -948,7 +948,7 @@ def compute_window_mesh2_spectrum_fm(
             if geo:
                 windows["geometry"] = {}
             if ric: 
-                windows['extrac_effects'] = {}
+                windows[extra_effects] = {}
 
             for ell in ellsout:
                 binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
