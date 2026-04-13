@@ -5,6 +5,7 @@ To create and spawn the tasks on NERSC, use the following commands:
 salloc -N 1 -C "gpu&hbm80g" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 export PYTHONPATH=$HOME/cai-dr2-clustering-products/:$PYTHONPATH
+srun -n 4 python desipipe_holi_mocks.py # if mode in interative
 python desipipe_holi_mocks.py         # create the list of tasks
 desipipe tasks -q holi_mocks          # check the list of tasks
 desipipe spawn -q holi_mocks --spawn  # spawn the jobs
@@ -107,7 +108,6 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **options)
 
 
-
 if __name__ == '__main__':
 
     stats, postprocess = [], []
@@ -121,8 +121,9 @@ if __name__ == '__main__':
     # check_for_existing_measurements = False
     
     # to run job
-    mode = 'slurm'
-    imocks2run = np.arange(1000)
+    # mode = 'slurm'
+    mode = 'interactive'
+    imocks2run = np.arange(100)
     if version == 'holi-v3-altmtl':
         # do not perform measurements on dubious mocks
         bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
@@ -136,27 +137,28 @@ if __name__ == '__main__':
     # project  = f'{analysis}/base'
     # weight   = 'default-FKP'
     # regions  = ['NGC','SGC']
-    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
     # max_mocks_per_batch = 10
 
     # run data_splits for lensing group with full_shape setup 
-    # stats   = ['mesh2_spectrum']
-    # analysis = 'full_shape'
-    # project = f'{analysis}/data_splits'
-    # weight  = 'default-FKP'
-    # regions = ['N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
-    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # max_mocks_per_batch = 5 
+    stats   = ['mesh2_spectrum']
+    analysis = 'full_shape'
+    project = f'{analysis}/data_splits'
+    weight  = 'default-FKP'
+    regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'] #galactic and imaging regions
+    # regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
+    max_mocks_per_batch = 5 
+    postprocess = ['combine_regions']
+    postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:]
 
     # run fiducial local_png
-    stats       = ['mesh2_spectrum']
-    postprocess = ['combine_regions']
-    analysis = 'local_png'
-    project  = f'{analysis}/base'
-    weight   = 'default-fkp-oqe'
-    regions  = ['NGC','SGC']
-    tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    max_mocks_per_batch = 10
+    # stats       = ['mesh2_spectrum']
+    # postprocess = ['combine_regions']
+    # analysis = 'local_png'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-fkp-oqe'
+    # regions  = ['NGC','SGC']
+    # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
+    # max_mocks_per_batch = 10
 
     onthefly = None
     

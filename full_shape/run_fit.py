@@ -76,7 +76,6 @@ def run_fit_from_options(actions,
             raise NotImplementedError(f'{action} not implemented')
 
 
-
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
