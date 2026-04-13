@@ -332,31 +332,34 @@ def test_window_fm(tracer='QSO'):
     # - region may be ALL when reading the catalog, then compute_stats loops over regions
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     catalog_options = {
-        "version": "holi-v1-altmtl",
-        "tracer": tracer,
-        "zrange": (0.8, 3.5),
-        "region": "ALL",
-        "imock": 451,
-        "nran": 1,
-        "keep_columns": True,
-        "weight": "default-oqe",
+        'version': 'holi-v1-altmtl',
+        'tracer': tracer,
+        'zrange': {'QSO': (0.8, 3.5), 'LRG': (0.4, 1.1)}[tracer],
+        'region': 'ALL',
+        'imock': 451,
+        'nran': 1,
+        'keep_columns': True,
+        'weight': 'default-oqe',
     }
     analysis = 'png_local'
-    mattrs = {"cellsize": 80.0}
+    mattrs = {'cellsize': 80.0}
     extra = f"mytest_tracer_{tracer}"
-    options = {'catalog': catalog_options, 'mattrs': mattrs,
-               'mesh2_spectrum': {"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer)},
-               'window_mesh2_spectrum': {"method": "exact"},
-               'combine_window_mesh2_spectrum': {'effect': 'RIC+AMR'},
-               'window_mesh2_spectrum_fm': {"theory": None, "n_realizations": 2, "seeds": [42, 84]}}
+    options = {
+        'catalog': catalog_options,
+        'mattrs': mattrs,
+        'mesh2_spectrum': {'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer)},
+        'window_mesh2_spectrum': {'method': 'smooth'},
+        'combine_window_mesh2_spectrum': {'effect': 'RIC+AMR'},
+        'window_mesh2_spectrum_fm': {'theory': None, 'n_realizations': 2, 'seeds': [42, 84]},
+    }
 
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
-    for region in ['NGC', 'SGC']:
-        compute_stats_from_options(["mesh2_spectrum", "window_mesh2_spectrum"],
-            get_stats_fn=get_stats_fn,
-            **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
+    # for region in ['NGC', 'SGC']:
+    #     compute_stats_from_options(
+    #         ['mesh2_spectrum', 'window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis
+    #     )
 
-    compute_stats_from_options(["window_mesh2_spectrum_fm"], get_stats_fn=get_stats_fn, **options, analysis=analysis)
+    # compute_stats_from_options(["window_mesh2_spectrum_fm"], get_stats_fn=get_stats_fn, **options, analysis=analysis)
     for region in ['NGC', 'SGC']:
         postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
@@ -366,13 +369,14 @@ if __name__ == '__main__':
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.85'
     from jax import config
     config.update('jax_enable_x64', True)
+    # jax.config.update('jax_debug_nans', True)
     #config.update('jax_num_cpu_devices', 4)
     #config.update('jax_platform_name', 'cpu')
 
     setup_logging()
 
     jax.distributed.initialize()
-    test_window_fm()
+    test_window_fm('LRG')
     #test_correlation()
     #test_covariance()
     #test_stats_fn()
