@@ -2310,7 +2310,9 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
         observable axes are used as the interpolation targets.
     window_realizations : list[types.WindowMatrix] or types.WindowMatrix
         List of window matrix realizations to interpolate and combine. Each realization should have
-        the same observable structure as ``window_geometry`` but may have different theory grids.
+        the same observable structure as ``window_geometry``.
+        Indicate theory bins for why the window has *not* been computed with 0 (else 1) in
+        ``[pole.get('nmodes') for pole in window.theory]``.
         If a single WindowMatrix is provided, it is converted to a list of length 1.
     method : str, optional
         Interpolation method. Options are:
@@ -2357,28 +2359,17 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
 
     values, weights = [], []
     for window_realization in window_realizations:
-
-        def add_mask(pole):
-            return types.ObservableLeaf(
-                value=pole.value(),
-                mask=np.ones_like(pole.value(), dtype=int),
-                **pole.coords(),
-                **{f'{coord}_edges': edge for coord, edge in pole.edges().items()},
-                coords=list(pole.coords()),
-            )
-        # add_mask to keep track of the theory bins where the window was computed
-        window_realization = window_realization.clone(theory=window_realization.theory.map(lambda pole: add_mask(pole), level=None))
-        window_realization = window_realization.at.theory.match(
-            types.Mesh2CorrelationPoles([window_geometry.theory.get(ells=ell, wa_orders=0) for ell in window_geometry.theory.ells], window_geometry.theory.ells)
-        )
         values.append(window_realization.value())
-        weights.append(np.ones(window_geometry.observable.size)[:, None] * np.concatenate([pole.values('mask') for pole in window_realization.theory.flatten()]))
+        weights.append(np.ones(window_geometry.observable.size)[:, None] * np.concatenate([pole.values('nmodes') for pole in window_realization.theory.flatten()]))
 
-    mean = np.average(values, weights=weights, axis=0)
+    mean = sum(value * weight for value, weight in zip(values, weights))
     sweights = sum(weights)
+    mean = mean / np.where(sweights, sweights, 1.)
+    mean = np.where(sweights != 0, mean, 0.)
     sweights2 = sum(weight**2 for weight in weights)
-    var = sweights / (sweights**2 - sweights2) * sum(weight * (value - mean)**2 for value, weight in zip(values, weights))
-    ivar = 1. / np.where(sweights, var, 1e6 * var.max())
+    scale = sweights / np.where(sweights != 0, (sweights**2 - sweights2), 1.)
+    var = scale * sum(weight * (value - mean)**2 for value, weight in zip(values, weights))
+    ivar = 1. / np.where(sweights != 0, var, np.inf)
     window_mean = window_geometry.clone(value=mean)
     window_ivar = window_geometry.clone(value=ivar)
 
@@ -2395,10 +2386,10 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
             points = np.column_stack(points)
             mean = block_mean.value()
             ivar = window_ivar.at.theory.get(**tlabel).at.observable.get(**olabel).value()
+            mask = np.ravel(ivar > 0)
             if method == 'spline':
                 from scipy.interpolate import SmoothBivariateSpline
-
-                spline = SmoothBivariateSpline(*points.T, mean.ravel(), w=ivar.ravel(), **kwargs)
+                spline = SmoothBivariateSpline(*points[mask].T, mean.ravel()[mask], w=ivar.ravel()[mask], **kwargs)
                 block = spline(*points.T, grid=False)
             elif method == 'gaussian_process':
                 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -2409,11 +2400,11 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
                 kernel = ConstantKernel(1.0) * Matern(**kwargs)
                 gpr = GaussianProcessRegressor(
                     kernel=kernel,
-                    alpha=1. / ivar,
+                    alpha=1. / ivar.ravel()[mask],
                     normalize_y=True,
                     n_restarts_optimizer=5
                 )
-                gpr.fit(points, mean)
+                gpr.fit(points[mask], mean.ravel()[mask])
                 # predict at new points Xnew: shape (K, 2)
                 block, y_std = gpr.predict(points, return_std=True)
             block = block.reshape(xt.shape)
