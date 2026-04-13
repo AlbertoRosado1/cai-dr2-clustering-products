@@ -2397,8 +2397,9 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
             ivar = window_ivar.at.theory.get(**tlabel).at.observable.get(**olabel).value()
             if method == 'spline':
                 from scipy.interpolate import SmoothBivariateSpline
-                spline = SmoothBivariateSpline(*points.T, mean, w=ivar, **kwargs)
-                block = spline(*points.T)
+
+                spline = SmoothBivariateSpline(*points.T, mean.ravel(), w=ivar.ravel(), **kwargs)
+                block = spline(*points.T, grid=False)
             elif method == 'gaussian_process':
                 from sklearn.gaussian_process import GaussianProcessRegressor
                 from sklearn.gaussian_process.kernels import ConstantKernel, Matern
