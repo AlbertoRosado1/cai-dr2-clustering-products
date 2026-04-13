@@ -360,7 +360,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         basis = getattr(next(iter(window[key].observable)), 'basis', None)
                         if basis is not None: kw['basis'] = basis
                         # Also save under "geometry", to assemble with forward-modeled window "window_mesh2_spectrum_fm"
-                        for suffix in ['', '_geometry']:
+                        for suffix in ['', '_geometry']:  # FIXME the suffix won't be caught by list_stats
                             fn = get_stats_fn(kind=stat + suffix, catalog=fn_catalog_options, **kw)
                             tools.write_stats(fn, window[key])
 
@@ -465,7 +465,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 # This is a dict of dict of lists of windows : {modeled_effect: {spectrum_region: [window, ...], ...}, ...}
                 for effect in window:  # geo, RIC or RIC+AMR
                     for spectrum_region in window[effect]:  # eg NGC, SGC
-                        for i, seed in enumerate(window_options["seeds"]):
+                        for i, seed in enumerate(window_options['seeds']):
+                            # FIXME this overrides the extra option pre-defined in get_stats_fn through e.g. functools.partial. Not sure this is an actual issue.
                             if window_options['ellsout'] is None:
                                 extra = f"{effect}_seed={seed}"
                             else:
