@@ -741,7 +741,12 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                                 extra = f'{_effect}_{listell}_seed={seed}'
                             diff.append(types.read(get_stats_fn(kind=f'{stat}_fm', **(kw | {"extra": extra}))))
                         window_realizations.append(diff[0].clone(value=diff[1].value() - diff[0].value()))
-                    window_fm = interpolate_window_realizations(window_geometry, window_realizations=window_realizations, **kw_interpolate)
+                    window_fm = window_realizations[0].clone(value=np.mean([window.value() for window in window_realizations], axis=0))
+                    # build downscaling matrix
+                    block = types.utils.matrix_spline_interp(xt=window_geometry.theory.get(**window_geometry.theory.labels()[0]).coords(0), xo=window_fm.theory.get(0).coords(0))
+                    downscale = np.kron(np.eye(len(window_geometry.theory.ells)), block)
+                    # use it to "interpolate" the forward-modeled window to the geometry of the base window
+                    window_fm = window_fm.clone(value=window_fm.value().dot(downscale))
                 fn = get_stats_fn(kind=stat, **kw)
                 # Adding all effects
                 window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
