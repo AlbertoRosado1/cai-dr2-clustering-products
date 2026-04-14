@@ -109,6 +109,8 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
                 options['window_mesh2_spectrum_fm']['n_realizations'] = 1
                 options['window_mesh2_spectrum_fm']['seeds'] = [1]
 
+                options['window_mesh2_spectrum_fm']['theory_rebin'] = 10
+
                 # update tje template as function of the weight use here:
                 #options['window_mesh2_spectrum_fm']['regression_maps'] = xxx
             
