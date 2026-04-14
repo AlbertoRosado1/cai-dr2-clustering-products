@@ -473,6 +473,11 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             'Even after rescaling P_2, theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Some P_2 values may be negative. Check input theory.'
                         )
 
+                theory_rebin = window_options.pop('theory_rebin', None)
+                if theory_rebin is not None:
+                    # Rebin theory to speed up window function computation
+                    theory = theory.select(k=slice(0, None, theory_rebin))
+
                 # Load example of output measurement. If spectrum_fn provided, use it; otherwise use spectrum loaded for the preliminary fit in the theory block above
                 spectrum_fn = window_options.pop("spectrum", None)
                 fn_window_options = window_options | {"auw": False, "cut": False}
