@@ -42,7 +42,6 @@ def rebin_data(pk, window, cov, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=2e-2,
 
     # Let's select the k range and ells:
     kmin_ell2, kmax_ell2 = kwargs.get('kmin_ell2', kmin), kwargs.get('kmax_ell2', kmax)
-    print(kmin_ell2, kmax_ell2)
     pk = pk.at(0).select(k=(kmin, kmax))
     pk = pk.at(2).select(k=(kmin_ell2, kmax_ell2))
     pk = pk.get(ells=[0]) if not use_ell2 else pk.get(ells=[0, 2])
