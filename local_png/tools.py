@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger('PNG fitting tools')
 
 
-def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', **kwargs):
+def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', add_ic=False, **kwargs):
     """ 
     Read the data from the clustering statistics output. This is a wrapper of clustering_statistics.tools.get_stats_fn.
     """
@@ -17,7 +17,10 @@ def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='defau
 
     # Read the data:
     pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum'))
-    window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum'))
+    if add_ic:
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', extra='with_ic'))
+    else:
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum'))
     cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum'))
 
     return pk, window, cov
