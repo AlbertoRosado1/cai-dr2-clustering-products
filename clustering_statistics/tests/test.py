@@ -351,9 +351,9 @@ def test_window_fm(tracer='QSO'):
         'catalog': catalog_options,
         'mattrs': mattrs,
         'mesh2_spectrum': {'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer)},
-        'window_mesh2_spectrum': {'method': 'smooth'},
+        'window_mesh2_spectrum': {'method': 'exact'},
         'combine_window_mesh2_spectrum': {'effect': 'RIC+AMR'},
-        'window_mesh2_spectrum_fm': {'theory': None, 'n_realizations': 2, 'seeds': [42, 84]},
+        'window_mesh2_spectrum_fm': {'theory': None, 'n_realizations': 2, 'seeds': [42, 84], 'theory_rebin': 5},
     }
 
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
@@ -361,7 +361,7 @@ def test_window_fm(tracer='QSO'):
         compute_stats_from_options(
          ['mesh2_spectrum', 'window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
-    # compute_stats_from_options(["window_mesh2_spectrum_fm"], get_stats_fn=get_stats_fn, **options, analysis=analysis)
+    compute_stats_from_options(['window_mesh2_spectrum_fm'], get_stats_fn=get_stats_fn, **options, analysis=analysis)
     for region in ['NGC', 'SGC']:
         postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
@@ -416,27 +416,27 @@ if __name__ == '__main__':
 
     jax.distributed.initialize()
     test_window_fm('LRG')
-    #test_correlation()
-    #test_covariance()
-    #test_stats_fn()
-    #test_complete_catalog()
-    #test_expand_randoms_catalog()
-    #test_complete_stats()
-    #test_expand_randoms_stats()
-    #test_blinding()
-    test_covariance()
-    #test_rotation()
-    #test_window3()
-    #test_stats_fn()
-    #test_auw(stats=['mesh2_spectrum'])
-    #test_bitwise(stats=['mesh2_spectrum'])
-    #test_expand_randoms_stats()
-    #test_optimal_weights()
-    #test_cross()
-    #test_window()
-    #test_spectrum3()
-    #test_norm()
-    #test_recon()
-    #test_covariance()t
-    #test_interp_window()
-    #jax.distributed.shutdown()
+    # test_correlation()
+    # test_covariance()
+    # test_stats_fn()
+    # test_complete_catalog()
+    # test_expand_randoms_catalog()
+    # test_complete_stats()
+    # test_expand_randoms_stats()
+    # test_blinding()
+    # test_covariance()
+    # test_rotation()
+    # test_window3()
+    # test_stats_fn()
+    # test_auw(stats=['mesh2_spectrum'])
+    # test_bitwise(stats=['mesh2_spectrum'])
+    # test_expand_randoms_stats()
+    # test_optimal_weights()
+    # test_cross()
+    # test_window()
+    # test_spectrum3()
+    # test_norm()
+    # test_recon()
+    # test_covariance()t
+    # test_interp_window()
+    # jax.distributed.shutdown()

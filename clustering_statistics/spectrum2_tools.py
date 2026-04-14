@@ -978,11 +978,13 @@ def compute_window_mesh2_spectrum_fm(
                 # Compute FKP normalization for each region, with the estimator weights (cross correlation), and for given ell = binner
                 fkp_norms = [
                     compute_fkp2_normalization(
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_optimal_1"),
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_optimal_2"),
+                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_1'),
+                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_2'),
                         bin=binner,
-                        cellsize=10.0)
-                    for fkp in fkp_fields]
+                        cellsize=20.0,  # FIXME 10. for 2pt+3pt, 20. for PNG, should read from input pk
+                    )
+                    for fkp in fkp_fields
+                ]
 
                 # Shared window FM arguments
                 window_fm_kw = {

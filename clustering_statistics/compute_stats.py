@@ -473,6 +473,11 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             'Even after rescaling P_2, theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Some P_2 values may be negative. Check input theory.'
                         )
 
+                theory_rebin = window_options.pop('theory_rebin', None)
+                if theory_rebin is not None:
+                    # Rebin theory to speed up window function computation
+                    theory = theory.select(k=slice(0, None, theory_rebin))
+
                 # Load example of output measurement. If spectrum_fn provided, use it; otherwise use spectrum loaded for the preliminary fit in the theory block above
                 spectrum_fn = window_options.pop("spectrum", None)
                 fn_window_options = window_options | {"auw": False, "cut": False}
@@ -736,7 +741,12 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                                 extra = f'{_effect}_{listell}_seed={seed}'
                             diff.append(types.read(get_stats_fn(kind=f'{stat}_fm', **(kw | {"extra": extra}))))
                         window_realizations.append(diff[0].clone(value=diff[1].value() - diff[0].value()))
-                    window_fm = interpolate_window_realizations(window_geometry, window_realizations=window_realizations, **kw_interpolate)
+                    window_fm = window_realizations[0].clone(value=np.mean([window.value() for window in window_realizations], axis=0))
+                    # build downscaling matrix
+                    block = types.utils.matrix_spline_interp(xt=window_geometry.theory.get(**window_geometry.theory.labels()[0]).coords(0), xo=window_fm.theory.get(0).coords(0))
+                    downscale = np.kron(np.eye(len(window_geometry.theory.ells)), block)
+                    # use it to "interpolate" the forward-modeled window to the geometry of the base window
+                    window_fm = window_fm.clone(value=window_fm.value().dot(downscale))
                 fn = get_stats_fn(kind=stat, **kw)
                 # Adding all effects
                 window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
