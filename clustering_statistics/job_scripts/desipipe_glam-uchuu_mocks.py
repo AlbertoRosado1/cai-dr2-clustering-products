@@ -28,7 +28,7 @@ queue.clear(kill=False)
 
 output, error = 'slurm_outputs/glam-uchuu_mocks/slurm-%j.out', 'slurm_outputs/glam-uchuu_mocks/slurm-%j.err'
 kwargs = {}
-environ = Environment(command='source /global/common/software/desi/users/adematti/cosmodesi_environment.sh new')
+environ = Environment('nersc-cosmodesi')
 tm = TaskManager(queue=queue, environ=environ)
 tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu'))
@@ -56,38 +56,34 @@ def run_stats(tracer='LRG', project='', version='glam-uchuu-v2-altmtl', onthefly
 
     cache = {}
     if zranges is None:
-        zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+        raise ValueError('Please provide zranges.')
     for imock in imocks:
         for region in regions:
-            mesh2_spectrum = {'cut': True, 
-                              'auw': True if 'altmtl' in version and onthefly is None else None,
-                              'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer) if 'oqe' in weight else None}
-            window_mesh2_spectrum = {'cut': True, 
-                                     'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer) if 'oqe' in weight else None}
+            mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
+                              'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
+            window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None}
+            
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
-                           mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum, 
+                           mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
-
-            stats_dir_kws = dict(stats_dir=stats_dir, project=project)
-            if onthefly == 'complete':
-                options['catalog']['complete'] = {}
-                get_stats_fn = functools.partial(tools.get_stats_fn, extra='complete', **stats_dir_kws)
-            elif onthefly == 'reshuffle':
-                options['catalog']['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'] | dict(region='ALL')))}
-                get_stats_fn = functools.partial(tools.get_stats_fn, extra='reshuffle', **stats_dir_kws)
-            else:
-                get_stats_fn = functools.partial(tools.get_stats_fn, **stats_dir_kws)
-
-            options = fill_fiducial_options(options)
-            if True: #onthefly:
-                for tracer in options['catalog']:
-                    options['catalog'][tracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=options['catalog'][tracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
-            compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, **options)
+            options = fill_fiducial_options(options, analysis=analysis)
+            
+            for itracer in options['catalog']:
+                options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
+                options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
+                if onthefly == 'complete':
+                    options['catalog'][itracer]['complete'] = {}
+                elif onthefly == 'reshuffle':
+                    options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'][itracer] | dict(region='ALL')))}                
+            
+            get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project, extra=onthefly if onthefly else '')
+            compute_stats_from_options(stats, analysis=analysis, get_stats_fn=get_stats_fn, cache=cache, **options)
 
     # postprocess
     if postprocess:
-        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True})
-        postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
+        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, 
+                                   combine_regions={'stats': stats}, mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum)
+        postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
 def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='glam-uchuu-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', postprocess=['combine_regions'], zranges=None, **kwargs):
@@ -103,7 +99,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     else:
         get_stats_fn = functools.partial(tools.get_stats_fn, **stats_dir_kws)
 
-    postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **options)
+    postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **options)
 
 
 
@@ -124,44 +120,52 @@ if __name__ == '__main__':
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    # stats       = ['mesh2_spectrum', 'mesh3_spectrum']
+    # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
     # postprocess = ['combine_regions']
     # analysis = 'full_shape'
     # project  = f'{analysis}/base'
     # weight   = 'default-FKP'
     # regions  = ['NGC','SGC']
+    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
     # max_mocks_per_batch = 10
 
     # run data_splits for lensing group with full_shape setup 
-    stats   = ['mesh2_spectrum']
-    analysis = 'full_shape'
-    project = f'{analysis}/data_splits'
-    weight  = 'default-FKP'
-    regions = ['N', 'NGCnoN', 'S', 'SGCnoDES', 'SnoDES', 'DES', 'ACT_DR6', 'PLANCK_PR4'] #, 'GAL040', 'GAL060']
-    # regions = ['GAL040', 'GAL060']
-    max_mocks_per_batch = 5 
+    # stats   = ['mesh2_spectrum']
+    # analysis = 'full_shape'
+    # project = f'{analysis}/data_splits'
+    # weight  = 'default-FKP'
+    # regions = ['N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
+    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
+    # max_mocks_per_batch = 5 
 
     # run fiducial local_png
-    # stats       = ['mesh2_spectrum']
-    # postprocess = ['combine_regions']
-    # analysis = 'local_png'
-    # project  = f'{analysis}/base'
-    # weight   = 'default-FKP-oqe'
-    # regions  = ['NGC', 'SGC']
-    # max_mocks_per_batch = 10
+    stats       = ['mesh2_spectrum']
+    postprocess = ['combine_regions']
+    analysis = 'local_png'
+    project  = f'{analysis}/base'
+    weight   = 'default-fkp-oqe'
+    regions  = ['NGC','SGC']
+    tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
+    max_mocks_per_batch = 10
 
     onthefly = None
-    zranges  = None
     
-    for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO']:
+    for tracer in tracers:
+        if 'png' in analysis:
+            # do not compute measurements for overlapping redshifts
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
+        else:
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
         if check_for_existing_measurements:
-            exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer, region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
+            exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer[0] if isinstance(tracer, (list, tuple)) else tracer,
+                                                                                           region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
             imocks = exists[1]['imock']
             rerun = []
-            for zrange in tools.propose_fiducial('zranges', tracer, analysis=analysis):
+            for zrange in zranges:
                 for kind in stats:
                     stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')), 
-                                     tracer=tracer, region=regions[-1], weight=weight, zrange=zrange, version=version, project=project)
+                                     tracer=tracer, region=regions[-1], weight=weight, zrange=zrange, version=version, project=project,
+                                     extra=onthefly if onthefly else '')
                     rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
                     rerun += [imock for imock in imocks if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
             imocks = sorted(set(rerun))
