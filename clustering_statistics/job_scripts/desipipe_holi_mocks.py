@@ -123,7 +123,7 @@ if __name__ == '__main__':
     # to run job
     # mode = 'slurm'
     mode = 'interactive'
-    imocks2run = np.arange(100)
+    imocks2run = np.arange(100,200)
     if version == 'holi-v3-altmtl':
         # do not perform measurements on dubious mocks
         bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
@@ -146,6 +146,7 @@ if __name__ == '__main__':
     weight  = 'default-FKP'
     regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'] #galactic and imaging regions
     # regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
+    tracers = ['LRG', 'ELG_LOPnotqso', 'QSO']
     max_mocks_per_batch = 5 
     postprocess = ['combine_regions']
     postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:]

@@ -598,7 +598,6 @@ def apply_blinding(data, tracer, zrange):
     else:
         raise NotImplementedError
 
-
 def _unzip_catalog_options(catalog):
     """From a catalog dictionary with nran, zrange, ..., tracer, return {tracer: {nran:..., zrange: ...}}"""
     if 'tracer' in catalog:

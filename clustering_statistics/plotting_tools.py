@@ -1,8 +1,8 @@
 from matplotlib import pyplot as plt
 
 import lsstypes as types
+from pathlib import Path
 from clustering_statistics import tools
-
 
 def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1):
     means, covs = {}, {}
@@ -18,9 +18,13 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=''
         if 'mesh3' in kind:
             kw['basis'] = 'sugiyama-diagonal'
             kw['auw'] = False
-        fns = tools.get_stats_fn(kind=kind, stats_dir=stats_dir, project=project, zrange=zrange, region=region, **kw, imock='*')
-        stats = list(map(types.read, fns))
-        # print(fns[0])
+        if kw['version'] == 'data-dr2-v2':
+            fns = tools.get_stats_fn(kind=kind, stats_dir=stats_dir, project=project, zrange=zrange, region=region, **kw)
+        else:
+            fns = tools.get_stats_fn(kind=kind, stats_dir=stats_dir, project=project, zrange=zrange, region=region, **kw, imock='*')
+        if isinstance(fns, (str, Path)):
+            fns = [fns]
+        stats = [types.read(fn) for fn in fns]
         if 'particle2_correlation' in kind:
             stats = [stat.project(ells=ells) for stat in stats]
             means[version] = types.mean(stats).select(s=slice(0, None, rebin))
@@ -31,7 +35,6 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=''
         else:
             covs[version] = None
     return means, covs
-
 
 def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1, reference=None, ylim=(-1.5, 1.5),
                figure=None, ax_col=0, linestyles=None, lw=2, colors=None, scaling='kpk', save_fn=None, title=None):

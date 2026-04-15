@@ -75,9 +75,7 @@ def run_fit_from_options(actions,
         else:
             raise NotImplementedError(f'{action} not implemented')
 
-
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser(
         description='Fit DESI cutsky clustering statistics.',
     )
