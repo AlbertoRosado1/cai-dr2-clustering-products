@@ -99,17 +99,18 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
                 options['catalog']['keep_columns'] = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'WEIGHT_FKP']  # add WEIGHT_FKP for the foward model
 
                 options['window_mesh2_spectrum_fm'] = {}
-                options['window_mesh2_spectrum_fm']['batch_size'] = 4  # 4 is the max that I can fit in memory with nran=1.
+                # for ell=0: 4 is the max that I can fit in memory with nran=1 / for ell=2 -> I need to go down to 3...
+                options['window_mesh2_spectrum_fm']['batch_size'] = 3  
                 options['window_mesh2_spectrum_fm']['spectrum_regions'] = kwargs.get('spectrum_regions', ['NGC', 'SGC'])
 
                 options['window_mesh2_spectrum_fm']['geo'] = kwargs.get('geo', True)
                 options['window_mesh2_spectrum_fm']['ric'] = kwargs.get('ric', True)
                 options['window_mesh2_spectrum_fm']['ellsout'] = kwargs.get('ellsout', None)
 
-                options['window_mesh2_spectrum_fm']['n_realizations'] = 1
-                options['window_mesh2_spectrum_fm']['seeds'] = [1]
+                options['window_mesh2_spectrum_fm']['n_realizations'] = 10
+                options['window_mesh2_spectrum_fm']['seeds'] = [50, 20, 77, 80, 97, 6, 52, 64, 76, 81]
 
-                options['window_mesh2_spectrum_fm']['theory_rebin'] = 10
+                options['window_mesh2_spectrum_fm']['theory_rebin'] = 10  # reduce the number of points -> greatly improve the computation time.
 
                 # update tje template as function of the weight use here:
                 #options['window_mesh2_spectrum_fm']['regression_maps'] = xxx
@@ -157,7 +158,7 @@ if __name__ == '__main__':
     source /global/homes/e/edmondc/.bash_profile
     export HDF5_USE_FILE_LOCKING=TRUE
     
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0 2
     
     """
     from clustering_statistics import setup_logging
