@@ -905,8 +905,8 @@ def compute_window_mesh2_spectrum_fm(
                 alphad = spectrum.get(0).attrs["wsum_data"][0][0] / (fkp.data.weights * fkp.data.extra["WEIGHT_FKP"]).sum()
                 alphar = spectrum.get(0).attrs["wsum_randoms"][0][0] / (fkp.randoms.weights * fkp.randoms.extra["WEIGHT_FKP"]).sum()
                 fkp_fields[i] = fkp.clone(
-                    data=fkp.data.clone(extra={**fkp.data.extra, "WEIGHT_FKP": fkp.data.extra["WEIGHT_FKP"] * alphad}),
-                    randoms=fkp.randoms.clone(extra={**fkp.randoms.extra, "WEIGHT_FKP": fkp.randoms.extra["WEIGHT_FKP"] * alphar}),
+                    data=fkp.data.clone(weights=fkp.data.weights * alphad),
+                    randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar),
                 )
 
             ## FM based computations
@@ -985,30 +985,26 @@ def compute_window_mesh2_spectrum_fm(
                 fkp_fields = [_attach_weights(fkp_field, ell) for fkp_field in fkp_fields]
                 # Recover FKP normalization for each region and this ell only from input spectrum
                 fkp_norms = [jnp.concatenate([spectrum.get(ill).values("norm") for ill in [ell]], axis=0) for spectrum in spectra]
-
+                _fkp_fields = []
                 # Renormalize data and randoms to input spectrum
                 for i, (spectrum, fkp) in enumerate(zip(spectra, fkp_fields, strict=True)):
                     # for FKP, looks like wsum_data is [[number, number]]
                     alphad1 = spectrum.get(ell).attrs["wsum_data"][0][0] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_1"]).weights.sum()
-                    alphad2 = spectrum.get(ell).attrs["wsum_data"][0][0] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_2"]).weights.sum()
-                    alphar1 = spectrum.get(ell).attrs["wsum_randoms"][0][1] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_1"]).weights.sum()
+                    alphad2 = spectrum.get(ell).attrs["wsum_data"][0][1] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_2"]).weights.sum()
+                    alphar1 = spectrum.get(ell).attrs["wsum_randoms"][0][0] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_1"]).weights.sum()
                     alphar2 = spectrum.get(ell).attrs["wsum_randoms"][0][1] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_2"]).weights.sum()
                     # Renormalize the optimal weights so that the final mesh is properly normalized
-                    fkp_fields[i] = fkp.clone(
-                        data=fkp.data.clone(
-                            extra=fkp.data.extra
-                            | {
-                                "weight_optimal_1": fkp.data.extra["weight_optimal_1"] * alphad1,
-                                "weight_optimal_2": fkp.data.extra["weight_optimal_2"] * alphad2,
-                            }
-                        ),
-                        randoms=fkp.randoms.clone(
-                            extra=fkp.randoms.extra
-                            | {
-                                "weight_optimal_1": fkp.randoms.extra["weight_optimal_1"] * alphar1,
-                                "weight_optimal_2": fkp.randoms.extra["weight_optimal_2"] * alphar2,
-                            }
-                        ),
+                    _fkp_fields.append(
+                        (
+                            fkp.clone(
+                                data=fkp.data.clone(weights=fkp.data.weights * alphad1),
+                                randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar1),
+                            ),
+                            fkp.clone(
+                                data=fkp.data.clone(weights=fkp.data.weights * alphad2),
+                                randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar2),
+                            ),
+                        )
                     )
 
                 # Shared window FM arguments
@@ -1018,10 +1014,11 @@ def compute_window_mesh2_spectrum_fm(
                     "nreal": n_realizations,
                     "seeds": seeds,
                     "batch_size": batch_size,
-                    "mock_survey_args": [(fkp,) * 2 for fkp in fkp_fields],  # same FKP field but with different weights
+                    "mock_survey_args": _fkp_fields,  # list of tuples of FKP fields with different norm and optimal weights
                     "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
                     "tmpdir": None,  # No temporary output
-                    "survey_names": spectrum_regions}
+                    "survey_names": spectrum_regions,
+                }
 
                 mock_survey_kwargs = {
                     "los": los,
