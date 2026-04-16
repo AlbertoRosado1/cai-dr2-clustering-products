@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 Script to create and spawn desipipe tasks to compute clustering measurements on abacus mocks.
 To create and spawn the tasks on NERSC, use the following commands:
@@ -126,11 +127,10 @@ if __name__ == '__main__':
     version = 'abacus-hf-dr2-v2-altmtl'
     onthefly = None
     zranges = None
-    # regions = ['NGC','SGC'] # ,'N','S','SnoDES','DES','ACT_DR6','PLANCK_PR4'] #,'GAL040','GAL060']
-    regions = ['N','S','SnoDES','DES','ACT_DR6','PLANCK_PR4']
-    project = f'{analysis}/data_splits'
-    # project = f'{analysis}/base'
-
+    regions = ['NGC','SGC'] # ,'N','S','SnoDES','DES','ACT_DR6','PLANCK_PR4'] #,'GAL040','GAL060']
+    # regions = ['N','S','SnoDES','DES','ACT_DR6','PLANCK_PR4']
+    # project = f'{analysis}/data_splits'
+    project = f'{analysis}/base'
 
     for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][1:2]:
         tracer = tools.get_full_tracer(tracer, version=version)

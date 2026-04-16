@@ -19,8 +19,10 @@ doc/_build/
 **/*.png
 **/bak
 **/_plots/*
+**/desipipe_data_splits_unblinded.py
 
 **/log
+**/tmp
 
 # Unit test / coverage reports
 **/.coverage

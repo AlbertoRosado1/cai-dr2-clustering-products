@@ -107,7 +107,9 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
     cut : bool, optional
         If provided, apply a theta-cut of (0, 0.05) in degress.
     battrs : dict, optional
-        Bin attributes for cucount.jax.BinAttrs. If None, default bins are used. See cucount.jax.BinAttrs.
+        Bin attributes for cucount.jax.BinAttrs.
+        E.g. ``battrs = dict(s=np.linspace(0., 180., 181), mu=(np.linspace(-1., 1., 201), 'midpoint'))``.
+        If None, default bins are used. See cucount.jax.BinAttrs.
     zeff : dict, optional
         Optional arguments for computing effective redshift.
         Default is ``{'cellsize': 10.}`` (density computed with ``cellsize = 10.``)

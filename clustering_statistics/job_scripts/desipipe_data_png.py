@@ -106,6 +106,8 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
                 options['window_mesh2_spectrum_fm']['ric'] = kwargs.get('ric', True)
                 options['window_mesh2_spectrum_fm']['ellsout'] = kwargs.get('ellsout', None)
 
+                options['window_mesh2_spectrum_fm']['n_realizations'] = 1
+                options['window_mesh2_spectrum_fm']['seeds'] = [1]
                 # update tje template as function of the weight use here:
                 #options['window_mesh2_spectrum_fm']['regression_maps'] = xxx
             
@@ -152,7 +154,7 @@ if __name__ == '__main__':
     source /global/homes/e/edmondc/.bash_profile
     export HDF5_USE_FILE_LOCKING=TRUE
     
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0
     
     """
     from clustering_statistics import setup_logging
@@ -191,7 +193,7 @@ if __name__ == '__main__':
     logger.info(f'stats_dir: {stats_dir}')
 
     if not args.fm_window:
-        stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum']
+        stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][2:]
         postprocess = ['combine_regions']
         logger.info(f'Running stats {stats} and postprocess {postprocess}')
         
@@ -199,7 +201,9 @@ if __name__ == '__main__':
         
         #tracers = ['LRG', 'LRG_zcmb', 'ELGnotqso', 'QSO', 'QSO_zcmb', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO')]
         #tracers = ['LRG', 'QSO', ('LRG', 'QSO')][1:2]
-        tracers = ['LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO_zcmb', ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]  # NGC+SGC = 2h30
+       # tracers = ['LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO_zcmb', ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]  # NGC+SGC = 2h30
+
+        tracers = [('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]
 
         for tracer in tracers:
             from clustering_statistics import tools
@@ -208,7 +212,6 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')
             #zranges = [0.4, 3.5]
             logger.info(f'zranges: {zranges}')
-
             weights = ['default-fkp-oqe', 'default-fkp'][:1]
             # Choice of imaging systematics avaialble in the catalogs: https://desi.lbl.gov/trac/wiki/keyprojects/Y3-DR/LSScat/imaging_systematics
             # if tracer in ['LRG', 'LRG_zcmb']:
