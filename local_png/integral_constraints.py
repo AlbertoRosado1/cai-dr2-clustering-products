@@ -75,7 +75,7 @@ class WindowIC:
     def model(self, P, *params):
         return np.dot(self.W, np.dot(self.f(params, kin=self.kin, kout=self.kout), P.T)).T 
         
-    def fit(self, ncall=5, initial_params=None):
+    def fit(self, ncall=5, initial_params=None, hard_limits=False):
         """ 
         Fit the model to the difference between mocks with and without IC, using a least-squares cost function and Minuit as the minimizer. The best-fit parameters are stored in self.bestfit_params.
         """
@@ -91,6 +91,10 @@ class WindowIC:
 
         print(f"ncall={ncall}, initial_params={params}")
         m = Minuit(lsq, name=name_params, **{name: params[i] for i, name in enumerate(name_params)})
+        if hard_limits:
+            # Add hard limit for the A parameters to avoid unphysical values (for instance, if A is too large, the IC contribution can be larger than the signal itself and lead to numerical issues in the minimization). The sigma parameters are left free to explore a wide range of values.
+            for i, name in enumerate(name_params):
+                m.limits[name] = (-1, 1) if i <  len(self.ells)*len(self.ellsin) else (None, None)
         #m.errordef =  errordef
         for _ in tqdm(range(ncall)):
             m.migrad()
