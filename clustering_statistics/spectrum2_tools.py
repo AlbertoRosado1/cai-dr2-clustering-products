@@ -685,7 +685,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
 
 def compute_window_mesh2_spectrum_fm(
     *get_data_randoms: Callable,
-    spectrum: types.Mesh2SpectrumPoles,
+    spectra: list[types.Mesh2SpectrumPoles],
     theory: types.Mesh2SpectrumPoles,
     optimal_weights: Callable | None,
     data_to_randoms_ratio: float,
@@ -695,7 +695,7 @@ def compute_window_mesh2_spectrum_fm(
     ric_nbins: int,
     ric_regions: list[str],
     amr: bool,  # is optional
-    ellsout : list[int] | None,
+    ellsout: list[int] | None,
     regression_maps: list[str] | None,
     templates_paths_kwargs: dict | None,
     amr_regions_zranges: list[tuple[str, tuple[float, float]]] | None,
@@ -712,8 +712,8 @@ def compute_window_mesh2_spectrum_fm(
     ----------
     *get_data_randoms : Callable
         Functions that return tuples of (data, randoms) catalogs.
-    spectrum : lsstypes.Mesh2SpectrumPoles
-        Measured 2-point spectrum multipoles. Only used for their attributes, not their values.
+    spectra: list[types.Mesh2SpectrumPoles]
+        Measured 2-point spectrum multipoles. Only used for their attributes (binning, norm, wsum...), not their values.
     theory: lsstypes.Mesh2SpectrumPoles
         Input theory power spectrum, used as a fiducial for the derivative. Attributes (e.g. ells) used for mock survey generation; value used for the derivative.
     optimal_weights : Callable or None
@@ -803,11 +803,11 @@ def compute_window_mesh2_spectrum_fm(
         columns_optimal_weights += getattr(optimal_weights, "columns", [])  # to compute optimal weights, e.g. for fnl
 
     # Recover output and mesh information from the observable spectrum
-    ellsout = ellsout or spectrum.ells
-    los = spectrum.attrs["los"]  # this has to match with theory input
+    ellsout = ellsout or spectra[0].ells
+    los = spectra[0].attrs["los"]  # this has to match with theory input
     if los in ["endpoint", "firstpoint"]:
         los = "local"
-    mattrs = {name: spectrum.attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
+    mattrs = {name: spectra[0].attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
 
     with create_sharding_mesh(meshsize=mattrs.get("meshsize", None)):
         # Split into "data" and randoms based on the provided ratio
@@ -888,18 +888,26 @@ def compute_window_mesh2_spectrum_fm(
 
         # Turn into FKP fields
         fkp_fields = [FKPField(data=d, randoms=r, attrs=mattrs) for d, r in zip(all_data, all_randoms, strict=True)]
+
         del all_data, all_randoms
         # Compute FKP normalization for each region, with the estimator weights, and for each ell if optimal weights are applied
         if optimal_weights is None:
-            if jax.process_index() == 0: logger.info("Using FKP weights, computing window for all ells at once.")
+            if jax.process_index() == 0:
+                logger.info("Using FKP weights, computing window for all ells at once.")
             # Using FKP weights which are symetrical, so this remains an autocorr
-            binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
+            binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectra[0].get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
+            # get norms from input spectrum
+            fkp_norms = [jnp.concatenate([spectrum.get(ell).values("norm") for ell in ellsout], axis=0) for spectrum in spectra]
 
-            # Temporarily add FKP weights to the fkp_fields weights for norm and analytical computation
-            # FIXME: cellsize (actually, read normalization from data pk as in compute_mesh2_window_spectrum)
-            fkp_norms = [
-                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "WEIGHT_FKP"), bin=binner, cellsize=20.0)
-                for fkp in fkp_fields]
+            # Renormalize data and randoms to input spectrum
+            for i, (spectrum, fkp) in enumerate(zip(spectra, fkp_fields, strict=True)):
+                # autocorrelation and FKP: component [0, 0]
+                alphad = spectrum.get(0).attrs["wsum_data"][0][0] / (fkp.data.weights * fkp.data.extra["WEIGHT_FKP"]).sum()
+                alphar = spectrum.get(0).attrs["wsum_randoms"][0][0] / (fkp.randoms.weights * fkp.randoms.extra["WEIGHT_FKP"]).sum()
+                fkp_fields[i] = fkp.clone(
+                    data=fkp.data.clone(extra={**fkp.data.extra, "WEIGHT_FKP": fkp.data.extra["WEIGHT_FKP"] * alphad}),
+                    randoms=fkp.randoms.clone(extra={**fkp.randoms.extra, "WEIGHT_FKP": fkp.randoms.extra["WEIGHT_FKP"] * alphar}),
+                )
 
             ## FM based computations
             windows = {}
@@ -973,18 +981,35 @@ def compute_window_mesh2_spectrum_fm(
                 windows[extra_effects] = {}
 
             for ell in ellsout:
-                binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
+                binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectra[0].get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
                 fkp_fields = [_attach_weights(fkp_field, ell) for fkp_field in fkp_fields]
-                # Compute FKP normalization for each region, with the estimator weights (cross correlation), and for given ell = binner
-                fkp_norms = [
-                    compute_fkp2_normalization(
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_1'),
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_2'),
-                        bin=binner,
-                        cellsize=20.0,  # FIXME 10. for 2pt+3pt, 20. for PNG, should read from input pk
+                # Recover FKP normalization for each region and this ell only from input spectrum
+                fkp_norms = [jnp.concatenate([spectrum.get(ill).values("norm") for ill in [ell]], axis=0) for spectrum in spectra]
+
+                # Renormalize data and randoms to input spectrum
+                for i, (spectrum, fkp) in enumerate(zip(spectra, fkp_fields, strict=True)):
+                    # for FKP, looks like wsum_data is [[number, number]]
+                    alphad1 = spectrum.get(ell).attrs["wsum_data"][0][0] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_1"]).weights.sum()
+                    alphad2 = spectrum.get(ell).attrs["wsum_data"][0][0] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_2"]).weights.sum()
+                    alphar1 = spectrum.get(ell).attrs["wsum_randoms"][0][1] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_1"]).weights.sum()
+                    alphar2 = spectrum.get(ell).attrs["wsum_randoms"][0][1] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_2"]).weights.sum()
+                    # Renormalize the optimal weights so that the final mesh is properly normalized
+                    fkp_fields[i] = fkp.clone(
+                        data=fkp.data.clone(
+                            extra=fkp.data.extra
+                            | {
+                                "weight_optimal_1": fkp.data.extra["weight_optimal_1"] * alphad1,
+                                "weight_optimal_2": fkp.data.extra["weight_optimal_2"] * alphad2,
+                            }
+                        ),
+                        randoms=fkp.randoms.clone(
+                            extra=fkp.randoms.extra
+                            | {
+                                "weight_optimal_1": fkp.randoms.extra["weight_optimal_1"] * alphar1,
+                                "weight_optimal_2": fkp.randoms.extra["weight_optimal_2"] * alphar2,
+                            }
+                        ),
                     )
-                    for fkp in fkp_fields
-                ]
 
                 # Shared window FM arguments
                 window_fm_kw = {

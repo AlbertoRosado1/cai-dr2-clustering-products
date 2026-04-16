@@ -478,23 +478,21 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     # Rebin theory to speed up window function computation
                     theory = theory.select(k=slice(0, None, theory_rebin))
 
-                # Load example of output measurement. If spectrum_fn provided, use it; otherwise use spectrum loaded for the preliminary fit in the theory block above
-                spectrum_fn = window_options.pop("spectrum", None)
+                # Load example of output measurements. If spectra_fn provided, use it; otherwise use spectra loaded for the preliminary fit in the theory block above
+                spectra_fn = window_options.pop("spectra", None)
                 fn_window_options = window_options | {"auw": False, "cut": False}
-                if spectrum_fn is None:
-                    spectrum_fn = {}
+                if spectra_fn is None:
+                    spectra_fn = []
                     spectrum_stat = stat.replace("window_", "").replace("_fm", "")
                     for spectrum_region in window_options["spectrum_regions"]:
                         fn_window_options = options[spectrum_stat] | fn_window_options
-                        spectrum_fn[spectrum_region] = get_stats_fn(
-                            kind=spectrum_stat, catalog=fn_catalog_options,
-                            **(options[spectrum_stat] | {"auw": False, "cut": False} | {"region": spectrum_region}))
-                    spectrum = types.sum([types.read(spectrum_fn[spectrum_region]) for spectrum_region in window_options["spectrum_regions"]])
-                else:
-                    spectrum = types.read(spectrum_fn)
+                        spectra_fn.append(
+                            get_stats_fn(kind=spectrum_stat, catalog=fn_catalog_options, **(options[spectrum_stat] | {"auw": False, "cut": False} | {"region": spectrum_region}))
+                        )
+                spectra = [types.read(spectrum_fn) for spectrum_fn in spectra_fn]
 
                 # Now compute window function using forward model with derivatives
-                window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, theory=theory, **window_options)
+                window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectra=spectra, theory=theory, **window_options)
                 # This is a dict of dict of lists of windows : {modeled_effect: {spectrum_region: [window, ...], ...}, ...}
                 for effect in window:  # geo, RIC or RIC+AMR
                     for spectrum_region in window[effect]:  # eg NGC, SGC
@@ -508,6 +506,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
                             options = fn_window_options | {"extra": extra, "region": spectrum_region}
                             tools.write_stats(get_stats_fn(kind=stat, catalog=fn_catalog_options, **options), window[effect][spectrum_region][i])
+
+                # synchronize here to avoid postprocess trying to load windows that haven't been written yet
+                jax.experimental.multihost_utils.sync_global_devices("window_fm_IO")  # wait for the writer
 
         # Covariance matrix computation
         funcs = {'covariance_mesh2_spectrum': compute_covariance_mesh2_spectrum}
