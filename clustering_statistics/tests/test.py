@@ -364,7 +364,42 @@ def test_window_fm(tracer='QSO'):
     )
 
 
+def test_count3close():
+    for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO'][1:2]:
+        for zrange in tools.propose_fiducial('zranges', tracer):
+            for region in ['NGC', 'SGC'][:1]:
+                version = 'data-dr2-v2'
+                catalog_options = dict(version=version, tracer=tracer, zrange=zrange, region=region, weight='default-FKP', nran=1)
+                data = tools.read_clustering_catalog(kind='data', keep_columns=True, **catalog_options)
+                from cucount.numpy import count2, count3close, Particles, BinAttrs, SelectionAttrs, MeshAttrs, setup_logging
+                setup_logging()
+                data = Particles(data['POSITION'], data['INDWEIGHT'])
+                battrs = BinAttrs(theta=np.linspace(0., 1., 100))
+                import time
+                t0 = time.time()
+                counts = count2(data, data, battrs=battrs)['weight']
+                print(f'count2 {time.time() - t0:.2f}')
+                t0 = time.time()
+                sattrs = SelectionAttrs(theta=(0., 0.05))
+                counts = count3close(data, data, data, battrs12=battrs, battrs13=battrs, sattrs12=sattrs)['weight']
+                print(f'count3 {time.time() - t0:.2f}')
+                t0 = time.time()
+                sattrs = SelectionAttrs(theta=(0., 0.05))
+                battrs = BinAttrs(s=np.linspace(0., 100., 100))
+                counts = count3close(data, data, data, battrs12=battrs, battrs13=battrs, sattrs12=sattrs)['weight']
+                print(f'count3 {time.time() - t0:.2f}')
+                exit()
+
+
 if __name__ == '__main__':
+
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.1'
+    from jax import config
+    config.update('jax_enable_x64', True)
+    #config.update('jax_num_cpu_devices', 4)
+    #config.update('jax_platform_name', 'cpu')
+    test_count3close()
+    exit()
 
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     from jax import config
