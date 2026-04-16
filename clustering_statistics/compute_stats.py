@@ -495,7 +495,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectra=spectra, theory=theory, **window_options)
                 # This is a dict of dict of lists of windows : {modeled_effect: {spectrum_region: [window, ...], ...}, ...}
                 for effect in window:  # geo, RIC or RIC+AMR
-                    for spectrum_region in window[effect]:  # eg NGC, SGC
+                    for spectrum_region in window_options["spectrum_regions"]:  # window[effect]:  # eg NGC, SGC
                         for i, seed in enumerate(window_options['seeds']):
                             # FIXME this overrides the extra option pre-defined in get_stats_fn through e.g. functools.partial. Not sure this is an actual issue.
                             if window_options['ellsout'] is None:

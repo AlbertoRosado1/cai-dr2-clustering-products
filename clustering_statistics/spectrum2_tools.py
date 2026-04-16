@@ -937,12 +937,16 @@ def compute_window_mesh2_spectrum_fm(
             if geo:
                 if jax.process_index() == 0: logger.info("Computing geometry window with desiwinds...")
                 _, windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None})
-                windows["geometry"] = dict(zip(spectrum_regions, windows_fm_geo))
+                windows["geometry"] = {
+                    spectrum_region: [windows_fm_geo[ireal][iregion] for ireal in range(n_realizations)] for iregion, spectrum_region in enumerate(spectrum_regions)
+                }
 
             if ric:
                 if jax.process_index() == 0: logger.info("Computing total window with desiwinds...")
                 _, windows_fm = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": ric_args, "amr_args": amr_args})
-                windows[extra_effects] = dict(zip(spectrum_regions, windows_fm))
+                windows[extra_effects] = {
+                    spectrum_region: [windows_fm[ireal][iregion] for ireal in range(n_realizations)] for iregion, spectrum_region in enumerate(spectrum_regions)
+                }
 
             if jax.process_index() == 0: logger.info("desiwinds window computation finished.")
             return windows
