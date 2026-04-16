@@ -942,7 +942,11 @@ def compute_window_mesh2_spectrum_fm(
                 }
 
             if jax.process_index() == 0: logger.info("desiwinds window computation finished.")
-            return windows
+
+            for effect in windows:
+                windows[effect] = {
+                    spectrum_region: [windows[effect][ireal][idx] for ireal in range(n_realizations)]
+                    for idx, spectrum_region in enumerate(spectrum_regions)}
 
         else:
             # Optimal weights: non symmetrical, so need to compute "cross-correlation" (same tracer, different weights) + not the same for all ells
@@ -1046,16 +1050,12 @@ def compute_window_mesh2_spectrum_fm(
                 value = np.concatenate([window.value() for window in windows], axis=0)
                 return windows[0].clone(value=value, observable=observable)  # join multipoles
 
-            if geo:
-                windows["geometry"] = {
-                    spectrum_region: [_combine_ells([windows["geometry"][ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
-                    for idx, spectrum_region in enumerate(spectrum_regions)}
-            if ric:
-                windows[extra_effects] = {
-                    spectrum_region: [_combine_ells([windows[extra_effects][ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+            for effect in windows:
+                windows[effect] = {
+                    spectrum_region: [_combine_ells([windows[effect][ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
                     for idx, spectrum_region in enumerate(spectrum_regions)}
 
-            return windows
+        return windows
 
 
 def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: types.WindowMatrix, select: dict=None, theory: str='rept', fixed=tuple(), out: types.Mesh2SpectrumPoles=None):
