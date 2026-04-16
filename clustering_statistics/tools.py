@@ -1530,6 +1530,8 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 logger.info('Multiplying individual weights by WEIGHT_FKP') if FKP_P0 is None else logger.info(f'Multiplying individual weights by FKP weight computed with FKP_P0 = {FKP_P0}')
             if FKP_P0 is not None:
                 catalog['WEIGHT_FKP'] = 1. / (1. + catalog['NX'] * FKP_P0)
+            elif 'WEIGHT_FKP' not in catalog.columns():
+                raise ValueError('WEIGHT_FKP column does not exist! Provide a value for FKP_P0.')         
             individual_weight *= catalog['WEIGHT_FKP']
 
         if 'noimsys' in weight_type:
