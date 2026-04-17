@@ -369,7 +369,6 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     if 'correlation' in key:  # window functions
                         fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(extra=extra)))
                         tools.write_stats(fn, window[key])
-
         # Synchronize before window forward model computation
         jax.experimental.multihost_utils.sync_global_devices('window')  # wait for the writer
 

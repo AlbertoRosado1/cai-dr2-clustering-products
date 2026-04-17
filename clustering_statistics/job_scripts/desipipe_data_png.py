@@ -215,7 +215,6 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')
             #zranges = [0.4, 3.5]
             logger.info(f'zranges: {zranges}')
-
             weights = ['default-fkp-oqe', 'default-fkp'][:1]
             # Choice of imaging systematics avaialble in the catalogs: https://desi.lbl.gov/trac/wiki/keyprojects/Y3-DR/LSScat/imaging_systematics
             # if tracer in ['LRG', 'LRG_zcmb']:
