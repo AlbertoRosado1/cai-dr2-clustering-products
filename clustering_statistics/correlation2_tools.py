@@ -4,7 +4,7 @@ Configuration-space 2-point clustering measurements.
 Main functions
 --------------
 * `compute_particle2_correlation`: Measure the cutsky 2PCF from pair counts (includes jackknife utility).
-* `compute_angular_upweights`: Derive angular upweights for fiber-collision mitigation.
+* `compute_particle2_angular_upweights`: Derive angular upweights for fiber-collision mitigation.
 * `compute_box_particle2_correlation`: Measure the 2PCF in cubic boxes.
 """
 
@@ -21,7 +21,7 @@ from .tools import _format_bitweights
 logger = logging.getLogger('correlation2')
 
 
-def compute_angular_upweights(*get_data):
+def compute_particle2_angular_upweights(*get_data):
     """
     Compute angular upweights (AUW) from fibered and parent data catalogs.
 

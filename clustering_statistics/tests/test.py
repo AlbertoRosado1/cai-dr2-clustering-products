@@ -365,7 +365,7 @@ def test_window_fm(tracer='QSO'):
 
 
 def test_count3close():
-    for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO'][1:2]:
+    for tracer in ['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOPnotqso', 'QSO'][1:2]:
         for zrange in tools.propose_fiducial('zranges', tracer):
             for region in ['NGC', 'SGC'][:1]:
                 version = 'data-dr2-v2'
@@ -379,14 +379,20 @@ def test_count3close():
                 t0 = time.time()
                 counts = count2(data, data, battrs=battrs)['weight']
                 print(f'count2 {time.time() - t0:.2f}')
+                """
                 t0 = time.time()
                 sattrs = SelectionAttrs(theta=(0., 0.05))
-                counts = count3close(data, data, data, battrs12=battrs, battrs13=battrs, sattrs12=sattrs)['weight']
+                counts = count3close(data, data, data, battrs12=battrs, sattrs12=sattrs, battrs13=battrs)['weight']
                 print(f'count3 {time.time() - t0:.2f}')
+                """
+                t0 = time.time()
+                battrs = BinAttrs(s=np.linspace(0., 100., 100))
+                counts = count2(data, data, battrs=battrs)['weight']
+                print(f'count2 {time.time() - t0:.2f}')
                 t0 = time.time()
                 sattrs = SelectionAttrs(theta=(0., 0.05))
                 battrs = BinAttrs(s=np.linspace(0., 100., 100))
-                counts = count3close(data, data, data, battrs12=battrs, battrs13=battrs, sattrs12=sattrs)['weight']
+                counts = count3close(data, data, data, battrs12=battrs, sattrs12=sattrs, battrs13=battrs)['weight']
                 print(f'count3 {time.time() - t0:.2f}')
                 exit()
 

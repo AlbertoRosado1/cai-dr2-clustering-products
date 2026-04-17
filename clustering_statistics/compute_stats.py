@@ -31,7 +31,7 @@ import lsstypes as types
 
 from . import tools
 from .tools import fill_fiducial_options, _merge_options, Catalog, setup_logging
-from .correlation2_tools import compute_angular_upweights, compute_particle2_correlation
+from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation
 from .spectrum2_tools import (
     compute_mesh2_spectrum,
     compute_window_mesh2_spectrum,
@@ -201,7 +201,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             return {kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_data', 'parent_data']}
 
         # Compute angular upweights from fibered vs parent catalogs
-        auw = compute_angular_upweights(*[functools.partial(get_data, tracer) for tracer in tracers])
+        auw = compute_particle2_angular_upweights(*[functools.partial(get_data, tracer) for tracer in tracers])
         fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=None) for tracer in tracers}
         fn = get_stats_fn(kind='particle2_angular_upweights', catalog=fn_catalog_options)
         # Write computed angular upweights to disk
