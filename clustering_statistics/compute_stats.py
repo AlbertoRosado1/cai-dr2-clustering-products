@@ -30,7 +30,7 @@ import jax.experimental.multihost_utils
 import lsstypes as types
 
 from . import tools
-from .tools import fill_fiducial_options, _merge_options, Catalog, setup_logging
+from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, setup_logging
 from .correlation2_tools import compute_angular_upweights, compute_particle2_correlation
 from .spectrum2_tools import (
     compute_mesh2_spectrum,
@@ -359,8 +359,10 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         # Extract basis from spectrum if available
                         basis = getattr(next(iter(window[key].observable)), 'basis', None)
                         if basis is not None: kw['basis'] = basis
-                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
-                        tools.write_stats(fn, window[key])
+                        # Also save under "geometry", to assemble with forward-modeled window "window_mesh2_spectrum_fm"
+                        for suffix in ['', '_geometry']:  # FIXME the suffix won't be caught by list_stats
+                            fn = get_stats_fn(kind=stat + suffix, catalog=fn_catalog_options, **kw)
+                            tools.write_stats(fn, window[key])
 
                 # Write raw correlation functions (intermediate products) to disk
                 for key in window:
@@ -432,7 +434,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     windows = [types.read(products_fn[spectrum_region]["window"]) for spectrum_region in window_options["spectrum_regions"]]
                     # Combine measurements from multiple regions and fit for theory
                     theory = types.sum(
-                        [run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window) for spectrum, window in zip(spectra, windows, strict=True)]
+                        [run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window, theory='kaiser') for spectrum, window in zip(spectra, windows, strict=True)]
                     )
                     spectrum = types.sum(spectra)
                     theory_fn = get_stats_fn(kind=theory_stat, catalog=(fn_catalog_options[tracers[0]]))
@@ -441,6 +443,39 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 # Synchronize before reading theory
                 jax.experimental.multihost_utils.sync_global_devices("theory")  # such that theory ready for window
                 theory = types.read(theory_fn)
+
+                # Check that theory respects the conditions to be able to generate gaussian mocks in the window
+                c0v = theory.get(0).value() - 7 / 18 * theory.get(4).value()
+                if (c0v <= 0).any():
+                    raise ValueError('Theory (P_0 - 7/18 * P_4) has negative values and cannot be used to generate gaussian mocks for the window function.')
+                c2v = 35 * theory.get(4).value() / 18
+                rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
+                if (c0v * c2v - rec0vc2v**2 <= 0).any():
+                    # Rescale c2
+                    logger.warning(
+                        'Theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Rescaling P_2 by a global factor to enforce this condition.'
+                    )
+                    # Assume P_2 is positive
+                    rescale = np.min((5 * theory.get(4).value() / 9 + 2 * np.sqrt(c0v * c2v)) / theory.get(2).value()) - 1e-6
+                    if np.abs(rescale - 1) > 0.1:
+                        logger.warning(
+                            'Rescaling factor for P_2 is %f, which is quite far from 1. Check that the input theory is reasonable.',
+                            rescale,
+                        )
+                    else:
+                        logger.info('Rescaling factor for P_2 is %f.', rescale)
+                    theory = types.Mesh2SpectrumPoles([theory.get(ell).clone(value=theory.get(ell).value() * rescale) if ell == 2 else theory.get(ell) for ell in theory.ells])
+                    # Check that rescaled theory satisfies the condition
+                    rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
+                    if (c0v * c2v - rec0vc2v**2 <= 0).any():
+                        raise ValueError(
+                            'Even after rescaling P_2, theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Some P_2 values may be negative. Check input theory.'
+                        )
+
+                theory_rebin = window_options.pop('theory_rebin', None)
+                if theory_rebin is not None:
+                    # Rebin theory to speed up window function computation
+                    theory = theory.select(k=slice(0, None, theory_rebin))
 
                 # Load example of output measurement. If spectrum_fn provided, use it; otherwise use spectrum loaded for the preliminary fit in the theory block above
                 spectrum_fn = window_options.pop("spectrum", None)
@@ -459,10 +494,11 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
                 # Now compute window function using forward model with derivatives
                 window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, theory=theory, **window_options)
-                # This is a dict of dict of lists of windows : {modeled_effect:{spectrum_region:[window, ...], ...}, ...}
+                # This is a dict of dict of lists of windows : {modeled_effect: {spectrum_region: [window, ...], ...}, ...}
                 for effect in window:  # geo, RIC or RIC+AMR
                     for spectrum_region in window[effect]:  # eg NGC, SGC
-                        for i, seed in enumerate(window_options["seeds"]):
+                        for i, seed in enumerate(window_options['seeds']):
+                            # FIXME this overrides the extra option pre-defined in get_stats_fn through e.g. functools.partial. Not sure this is an actual issue.
                             if window_options['ellsout'] is None:
                                 extra = f"{effect}_seed={seed}"
                             else:
@@ -603,7 +639,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
     ----------
     postprocess : str or list of str
         Postprocessing.
-        Choices: ['combine_regions', 'rotation_mesh2_spectrum']
+        Choices: ['combine_regions', 'combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum']
     analysis : str, optional
         Type of analysis, 'full_shape' or 'png_local', to set fiducial options.
     get_stats_fn : callable, optional
@@ -678,6 +714,42 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                         # Measurements need to loop over mocks
                         for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options)):
                             _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **_options)
+
+        if 'combine_window_mesh2_spectrum' in postprocess:
+            # Combine base window calculation with forward-modeled windows
+            stat = 'window_mesh2_spectrum'
+            combine_options = dict(options.get('combine_window_mesh2_spectrum', {}))
+            effect = combine_options.pop('effect', 'RIC+AMR')
+            kw_interpolate = dict(combine_options)
+            window_options = options.get(stat, {})
+            window_fm_options = options.get(f'{stat}_fm', {})
+            window_fm = None
+            # Iterate on cut = False, True
+            for window_geometry_fn, kw in list_stats(
+                stat, get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **{stat: window_options, 'mesh2_spectrum': options.get('mesh2_spectrum', {})})[stat]:
+                window_geometry = types.read(window_geometry_fn)
+                if window_fm is None:
+                    window_realizations = []
+                    for i, seed in enumerate(window_fm_options['seeds']):
+                        diff = []
+                        for _effect in ['geometry', effect]:
+                            if window_fm_options['ellsout'] is None:
+                                extra = f"{_effect}_seed={seed}"
+                            else:
+                                listell = "".join(map(str, window_fm_options['ellsout']))
+                                extra = f'{_effect}_{listell}_seed={seed}'
+                            diff.append(types.read(get_stats_fn(kind=f'{stat}_fm', **(kw | {"extra": extra}))))
+                        window_realizations.append(diff[0].clone(value=diff[1].value() - diff[0].value()))
+                    window_fm = window_realizations[0].clone(value=np.mean([window.value() for window in window_realizations], axis=0))
+                    # build downscaling matrix
+                    block = types.utils.matrix_spline_interp(xt=window_geometry.theory.get(**window_geometry.theory.labels()[0]).coords(0), xo=window_fm.theory.get(0).coords(0))
+                    downscale = np.kron(np.eye(len(window_geometry.theory.ells)), block)
+                    # use it to "interpolate" the forward-modeled window to the geometry of the base window
+                    window_fm = window_fm.clone(value=window_fm.value().dot(downscale))
+                fn = get_stats_fn(kind=stat, **kw)
+                # Adding all effects
+                window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
+                tools.write_stats(fn, window)
 
         if 'rotation_mesh2_spectrum' in postprocess:
             # Compute rotation matrix for power spectrum (corrections for systematic effects)
