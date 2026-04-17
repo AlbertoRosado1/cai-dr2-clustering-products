@@ -789,10 +789,9 @@ def compute_window_mesh2_spectrum_fm(
 
     def _update_fkp(data_weights, randoms_weights, fkp_field, estimator_weights):
         return fkp_field.clone(
-            data=fkp_field.data.clone(
-                weights=data_weights * getattr(fkp_field.data, estimator_weights, 1.0)),
-            randoms=fkp_field.randoms.clone(
-                weights=randoms_weights * getattr(fkp_field.randoms, estimator_weights, 1.0)))
+            data=fkp_field.data.clone(weights=data_weights * fkp_field.data.extra[estimator_weights]),
+            randoms=fkp_field.randoms.clone(weights=randoms_weights * fkp_field.randoms.extra[estimator_weights]),
+        )
 
     def _safe_divide(a, b):
         return jnp.where(b != 0, a / b, 0.0)
