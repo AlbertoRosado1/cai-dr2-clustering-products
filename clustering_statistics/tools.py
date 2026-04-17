@@ -615,11 +615,11 @@ def _unzip_catalog_options(catalog):
     return toret
 
 
-def _zip_catalog_options(catalog, squeeze=True, unique=True):
+def _zip_catalog_options(catalog, squeeze=True, unique=True, ignore=()):
     """From {tracer: {nran:..., zrange: ...}}, return {tracer: tuple or single tracer if same, nran: tuple or single number if same}"""
     tracers = tuple(catalog.keys())
-    toret = {key: [] for tracer in tracers for key in catalog[tracer]}
-    num = {key: 0 for tracer in tracers for key in catalog[tracer]}
+    toret = {key: [] for tracer in tracers for key in catalog[tracer] if key not in ignore}
+    num = {key: 0 for tracer in tracers for key in catalog[tracer] if key not in ignore}
     for tracer in tracers:
         for key in toret:
             value = catalog[tracer].get(key, None)
@@ -1016,7 +1016,8 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options, imock=imock, **kwargs) for imock in range(2001)]
         return [fn for fn in fns if os.path.exists(fn)]
 
-    catalog_options = _zip_catalog_options(catalog_options, squeeze=False, unique=True)
+    # catalog_options[tracer]['expand'] is a complicated object, ensuring uniqueness significantly slows things down
+    catalog_options = _zip_catalog_options(catalog_options, squeeze=False, unique=True, ignore=['expand'])
     stats_dir = Path(stats_dir) / project
 
     def join_if_not_none(f, key):
