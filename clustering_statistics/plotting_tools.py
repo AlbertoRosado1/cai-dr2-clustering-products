@@ -1,14 +1,22 @@
 import os
 from matplotlib import pyplot as plt
+import numpy as np
 
 import lsstypes as types
 from pathlib import Path
 from clustering_statistics import tools
 
 def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1):
+    kind_ = kind
     stats_, means, covs = {}, {}, {}
     for version in versions:
-        imocks = versions[version]['imocks']
+        use_theory = versions[version].get('theory',False)
+        if use_theory:
+            kind = 'theory_'+kind_
+            if 'mesh3' in kind or 'particle2' in kind:
+                raise NotImplementedError(f'kind {kind} is not supported.')
+        else:
+            kind = kind_
         kw = dict(tracer=tracer, kind=kind, stats_dir=stats_dir, project=project, zrange=zrange, region=region)
         for name in ['version', 'weight', 'cut', 'auw', 'extra']:
             kw[name] = versions[version][name]
@@ -19,11 +27,11 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=''
                 kw['tracer'] = 'ELG_LOPnotqso'
         if 'mesh3' in kind:
             kw['basis'] = 'sugiyama-diagonal'
-            kw['auw'] = False
-        
+            kw['auw'] = False  
         if kw['version'] == 'data-dr2-v2':
             fns = tools.get_stats_fn(**kw)
         else:
+            imocks = None if use_theory else versions[version]['imocks']
             if imocks is None:
                 fns = tools.get_stats_fn(**kw, imock='*')
             else:
@@ -31,23 +39,28 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=''
                 fns = [fn for fn in fns if os.path.exists(fn)]
         if isinstance(fns, (str, Path)):
             fns = [fns]
+        # print(fns[0])
         stats = [types.read(fn) for fn in fns]
-
         if 'particle2_correlation' in kind:
             stats = [stat.project(ells=ells) for stat in stats]
             stats_[version] = stats
             means[version]  = types.mean(stats).select(s=slice(0, None, rebin))
         else:
             stats_[version] = stats
-            means[version]  = types.mean(stats).select(k=slice(0, None, rebin))
+            means[version]  = stats[0] if use_theory else types.mean(stats)
+            means[version]  = means[version].select(k=slice(0, None, rebin))
         if len(stats) > 1:
             covs[version] = types.cov(stats).at.observable.match(means[version])
         else:
-            covs[version] = None
+            if use_theory:
+                covs[version] = types.read(str(fns[0]).replace('theory','covariance')).at.observable.get(observables='spectrum2')
+                # covs[version] = covs[version].at.observable.match(means[version])
+            else:
+                covs[version] = None
     return stats_, means, covs
 
 
-def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1, reference=None, plot_all=False, imocks=None, ylim=(-1.5, 1.5), figure=None, ax_col=0, linestyles=None, lw=2, colors=None, scaling='kpk', save_fn=None, title=None):
+def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1, reference=None, plot_all=False, imocks=None, ylim=(-1.5, 1.5), figure=None, ax_col=0, linestyles=None, lw=2, colors=None, scaling='kpk', save_fn=None, title=None, legend_ncol=1, legend_title=''):
     if reference is None:
         # use first item from versions as reference
         reference = next(iter(versions))
@@ -89,10 +102,11 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
                 pole = means[version].get(ell)
                 value = pole.coords('k')**k_exp * pole.value().real
                 if 'data' in version or version == reference:
-                    std = pole.coords('k')**k_exp * covs[reference].at.observable.get(ell).std().real
+                    # cov = covs[reference].copy().at.observable.match(means[version])
+                    std = pole.coords('k')**k_exp * covs[reference].copy().at.observable.match(means[version]).at.observable.get(ell).std().real
                     ax.fill_between(pole.coords('k'), value - std, value + std, color=colors[version], alpha=0.2)
                 ax.plot(pole.coords('k'), value, color=colors[version], linestyle=linestyles[version], label=version+f' (#{len(stats[version])})', lw=lw)
-            if ill == 0: ax.legend(frameon=False, ncol=2)
+            if ill == 0: ax.legend(frameon=False, ncol=legend_ncol, title=legend_title)
             ax.grid(True)
             ax = lax[2 * ill + 1]
             ax.set_ylabel(rf'$\Delta P_{ell:d} / \sigma(k)$')
@@ -100,11 +114,17 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
             ax.set_ylim(*ylim)
             for iversion, version in enumerate(versions):
                 if 'data' in version or version == reference: continue
-                pole = means[version].get(ell)
-                # std = covs[reference].at.observable.get(ell).std().real
-                std = covs[reference].at.observable.get(ell).std().real
+                pole_reference = means[reference].get(ell).copy()
+                pole = means[version].get(ell).copy()
+                # solve issue with mismatch in k in theory and mocks
+                if pole.size > pole_reference.size:
+                    pole = pole.select(k=slice(1,None,1))
+                elif pole.size < pole_reference.size:
+                    pole_reference = pole_reference.select(k=slice(1,None,1))
+                assert np.allclose(pole.coords('k'),pole_reference.coords('k')), f'Something went wrong when slicing k. {pole.coords('k')[-1],pole_reference.coords('k')[-1]}'
+                std = covs[reference].copy().at.observable.match(means[version]).at.observable.get(ell).std().real
                 # print(tracer,zrange,version,kind,ell,std.min())
-                ax.plot(pole.coords('k'), (pole.value() - means[reference].get(ell).value()).real / std, color=colors[version], linestyle=linestyles[version], lw=lw)
+                ax.plot(pole.coords('k'), (pole.value() - pole_reference.value()).real / std, color=colors[version], linestyle=linestyles[version], lw=lw)
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
 
     elif 'mesh3_spectrum_sugiyama-diagonal' in kind:
@@ -138,7 +158,7 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
                     std = (x**2)**k_exp * covs[reference].at.observable.get(ell).std().real
                     ax.fill_between(x, value - std, value + std, color=colors[version], alpha=0.2)
                 ax.plot(x, value, color=colors[version], linestyle=linestyles[version], label=version+f' (#{len(stats[version])})', lw=lw)
-                if ill == 0: ax.legend(frameon=False, ncol=2)
+                if ill == 0: ax.legend(frameon=False, ncol=legend_ncol, title=legend_title)
             ax.grid(True)
             ax = lax[2 * ill + 1]
             ax.set_ylabel(rf'$\Delta B_{{{ell[0]:d}{ell[1]:d}{ell[2]:d}}} / \sigma(k)$')
@@ -178,7 +198,7 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
                     std = pole.coords('s')**s_exp * covs[reference].at.observable.get(ell).std().real
                     ax.fill_between(pole.coords('s'), value - std, value + std, color=colors[version], alpha=0.2)
                 ax.plot(pole.coords('s'), value, color=colors[version], linestyle=linestyles[version], label=version+f' (#{len(stats[version])})', lw=lw)
-            if ill == 0: ax.legend(frameon=False, ncol=1)
+            if ill == 0: ax.legend(frameon=False, ncol=legend_ncol, title=legend_title)
             ax.grid(True)
             ax = lax[2 * ill + 1]
             ax.set_ylabel(rf'$\Delta P_{ell:d} / \sigma(k)$')
@@ -197,3 +217,4 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
         plt.tight_layout()
         fig.savefig(save_fn, bbox_inches='tight', pad_inches=0.1, dpi=200)
         plt.show()
+
