@@ -56,7 +56,7 @@ def run_stats(version='data-dr2-v1.1', tracer='LRG', weight_type='weight-FKP', z
     # Enable 64-bit precision for accurate clustering calculations
     config.update('jax_enable_x64', True)
     # Allocate 90% of available GPU memory to JAX arrays
-    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.95'
     # Initialize JAX distributed computing across MPI processes
     try: jax.distributed.initialize()
     except RuntimeError: print('Distributed environment already initialized')
@@ -117,7 +117,7 @@ if __name__ == '__main__':
     # window_mesh2_spectrum: compute survey window function via random catalogs
     # covariance_mesh2_spectrum: estimate power spectrum covariance matrix
     # recon_particle2_correlation: pair counting on BAO-reconstructed positions
-    stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'recon_particle2_correlation'][:0]
+    stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'recon_particle2_correlation'][-1:]
     # combine_regions: merge NGC and SGC measurements into GCcomb estimates
     postprocess = ['combine_regions'][:1]
 
@@ -129,11 +129,11 @@ if __name__ == '__main__':
 
     # Loop over tracer types: BGS (Bright Galaxy Survey), LRG (Luminous Red Galaxy), ELG (Emission Line Galaxy), QSO (Quasar)
     # [1:2] selects only LRG; change to [:] to process all tracers
-    for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][1:2]:
+    for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][2:3]:
         # Get full tracer name including version suffix (e.g., 'LRG_0' for redshift bin 0)
         tracer = tools.get_full_tracer(tracer, version=version)
         # Get fiducial redshift ranges for this tracer; [:1] takes only first bin
-        zranges = tools.propose_fiducial('zranges', tracer)[:1]
+        zranges = tools.propose_fiducial('zranges', tracer)
 
         def get_run_stats():
             # Dynamically select task manager based on computation type and tracer

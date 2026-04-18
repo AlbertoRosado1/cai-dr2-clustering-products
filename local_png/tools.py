@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger('PNG fitting tools')
 
 
-def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', **kwargs):
+def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', add_ic=False, **kwargs):
     """ 
     Read the data from the clustering statistics output. This is a wrapper of clustering_statistics.tools.get_stats_fn.
     """
@@ -17,7 +17,10 @@ def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='defau
 
     # Read the data:
     pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum'))
-    window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum'))
+    if add_ic:
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', extra='with_ic'))
+    else:
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum'))
     cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum'))
 
     return pk, window, cov
@@ -36,9 +39,13 @@ def rebin_data(pk, window, cov, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=2e-2,
     pk = pk.at(2).select(k=slice(0, None, nrebin))  # Rebin the quadrupole again but for the full range.
     # kpivot, nrebin = 4e-2, 2
     # pk = pk.map(lambda pole: pole.at(k=(kpivot, 1.)).select(k=slice(0, None, nrebin)))
-    pk = pk.select(k=(kmin, kmax))
-    if not use_ell2: pk = pk.get(ells=[0])
 
+    # Let's select the k range and ells:
+    kmin_ell2, kmax_ell2 = kwargs.get('kmin_ell2', kmin), kwargs.get('kmax_ell2', kmax)
+    pk = pk.at(0).select(k=(kmin, kmax))
+    pk = pk.at(2).select(k=(kmin_ell2, kmax_ell2))
+    pk = pk.get(ells=[0]) if not use_ell2 else pk.get(ells=[0, 2])
+ 
     # Match the size of wmatrix and covariance: 
     if window is not None: window = window.at.observable.match(pk)
     if cov is not None: 
@@ -250,6 +257,7 @@ def plot_observables(observables):
             axs[1, j].plot(x, (data_pole.value() - wtheory_pole.value()) / std)
             axs[1, j].set_ylim(-4, 4)
             for offset in [-2., 2.]: axs[1, j].axhline(offset, color='k', linestyle='--')
+            for offset in [-1., 1.]: axs[1, j].axhline(offset, color='lightgray', linestyle=':')
 
     axs[0, 0].set_ylim(1e4, 8e4)
     axs[0, 1].set_ylim(2e3, 5e4)
