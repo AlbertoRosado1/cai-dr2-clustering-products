@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import logging
 
 import numpy as np
 from mpi4py import MPI
@@ -7,6 +8,7 @@ from mpi4py import MPI
 from .tools import (default_mpicomm, Catalog, join_tracers, _unzip_catalog_options, _merge_catalog_options, _zip_catalog_options,
 _read_catalog, get_simple_tracer, _merge_options, _make_tuple, desi_dir, write_stats, float2str, setup_logging)
 
+logger = logging.getLogger('box_tools')
 
 def get_zrange_from_snap(tracer, zsnap=None, version='abacus-2ndgen'):
     """
@@ -117,6 +119,8 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
     propose_fiducial['catalog'] = {'hod': '', 'los': 'z'}
     if 'abacus' in version:
         propose_fiducial['catalog'].update({'cosmo': '000'})
+    if 'ezmock' in version:
+        propose_fiducial['catalog'].update({'cosmo': '000'})
     if 'abacus-hf' in version:
         hod = 'base'
         if 'BGS' in tracer or 'LRG' in tracer:
@@ -205,6 +209,10 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
     fn : Path
         Catalog file name(s).
     """
+    if version == 'ezmock-dr1':
+        stracer = get_simple_tracer(tracer)
+        cat_dir = desi_dir / f'cosmosim/SecondGenMocks/EZmock/CubicBox_6Gpc/{stracer}/z{zsnap:.3f}/'
+        return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]   
     if version == 'abacus-2ndgen':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/CubicBox/{stracer}/z{zsnap:.3f}/AbacusSummit_base_c000_ph{imock:03d}/'
@@ -275,6 +283,7 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
         catalog = read_catalog(fn)
         boxsize = catalog.header.get('BOXSIZE', 2000.)
         scalev = catalog.header.get('VELZ2KMS', None)
+        logger.info('Finished reading catalogs.')
 
     if mpicomm.size > 1:
         catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=mpiroot)
@@ -308,7 +317,6 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
     catalog = Catalog({'POSITION': positions, 'INDWEIGHT': np.ones_like(positions[..., 0])},
                       attrs=attrs, mpicomm=mpicomm)
     return catalog
-
 
 def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
                      kind='mesh2_spectrum', extra='', ext='h5', **kwargs):
