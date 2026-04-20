@@ -767,7 +767,7 @@ def compute_window_mesh2_spectrum_fm(
     import mpytools as mpy
     from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
     from desiwinds.window import get_window_spikes
-    from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, compute_fkp2_normalization, create_sharding_mesh
+    from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, create_sharding_mesh
 
     from .tools import add_photometric_template_values, select_region
 
@@ -786,12 +786,6 @@ def compute_window_mesh2_spectrum_fm(
         data = catalogs["randoms"][mask_is_data]
         randoms = catalogs["randoms"][~mask_is_data]
         return {"data": data, "randoms": randoms}
-
-    def _update_fkp(data_weights, randoms_weights, fkp_field, estimator_weights):
-        return fkp_field.clone(
-            data=fkp_field.data.clone(weights=data_weights * fkp_field.data.extra[estimator_weights]),
-            randoms=fkp_field.randoms.clone(weights=randoms_weights * fkp_field.randoms.extra[estimator_weights]),
-        )
 
     def _safe_divide(a, b):
         return jnp.where(b != 0, a / b, 0.0)
