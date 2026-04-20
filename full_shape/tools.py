@@ -16,7 +16,6 @@ observable (data, theory, window): ``{'stat': {'kind': ..., 'basis': ..., 'selec
 'catalog': {'version':, ...}, 'theory': {'model': ...}, 'window': {}}``.
 """
 
-
 import os
 import re
 import json
@@ -628,6 +627,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     def _get_mock_stats_fn(stat, file_kw):
         stats_dir = Path(file_kw.pop('stats_dir'))
         version = file_kw.pop('version', None)
+        project = file_kw.pop('project', '')
         if isinstance(version, str) and version.startswith('ezmock'):
             tracer = get_simple_tracer(_make_tuple(file_kw['tracer']))
             tracer = tracer[0] if isinstance(tracer, tuple) else tracer
@@ -643,11 +643,11 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             if isinstance(fn, list):
                 return len(fn) > 0
             return fn.exists()
-        base_fn = get_stats_fn(kind=stat, stats_dir=stats_dir, version=version, **file_kw)
+        base_fn = get_stats_fn(kind=stat, stats_dir=stats_dir, project=project, version=version, **file_kw)
         if _has_existing(base_fn):
             return base_fn
         project_fn = None
-        if version is not None and file_kw.get('imock', None) is not None:
+        if not project and version is not None and file_kw.get('imock', None) is not None:
             project_fn = get_stats_fn(kind=stat, stats_dir=stats_dir, project=version, **file_kw)
             if _has_existing(project_fn):
                 return project_fn
@@ -790,7 +790,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         covariance_log_patterns = []
         all_imocks = None
         for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
-            file_kw = file_kw | {'imock': '*'} | covariance_options
+            file_kw = file_kw | {'imock': '*', 'project': ''} | covariance_options
             file_kw['tracer'] = get_full_tracer(get_simple_tracer(file_kw['tracer']), version=file_kw['version'])
             imocks = file_kw.pop('imock')
             if imocks == '*':
@@ -1100,6 +1100,7 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
                                        version='abacus-2ndgen-complete',
                                        covariance='holi-v1-altmtl',
                                        stats_dir=Path('/dvs_ro/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe'),
+                                       project='',
                                        emulator=True):
     """
     Convenience helper that builds a minimal dictionary of likelihood options.
@@ -1118,6 +1119,8 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
         Version of data to use.
     covariance : str
         Version of covariance mocks to use.
+    project : str, optional
+        Optional project subdirectory passed through to the measurement path builder.
 
     Returns
     -------
@@ -1134,6 +1137,8 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     tracer, zrange = get_full_tracer_zrange(tracer)
     for stat in stats:
         catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir}
+        if project:
+            catalog['project'] = project
         if 'data' not in version:
             catalog['imock'] = '*'  # read all available mocks
         observable_options = {'stat': {'kind': stat}, 'catalog': catalog}
@@ -1144,7 +1149,6 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
         observables.append(observable_options)
     covariance = {'version': covariance, 'stats_dir': stats_dir}
     return fill_fiducial_likelihood_options({'observables': observables, 'covariance': covariance})
-
 
 def generate_box_likelihood_options_helper(
         stats=('mesh2_spectrum',),
@@ -1475,7 +1479,7 @@ def str_from_options(options: dict, level: int | dict=None):
     return '_'.join(out_str)
 
 
-def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits', kind='chain', likelihoods: list=None,
+def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', kind='chain', likelihoods: list=None,
                 sampler: dict=None, profiler: dict=None, cosmology: dict=None, ichain: int=None,
                 level=None, extra='', ext='npy'):
     """
@@ -1485,6 +1489,8 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits', kind='chain',
     ----------
     fits_dir : str, Path
         Base directory for fit outputs.
+    project : str
+        KP analysis to which the measurement corresponds. For example: 'full_shape/base', 'local_png/base', 'bao/base', etc.
     kind : str
         Fitting product. Options are 'chain', 'profiles', etc.
     likelihoods : list
@@ -1502,6 +1508,7 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits', kind='chain',
         Fit file name.
     """
     fits_dir = Path(fits_dir)
+    fits_dir = fits_dir / project
     options = {'likelihoods': likelihoods, 'cosmology': cosmology}
     _str_from_options = str_from_options(options, level=level)
     _hash = _hash_options(options)
