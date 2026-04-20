@@ -45,7 +45,7 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None}
             
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
-                           mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum
+                           mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            particle2_correlation={'jackknife': {'nsplits': 60}} if do_jackknife else {},
                            window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
             options = fill_fiducial_options(options, analysis=analysis)
@@ -91,12 +91,13 @@ if __name__ == '__main__':
 
     stats, postprocess = [], []
     # version  = 'glam-uchuu-v2-altmtl'
-    version  = 'holi-v3-altmtl'
+    # version  = 'holi-v3-altmtl'
+    version  = 'abacus-hf-dr2-v2-altmtl'
     check_for_existing_measurements = False # True
     
     # test run 
     # imocks2run = 150 + np.arange(1)
-    imocks2run = np.arange(25)
+    imocks2run = np.arange(1)
     stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
     
     # official run
@@ -112,14 +113,15 @@ if __name__ == '__main__':
     # run fiducial full_shape
     # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
     # stats       = ['mesh3_spectrum', 'window_mesh3_spectrum']
-    # postprocess = ['combine_regions']
-    # analysis = 'full_shape'
-    # project  = f'{analysis}/base'
-    # weight   = 'default-FKP'
-    # regions  = ['NGC','SGC']
+    stats = ['mesh2_spectrum']
+    postprocess = ['combine_regions']
+    analysis = 'full_shape'
+    project  = f'{analysis}/base'
+    weight   = 'default-FKP'
+    regions  = ['NGC','SGC']
     # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # tracers  = ['ELG_LOPnotqso', 'QSO']
-    # max_mocks_per_batch = 1
+    tracers  = ['QSO']
+    max_mocks_per_batch = 1
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
@@ -131,17 +133,18 @@ if __name__ == '__main__':
     # max_mocks_per_batch = 1 
 
     # run fiducial local_png
-    stats       = ['mesh2_spectrum']
-    postprocess = ['combine_regions']
-    analysis = 'local_png'
-    project  = f'{analysis}/base'
-    weight   = 'default-noimsys-fkp-oqe'
-    regions  = ['NGC','SGC']
+    # stats       = ['mesh2_spectrum']
+    # postprocess = ['combine_regions']
+    # analysis = 'local_png'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-noimsys-fkp-oqe'
+    # regions  = ['NGC','SGC']
     # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    tracers = ['ELGnotqso']
-    max_mocks_per_batch = 1
+    # tracers = ['ELGnotqso']
+    # max_mocks_per_batch = 1
 
-    onthefly = 'reshuffle'
+    onthefly = 'complete'
+    # onthefly = 'reshuffle'
     # onthefly = None
     do_jackknife = False
     
