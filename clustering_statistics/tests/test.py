@@ -360,7 +360,8 @@ def test_window_fm(tracer='QSO'):
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
     for region in ['NGC', 'SGC']:
         compute_stats_from_options(
-         ['mesh2_spectrum', 'window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
+            ["mesh2_spectrum", "window_mesh2_spectrum"], get_stats_fn=get_stats_fn, **(options | {"catalog": catalog_options | dict(region=region)}), analysis=analysis
+        )
 
     compute_stats_from_options(['window_mesh2_spectrum_fm'], get_stats_fn=get_stats_fn, **options, analysis=analysis)
     #for region in ['NGC', 'SGC']:

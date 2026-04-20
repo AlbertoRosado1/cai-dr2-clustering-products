@@ -685,7 +685,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
 
 def compute_window_mesh2_spectrum_fm(
     *get_data_randoms: Callable,
-    spectrum: types.Mesh2SpectrumPoles,
+    spectra: list[types.Mesh2SpectrumPoles],
     theory: types.Mesh2SpectrumPoles,
     optimal_weights: Callable | None,
     data_to_randoms_ratio: float,
@@ -695,7 +695,7 @@ def compute_window_mesh2_spectrum_fm(
     ric_nbins: int,
     ric_regions: list[str],
     amr: bool,  # is optional
-    ellsout : list[int] | None,
+    ellsout: list[int] | None,
     regression_maps: list[str] | None,
     templates_paths_kwargs: dict | None,
     amr_regions_zranges: list[tuple[str, tuple[float, float]]] | None,
@@ -712,8 +712,8 @@ def compute_window_mesh2_spectrum_fm(
     ----------
     *get_data_randoms : Callable
         Functions that return tuples of (data, randoms) catalogs.
-    spectrum : lsstypes.Mesh2SpectrumPoles
-        Measured 2-point spectrum multipoles. Only used for their attributes, not their values.
+    spectra: list[types.Mesh2SpectrumPoles]
+        Measured 2-point spectrum multipoles. Only used for their attributes (binning, norm, wsum...), not their values.
     theory: lsstypes.Mesh2SpectrumPoles
         Input theory power spectrum, used as a fiducial for the derivative. Attributes (e.g. ells) used for mock survey generation; value used for the derivative.
     optimal_weights : Callable or None
@@ -767,7 +767,7 @@ def compute_window_mesh2_spectrum_fm(
     import mpytools as mpy
     from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
     from desiwinds.window import get_window_spikes
-    from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, compute_fkp2_normalization, create_sharding_mesh
+    from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, create_sharding_mesh
 
     from .tools import add_photometric_template_values, select_region
 
@@ -787,13 +787,6 @@ def compute_window_mesh2_spectrum_fm(
         randoms = catalogs["randoms"][~mask_is_data]
         return {"data": data, "randoms": randoms}
 
-    def _update_fkp(data_weights, randoms_weights, fkp_field, estimator_weights):
-        return fkp_field.clone(
-            data=fkp_field.data.clone(
-                weights=data_weights * getattr(fkp_field.data, estimator_weights, 1.0)),
-            randoms=fkp_field.randoms.clone(
-                weights=randoms_weights * getattr(fkp_field.randoms, estimator_weights, 1.0)))
-
     def _safe_divide(a, b):
         return jnp.where(b != 0, a / b, 0.0)
 
@@ -803,11 +796,11 @@ def compute_window_mesh2_spectrum_fm(
         columns_optimal_weights += getattr(optimal_weights, "columns", [])  # to compute optimal weights, e.g. for fnl
 
     # Recover output and mesh information from the observable spectrum
-    ellsout = ellsout or spectrum.ells
-    los = spectrum.attrs["los"]  # this has to match with theory input
+    ellsout = ellsout or spectra[0].ells
+    los = spectra[0].attrs["los"]  # this has to match with theory input
     if los in ["endpoint", "firstpoint"]:
         los = "local"
-    mattrs = {name: spectrum.attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
+    mattrs = {name: spectra[0].attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
 
     with create_sharding_mesh(meshsize=mattrs.get("meshsize", None)):
         # Split into "data" and randoms based on the provided ratio
@@ -888,18 +881,26 @@ def compute_window_mesh2_spectrum_fm(
 
         # Turn into FKP fields
         fkp_fields = [FKPField(data=d, randoms=r, attrs=mattrs) for d, r in zip(all_data, all_randoms, strict=True)]
+
         del all_data, all_randoms
         # Compute FKP normalization for each region, with the estimator weights, and for each ell if optimal weights are applied
         if optimal_weights is None:
-            if jax.process_index() == 0: logger.info("Using FKP weights, computing window for all ells at once.")
+            if jax.process_index() == 0:
+                logger.info("Using FKP weights, computing window for all ells at once.")
             # Using FKP weights which are symetrical, so this remains an autocorr
-            binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
+            binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectra[0].get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
+            # get norms from input spectrum
+            fkp_norms = [jnp.concatenate([spectrum.get(ell).values("norm") for ell in ellsout], axis=0) for spectrum in spectra]
 
-            # Temporarily add FKP weights to the fkp_fields weights for norm and analytical computation
-            # FIXME: cellsize (actually, read normalization from data pk as in compute_mesh2_window_spectrum)
-            fkp_norms = [
-                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "WEIGHT_FKP"), bin=binner, cellsize=20.0)
-                for fkp in fkp_fields]
+            # Renormalize data and randoms to input spectrum
+            for i, (spectrum, fkp) in enumerate(zip(spectra, fkp_fields, strict=True)):
+                # autocorrelation and FKP: component [0, 0]
+                alphad = spectrum.get(0).attrs["wsum_data"][0][0] / (fkp.data.weights * fkp.data.extra["WEIGHT_FKP"]).sum()
+                alphar = spectrum.get(0).attrs["wsum_randoms"][0][0] / (fkp.randoms.weights * fkp.randoms.extra["WEIGHT_FKP"]).sum()
+                fkp_fields[i] = fkp.clone(
+                    data=fkp.data.clone(weights=fkp.data.weights * alphad),
+                    randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar),
+                )
 
             ## FM based computations
             windows = {}
@@ -929,12 +930,16 @@ def compute_window_mesh2_spectrum_fm(
             if geo:
                 if jax.process_index() == 0: logger.info("Computing geometry window with desiwinds...")
                 _, windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None})
-                windows["geometry"] = windows_fm_geo
+                windows["geometry"] = {
+                    spectrum_region: [windows_fm_geo[ireal][iregion] for ireal in range(n_realizations)] for iregion, spectrum_region in enumerate(spectrum_regions)
+                }
 
             if ric:
                 if jax.process_index() == 0: logger.info("Computing total window with desiwinds...")
                 _, windows_fm = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": ric_args, "amr_args": amr_args})
-                windows[extra_effects] = windows_fm
+                windows[extra_effects] = {
+                    spectrum_region: [windows_fm[ireal][iregion] for ireal in range(n_realizations)] for iregion, spectrum_region in enumerate(spectrum_regions)
+                }
 
             if jax.process_index() == 0: logger.info("desiwinds window computation finished.")
 
@@ -977,18 +982,31 @@ def compute_window_mesh2_spectrum_fm(
                 windows[extra_effects] = {}
 
             for ell in ellsout:
-                binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
+                binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectra[0].get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
                 fkp_fields = [_attach_weights(fkp_field, ell) for fkp_field in fkp_fields]
-                # Compute FKP normalization for each region, with the estimator weights (cross correlation), and for given ell = binner
-                fkp_norms = [
-                    compute_fkp2_normalization(
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_1'),
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_2'),
-                        bin=binner,
-                        cellsize=20.0,  # FIXME 10. for 2pt+3pt, 20. for PNG, should read from input pk
+                # Recover FKP normalization for each region and this ell only from input spectrum
+                fkp_norms = [jnp.concatenate([spectrum.get(ill).values("norm") for ill in [ell]], axis=0) for spectrum in spectra]
+                _fkp_fields = []
+                # Renormalize data and randoms to input spectrum
+                for i, (spectrum, fkp) in enumerate(zip(spectra, fkp_fields, strict=True)):
+                    # for FKP, looks like wsum_data is [[number, number]]
+                    alphad1 = spectrum.get(ell).attrs["wsum_data"][0][0] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_1"]).weights.sum()
+                    alphad2 = spectrum.get(ell).attrs["wsum_data"][0][1] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_2"]).weights.sum()
+                    alphar1 = spectrum.get(ell).attrs["wsum_randoms"][0][0] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_1"]).weights.sum()
+                    alphar2 = spectrum.get(ell).attrs["wsum_randoms"][0][1] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_2"]).weights.sum()
+                    # Renormalize the optimal weights so that the final mesh is properly normalized
+                    _fkp_fields.append(
+                        (
+                            fkp.clone(
+                                data=fkp.data.clone(weights=fkp.data.weights * alphad1),
+                                randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar1),
+                            ),
+                            fkp.clone(
+                                data=fkp.data.clone(weights=fkp.data.weights * alphad2),
+                                randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar2),
+                            ),
+                        )
                     )
-                    for fkp in fkp_fields
-                ]
 
                 # Shared window FM arguments
                 window_fm_kw = {
@@ -997,10 +1015,11 @@ def compute_window_mesh2_spectrum_fm(
                     "nreal": n_realizations,
                     "seeds": seeds,
                     "batch_size": batch_size,
-                    "mock_survey_args": [(fkp,) * 2 for fkp in fkp_fields],  # same FKP field but with different weights
+                    "mock_survey_args": _fkp_fields,  # list of tuples of FKP fields with different norm and optimal weights
                     "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
                     "tmpdir": None,  # No temporary output
-                    "survey_names": spectrum_regions}
+                    "survey_names": spectrum_regions,
+                }
 
                 mock_survey_kwargs = {
                     "los": los,
