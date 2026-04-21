@@ -42,7 +42,7 @@ def test_stats_fn(stats=['mesh2_spectrum']):
             assert fn2 == fn1, f'{fn2} != {fn1}'
 
 
-def test_auw(stats=['mesh2_spectrum']):
+def test_auw2(stats=['mesh2_spectrum']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in ['LRG']:
         zranges = tools.propose_fiducial('zranges', tracer)
@@ -394,18 +394,27 @@ def test_count3close():
                 battrs = BinAttrs(s=np.linspace(0., 100., 100))
                 counts = count3close(data, data, data, battrs12=battrs, sattrs12=sattrs, battrs13=battrs)['weight']
                 print(f'count3 {time.time() - t0:.2f}')
-                exit()
+
+
+
+def test_auw3(stats=['mesh3_spectrum']):
+    stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
+    for tracer in ['ELG_LOPnotqso']:
+        zranges = tools.propose_fiducial('zranges', tracer)[1:]
+        for region in ['NGC', 'SGC'][:1]:
+            catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=2)
+            #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
+            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh3_spectrum={'auw': True})
+
 
 
 if __name__ == '__main__':
 
-    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.1'
-    from jax import config
-    config.update('jax_enable_x64', True)
+    #os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.1'
+    #from jax import config
+    #config.update('jax_enable_x64', True)
     #config.update('jax_num_cpu_devices', 4)
     #config.update('jax_platform_name', 'cpu')
-    test_count3close()
-    exit()
 
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     from jax import config
@@ -416,6 +425,8 @@ if __name__ == '__main__':
     setup_logging()
 
     jax.distributed.initialize()
+    test_auw3()
+    exit()
     #test_correlation()
     #test_covariance()
     #test_stats_fn()
@@ -430,7 +441,7 @@ if __name__ == '__main__':
     #test_rotation()
     #test_window3()
     #test_stats_fn()
-    #test_auw(stats=['mesh2_spectrum'])
+    #test_auw2(stats=['mesh2_spectrum'])
     #test_bitwise(stats=['mesh2_spectrum'])
     #test_expand_randoms_stats()
     #test_optimal_weights()

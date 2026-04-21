@@ -11,6 +11,7 @@ from functools import partial
 
 import numpy as np
 import jax
+from jax import numpy as jnp
 
 import lsstypes as types
 from .tools import _format_bitweights
@@ -40,7 +41,7 @@ def compute_particle3_angular_upweights(*get_data):
     from lsstypes import ObservableLeaf, ObservableTree
 
     # Use distributed mesh for computation across devices
-    with create_sharding_mesh():
+    with create_sharding_mesh() as sharding_mesh:
         all_fibered_data, all_parent_data = [], []
 
         # Helper function to extract (RA, DEC) positions and weights from catalog
@@ -67,18 +68,64 @@ def compute_particle3_angular_upweights(*get_data):
         # Set up bitwise weight attributes (PIP weights)
         bitwise = None
         if all_fibered_data[0].get('bitwise_weight'):
+            raise NotImplementedError
             bitwise = dict(weights=all_fibered_data[0].get('bitwise_weight'))
             if jax.process_index() == 0:
-                logger.info(f'Applying PIP weights {bitwise}.')
+                logger.info(f'Applying bitwise weights {bitwise}.')
 
-        # Compute pair counts for fibered data with bitwise weights
+        # Compute triplet counts for fibered data with bitwise weights
         wattrs = WeightAttrs(bitwise=bitwise)
-        kw = dict(battrs12=battrs, battrs13=battrs, battrs23=battrs, sattrs12=sattrs, sattrs13=sattrs, wattrs=wattrs)
-        DDDfibered = count3close(*all_fibered_data, **kw)['weight'].value()
+        kw = dict(battrs12=battrs, battrs13=battrs, battrs23=battrs)
 
-        # Compute pair counts for parent (unfiber-limited) data without bitwise weights
-        wattrs = WeightAttrs()
-        DDDparent = count3close(*all_parent_data, **kw)['weight'].value()
+        def count3close_resol(*all_particles, wattrs=None):
+            weight = 0.
+            theta_limits = [(0., 0.3), (0.3, 1.), (1., 5.), (5., 180.)]
+            # 196
+            nsides = [None, 1024, 256, 64]  # 55, 75, 50
+            #theta_limits = [(0., 0.5), (0.5, 1.), (1., 5.), (5., 180.)]
+            #nsides = [None, 512, 256, 64]  # 55, 75, 50 
+            #theta_limits, nsides = theta_limits[sl], nsides[sl]
+            #theta_limits = [(0., 0.01), (0.1, 5.), (5., 180.)]
+            #nsides = [None, 8, 8]
+            import healpy as hp
+
+            _identity_fn = lambda x: x
+
+            def digitize(nside, particles):
+                from jax.sharding import PartitionSpec as P
+                if sharding_mesh.axis_names:
+                    particles = jax.jit(_identity_fn, out_shardings=jax.sharding.NamedSharding(sharding_mesh, spec=P(None)))(particles)
+                pix = hp.vec2pix(nside, *particles.get('positions').T, nest=False)
+                weights = wattrs(particles)
+                npix = hp.nside2npix(nside)
+                pix_weights = np.bincount(pix, weights=weights, minlength=npix)
+                mask = pix_weights > 0
+                pix_weights = pix_weights[mask]
+                pix_positions = np.column_stack(hp.pix2vec(nside, np.flatnonzero(mask), nest=False))
+                return Particles(pix_positions, pix_weights, exchange=False)
+
+            result = 0.
+            for theta_limit, nside in zip(theta_limits, nsides):
+                #t0 = time.time()
+                sattrs13 = SelectionAttrs(theta=theta_limit)
+                all_particles = list(all_particles) + [all_particles[-1]] * (3 - len(all_particles))
+                all_particles_resol = list(all_particles)
+                if nside is not None:
+                    all_particles_resol[-1] = digitize(nside, all_particles_resol[-1])
+                # 1) 2 close-pair with 1
+                result += count3close(*all_particles_resol, sattrs12=sattrs, sattrs13=sattrs13, **kw)['weight'].value()
+                # 2) 3 close-pair with 1, excluding 1<->2 close pairs
+                all_particles_resol = list(all_particles[:1] + all_particles[:0:-1])
+                if nside is not None:
+                    all_particles_resol[-1] = digitize(nside, all_particles_resol[-1])
+                result += count3close(*all_particles_resol, sattrs12=sattrs, sattrs13=sattrs13, veto13=True, wattrs=wattrs, **kw)['weight'].value()
+                #print(theta, nside, time.time() - t0, flush=True)
+
+            return weight
+
+        DDDfibered = count3close_resol(*all_fibered_data, wattrs=wattrs)
+        # Compute triplet counts for parent (unfiber-limited) data without bitwise weights
+        DDDparent = count3close_resol(*all_parent_data, wattrs=wattrs)
 
     # Prepare output arrays with angular separation bins
     coords = ['theta1', 'theta2', 'theta3']
