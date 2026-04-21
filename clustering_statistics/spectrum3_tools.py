@@ -23,7 +23,7 @@ from .spectrum2_tools import prepare_jaxpower_particles, _get_jaxpower_attrs
 logger = logging.getLogger('spectrum3')
 
 
-def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
+def compute_mesh3_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                             basis='sugiyama-diagonal', ells=[(0, 0, 0), (2, 0, 2)], edges=None, los='local',
                             buffer_size=0, norm: dict=None, cache=None):
     r"""
@@ -111,6 +111,67 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
         if jax.process_index() == 0:
             logger.info('Normalization and shotnoise computation finished')
 
+        results = {}
+        from jaxpower.particle3 import BinParticle3CorrelationPoles, convert_particles, compute_particle3
+        # First compute the theta-cut (close-pair) contribution for contamination correction
+        if cut is not None:
+            if 'sugiyama' not in bin.basis:
+                raise NotImplementedError('theta-cut only supported for the sugiyama basis')
+            # Define angular selection: only pairs separated by < 0.05 degrees
+            sattrs = {'theta': (0., 0.05)}
+            # Use correlation binning for close pairs
+            # Exclude 0 to avoid estimating the shot noise
+            edges = np.geomspace(10**(-3), np.sqrt(np.sum(mattrs.boxsize**2)), 1001)
+            pbin = BinParticle3CorrelationPoles(mattrs, edges=edges, sattrs=sattrs, ells=ells)
+            # Convert FKP fields to particle pairs for direct pair counting
+            all_particles = [convert_particles(fkp.particles) for fkp in all_fkp]
+            # Count close pairs directly (no mesh needed, exact calculation)
+            close = compute_particle3(*all_particles, bin=pbin, los=los)
+            # Attach normalization, then convert to power spectrum
+            close = close.clone(norm=norm)
+            # Convert correlation poles to power spectrum (multiply by bin centers)
+            close = close.to_spectrum(bin.xavg)
+            # Store negative contribution (contamination to subtract)
+            results['cut'] = -close.value()
+
+        # Then compute the AUW-weighted (angular upweight) pairs and bitwise-weighted pairs
+        with_bitweights = 'BITWEIGHT' in all_fkp[0].data.extra
+        if with_bitweights:
+            raise NotImplementedError('bitweights not supported')
+        if auw is not None or with_bitweights:
+            if 'sugiyama' not in bin.basis:
+                raise NotImplementedError('AUW only supported for the sugiyama basis')
+            from cucount.jax import WeightAttrs
+            # Define angular selection for close pairs (< 0.1 degrees for bitwise weights)
+            sattrs = {'theta': (0., 0.1)}
+            bitwise = angular = None
+            if with_bitweights:
+                # Reconstruct weights for fiber collision corrections
+                all_data = [convert_particles(fkp.data, weights=list(fkp.data.extra['BITWEIGHT']) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
+                # Extract bitwise weight structure (sets nrealizations based on BITWEIGHT size, fine to use the first)
+                bitwise = dict(weights=all_data[0].get('bitwise_weight'))
+                if jax.process_index() == 0:
+                    logger.info(f'Applying PIP weights {bitwise}.')
+            else:
+                # No bitwise weights, remove individual weights from AUW * individual_weight
+                all_data = [convert_particles(fkp.data, weights=[fkp.data.weights] * 2, exchange_weights=False, index_value=dict(individual_weight=1, negative_weight=1)) for fkp in all_fkp]
+            # Apply angular upweights if provided (fiber collision corrections)
+            if auw is not None:
+                # Extract angular separation and weight values from pre-computed AUW
+                angular = dict(sep=auw.get('DDD').coords('theta'), weight=auw.get('DDD').value())
+                if jax.process_index() == 0:
+                    logger.info(f'Applying AUW {angular}.')
+            # Set up weight attributes for pair counting
+            wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
+            # Exclude 0 to avoid estimating the shot noise
+            edges = np.geomspace(10**(-3), np.sqrt(np.sum(mattrs.boxsize**2)), 1001)
+            pbin = BinParticle3CorrelationPoles(mattrs, edges=edges, sattrs=sattrs, wattrs=wattrs, ells=ells)
+            # Count weighted pairs directly
+            DDD = compute_particle3(*all_data, bin=pbin, los=los)
+            # Attach normalization and shot noise
+            DDD = DDD.clone()
+            results['auw'] = DDD.value()
+
         # Paint FKP fields onto mesh grids (stored as real-valued arrays to save memory)
         meshes = [fkp.paint(**kw, out='real') for fkp in all_fkp]
         # Clear FKP fields from memory
@@ -133,7 +194,14 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None,
         if jax.process_index() == 0:
             logger.info('Mesh-based computation finished')
 
-    return spectrum
+        # Add theta-cut and AUW contributions to the base spectrum
+        for name, value in results.items():
+            # Combine contamination corrections with raw spectrum
+            results[name] = spectrum.clone(value=spectrum.value() + value)
+        # Store raw spectrum without contamination corrections
+        results['raw'] = spectrum
+
+    return results
 
 
 def _get_window_edges(mattrs, scales: tuple=(1, 4)):

@@ -31,7 +31,7 @@ def compute_particle3_angular_upweights(*get_data):
     Returns
     -------
     auw : ObservableTree
-        Angular upweights as an ObservableTree with 'DD' leaf.
+        Angular upweights as an ObservableTree with 'DDD' leaf.
     """
     # Import cucount submodules for pair counting and particle handling
     from cucount.jax import Particles, BinAttrs, SelectionAttrs, WeightAttrs, setup_logging
@@ -74,21 +74,21 @@ def compute_particle3_angular_upweights(*get_data):
         # Compute pair counts for fibered data with bitwise weights
         wattrs = WeightAttrs(bitwise=bitwise)
         kw = dict(battrs12=battrs, battrs13=battrs, battrs23=battrs, sattrs12=sattrs, sattrs13=sattrs, wattrs=wattrs)
-        DDfibered = count3close(*all_fibered_data, **kw)['weight'].value()
+        DDDfibered = count3close(*all_fibered_data, **kw)['weight'].value()
 
         # Compute pair counts for parent (unfiber-limited) data without bitwise weights
         wattrs = WeightAttrs()
-        DDparent = count3close(*all_parent_data, **kw)['weight'].value()
+        DDDparent = count3close(*all_parent_data, **kw)['weight'].value()
 
     # Prepare output arrays with angular separation bins
     coords = ['theta1', 'theta2', 'theta3']
     kw = dict(coords=coords)
     for coord in coords:
         kw[coord] = battrs.coords('theta')
-        kw[f'{coord}_edges'] = battrs.edges('theta') 
+        kw[f'{coord}_edges'] = battrs.edges('theta')
     auw = {}
     # Angular upweights = ratio of parent to fibered pair counts (1 where no pairs)
-    auw['DDD'] = ObservableLeaf(value=np.where(DDfibered == 0., 1., DDparent / DDfibered), **kw)
+    auw['DDD'] = ObservableLeaf(value=np.where(DDDfibered == 0., 1., DDDparent / DDDfibered), **kw)
 
     # Wrap in ObservableTree for consistent data structure
     auw = ObservableTree(list(auw.values()), triplets=list(auw.keys()))
