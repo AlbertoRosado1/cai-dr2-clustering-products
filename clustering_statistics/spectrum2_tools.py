@@ -692,13 +692,13 @@ def compute_window_mesh2_spectrum_fm(
     catalog_split_seed: int,
     geo: bool,
     ric: bool,
-    ric_nbins: int,
-    ric_regions: list[str],
+    ric_nbins: int | tuple[int, int],
+    ric_regions: list[str] | tuple[list[str], list[str]],
     amr: bool,  # is optional
     ellsout: list[int] | None,
-    regression_maps: list[str] | None,
-    templates_paths_kwargs: dict | None,
-    amr_regions_zranges: list[tuple[str, tuple[float, float]]] | None,
+    regression_maps: list[str] | tuple[list[str], list[str]] | None,
+    templates_paths_kwargs: dict | tuple[dict, dict] | None,
+    amr_regions_zranges: list[tuple[str, tuple[float, float]]] | tuple[list[tuple[str, tuple[float, float]]], list[tuple[str, tuple[float, float]]]] | None,
     spectrum_regions: list[str] | None,
     unitary_amplitude: bool = True,
     n_realizations: int,
@@ -730,20 +730,20 @@ def compute_window_mesh2_spectrum_fm(
         Whether to return the sampled window for the geometry. If False, not computed.
     ric : bool
         Wether to return the sampled window for the geometry + RIC (+/- AMR if amr=True). If False, not computed.
-    ric_nbins : int
-        Number of radial bins to use for the RIC.
-    ric_regions : list[str]
-        Regions to use for the RIC, e.g. ``["N", "S"]`` or ``["N", "SnoDES", "DES]``.
+    ric_nbins : int | tuple[int, int]
+        Number of radial bins to use for the RIC. Can provide as tuple for cross-spectra.
+    ric_regions : list[str] | tuple[list[str], list[str]]
+        Regions to use for the RIC, e.g. ``["N", "S"]`` or ``["N", "SnoDES", "DES]``. Can provide as tuple for cross-spectra.
     amr : bool
         Whether to apply the angular mode removal (AMR), i.e. to forward model the power loss due to linear angular systematics weights.
     ellsout : list[int] | None
         For which ells the window is computed. Default None and use ellsout extracted from corresponding power spectra. Useful to split the computation.
-    regression_maps : list[str] | None
-        Names of the systematics templates to use for the AMR. Can be set to ``None`` if ``amr=False``.
-    templates_paths_kwargs : dict
-        Keyword arguments to pass to the function loading the templates maps, e.g. paths to the templates files, EBV map, nside, etc. Not needed if ``amr=False``. Must at least contain the keys ``templates_path_N`` and ``templates_path_S`` with the paths to the templates files for the Northern and Southern regions, respectively.
-    amr_regions_zranges : list[tuple[str, tuple[float, float]]] | None
-        Regions where to apply the regressions for the AMR, and corresponding redshift ranges. Can be set to ``None`` if ``amr=False``.
+    regression_maps : list[str] | tuple[list[str], list[str]] | None
+        Names of the systematics templates to use for the AMR. Can be set to ``None`` if ``amr=False``. Can provide as tuple for cross-spectra.
+    templates_paths_kwargs : dict | tuple[dict, dict] | None
+        Keyword arguments to pass to the function loading the templates maps, e.g. paths to the templates files, EBV map, nside, etc. Not needed if ``amr=False``. Must at least contain the keys ``templates_path_N`` and ``templates_path_S`` with the paths to the templates files for the Northern and Southern regions, respectively. Can (must) provide as tuple for cross-spectra.
+    amr_regions_zranges : list[tuple[str, tuple[float, float]]] | tuple[list[tuple[str, tuple[float, float]]], list[tuple[str, tuple[float, float]]]] | None
+        Regions where to apply the regressions for the AMR, and corresponding redshift ranges. Can be set to ``None`` if ``amr=False``. Can provide as tuple for cross-spectra.
     spectrum_regions : list[str] | None
         Regions for which to compute the window and power spectrum. If ``None``, the whole catalog is used as one region. Typically ``["NGC", "SGC"]``.
     n_realizations : int
@@ -767,11 +767,11 @@ def compute_window_mesh2_spectrum_fm(
     import mpytools as mpy
     from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
     from desiwinds.window import get_window_spikes
-    from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, create_sharding_mesh
+    from jaxpower import BinMesh2SpectrumPoles, FKPField, create_sharding_mesh
 
     from .tools import add_photometric_template_values, select_region
 
-    def _add_photometric_template_values(catalogs: dict[str, mpy.Catalog]):
+    def _add_photometric_template_values(catalogs: dict[str, mpy.Catalog], regression_maps, templates_paths_kwargs):
         return {name: add_photometric_template_values(catalogs[name], regression_maps, **templates_paths_kwargs) for name in catalogs}
 
     def _select_region(catalogs: dict[str, mpy.Catalog], spectrum_region: str) -> dict[str, mpy.Catalog]:
@@ -790,10 +790,29 @@ def compute_window_mesh2_spectrum_fm(
     def _safe_divide(a, b):
         return jnp.where(b != 0, a / b, 0.0)
 
+    get_data_randoms = list(get_data_randoms)  # for mutability
+
     spectrum_regions = spectrum_regions or []
     columns_optimal_weights = []
-    if optimal_weights is not None:
+    if optimal_weights is not None:  # FIXME should this be doubled up for cross-spectra?
         columns_optimal_weights += getattr(optimal_weights, "columns", [])  # to compute optimal weights, e.g. for fnl
+
+    if len(get_data_randoms) > 1:  # cross correlation
+        # Double up parameters for RIC/AMR if not already provided as tuples
+        if isinstance(ric_nbins, int):
+            ric_nbins = (ric_nbins, ric_nbins)
+        if isinstance(ric_regions, list) and isinstance(ric_regions[0], str):
+            ric_regions = (ric_regions, ric_regions)
+        if regression_maps is not None and isinstance(regression_maps, list) and isinstance(regression_maps[0], str):
+            regression_maps = (regression_maps, regression_maps)
+        if templates_paths_kwargs is not None and isinstance(templates_paths_kwargs, dict):
+            templates_paths_kwargs = (templates_paths_kwargs, templates_paths_kwargs)
+        if amr_regions_zranges is not None and isinstance(amr_regions_zranges, list) and isinstance(amr_regions_zranges[0], tuple) and isinstance(amr_regions_zranges[0][0], str):
+            amr_regions_zranges = (amr_regions_zranges, amr_regions_zranges)
+
+        all_regression_maps = list(set(regression_maps[0]) | set(regression_maps[1])) if regression_maps is not None else None
+    else:
+        all_regression_maps = regression_maps or None
 
     # Recover output and mesh information from the observable spectrum
     ellsout = ellsout or spectra[0].ells
@@ -803,17 +822,21 @@ def compute_window_mesh2_spectrum_fm(
     mattrs = {name: spectra[0].attrs[name] for name in ["boxsize", "boxcenter", "meshsize"]}
 
     with create_sharding_mesh(meshsize=mattrs.get("meshsize", None)):
+        if amr:  # Add photometric template values to the catalogs, if AMR is applied, as they are needed for the regression
+            # _templates_paths_kwargs depends on the tracer, so do this before further changing get_data_randoms
+            # load all regression maps (i.e. for both tracers in case of cross-correlation) ; this simplifies things greatly and useless ones will be dropped later to save memory
+            for itracer, (_get_data_randoms, _templates_paths_kwargs) in enumerate(zip(get_data_randoms, templates_paths_kwargs, strict=True)):
+
+                def wrap(f):
+                    return lambda: _add_photometric_template_values(f(), all_regression_maps, _templates_paths_kwargs)
+
+                get_data_randoms[itracer] = wrap(_get_data_randoms)
+
         # Split into "data" and randoms based on the provided ratio
         def wrap(f):
             return lambda: _split_data_randoms(f())
 
         get_data_randoms = [wrap(_get_data_randoms) for _get_data_randoms in get_data_randoms]
-
-        if amr:  # Add photometric template values to the catalogs, if AMR is applied, as they are needed for the regression
-            def wrap(f):
-                return lambda: _add_photometric_template_values(f())
-
-            get_data_randoms = [wrap(_get_data_randoms) for _get_data_randoms in get_data_randoms]
 
         if len(spectrum_regions) > 0:  # Split catalogs into pk regions, if specified
             def wrap(f, spectrum_region):
@@ -826,8 +849,9 @@ def compute_window_mesh2_spectrum_fm(
         all_particles = prepare_jaxpower_particles(
             *get_data_randoms,
             mattrs=mattrs,
-            add_randoms=["IDS", "WEIGHT_FKP", "Z", *columns_optimal_weights] + (list(regression_maps) if amr else []),
-            add_data=["WEIGHT_FKP", "Z", *columns_optimal_weights] + (list(regression_maps) if amr else []))
+            add_randoms=["IDS", "WEIGHT_FKP", "Z", *columns_optimal_weights] + (all_regression_maps if amr else []),
+            add_data=["WEIGHT_FKP", "Z", *columns_optimal_weights] + (all_regression_maps if amr else []),
+        )
 
         all_randoms = [particles["randoms"] for particles in all_particles]
         all_data = [particles["data"] for particles in all_particles]
@@ -836,71 +860,88 @@ def compute_window_mesh2_spectrum_fm(
         # Make into len(spectrum_regions) catalogs if split into spectrum regions, otherwise one catalog
         nregion = len(spectrum_regions) if len(spectrum_regions) > 0 else 1
         nrandoms = len(all_randoms)
-        chunk_size = nrandoms // nregion
-        all_randoms = [ParticleField.concatenate(all_randoms[chunk_size * i : chunk_size * (i + 1)]) for i in range(nregion)]
-        all_data = [ParticleField.concatenate(all_data[chunk_size * i : chunk_size * (i + 1)]) for i in range(nregion)]
+        ntracers = nrandoms // nregion
+        all_randoms = [[all_randoms[ntracers * i + itracer] for itracer in range(ntracers)] for i in range(nregion)]
+        all_data = [[all_data[ntracers * i + itracer] for itracer in range(ntracers)] for i in range(nregion)]
+        # [[tracer1_region1, tracer2_region1, ...], [tracer1_region2, tracer2_region2, ...], ...]
 
         for iregion in range(nregion):
             # Randoms
-            extra = all_randoms[iregion].extra
-            if amr:
-                template_values = jnp.stack([extra.pop(map_name) for map_name in regression_maps], axis=-1)
-                extra.update({"template_values": template_values})
-            # extra already has weight_FKP, just remove from weights=indweights which contains FKP weights
-            all_randoms[iregion] = all_randoms[iregion].clone(
-                extra=extra, weights=_safe_divide(all_randoms[iregion].weights, all_randoms[iregion].extra["WEIGHT_FKP"]))
+            for itracer in range(len(all_randoms[iregion])):
+                extra = all_randoms[iregion][itracer].extra
+                if amr:
+                    extra.update({"template_values": jnp.stack([extra.pop(map_name) for map_name in regression_maps[itracer]], axis=-1)})
+                    for map in set(all_regression_maps) - set(regression_maps[itracer]):
+                        del extra[map]  # remove maps not used for this tracer to save memory
+                # extra already has weight_FKP, just remove from weights=indweights which contains FKP weights
+                all_randoms[iregion][itracer] = all_randoms[iregion][itracer].clone(extra=extra, weights=_safe_divide(all_randoms[iregion][itracer].weights, extra["WEIGHT_FKP"]))
 
-            # Data
-            extra = all_data[iregion].extra
-            if amr:
-                template_values = jnp.stack([extra.pop(map_name) for map_name in regression_maps], axis=-1)
-                extra.update({"template_values": template_values})
-            all_data[iregion] = all_data[iregion].clone(extra=extra, weights=_safe_divide(all_data[iregion].weights, all_data[iregion].extra["WEIGHT_FKP"]))
+                # Data
+                extra = all_data[iregion][itracer].extra
+                if amr:
+                    extra.update({"template_values": jnp.stack([extra.pop(map_name) for map_name in regression_maps[itracer]], axis=-1)})
+                    for map in set(all_regression_maps) - set(regression_maps[itracer]):
+                        del extra[map]  # remove maps not used for this tracer to save memory
+                all_data[iregion][itracer] = all_data[iregion][itracer].clone(extra=extra, weights=_safe_divide(all_data[iregion][itracer].weights, extra["WEIGHT_FKP"]))
         del extra
 
         if jax.process_index() == 0: logger.info("Catalogs ready, starting preparation...")
 
         # Prepare arguments for the window computation function
-        ric_args = prepare_RIC(data=all_data, randoms=all_randoms, regions=ric_regions, n_bins=ric_nbins, apply_to="randoms")
+        ric_argss = []
+        for itracer, (data_tracer, randoms_tracer) in enumerate(zip(zip(*all_data, strict=True), zip(*all_randoms, strict=True), strict=True)):
+            ric_argss.append(prepare_RIC(data=data_tracer, randoms=randoms_tracer, regions=ric_regions[itracer], n_bins=ric_nbins[itracer], apply_to="randoms"))
+        ric_argss = tuple(ric_argss)
 
         if amr:
             extra_effects = "RIC+AMR"
-            amr_args = prepare_AMR(data=all_data, randoms=all_randoms, regions_zranges=amr_regions_zranges, apply_to="randoms")
-            for iregion in range(nregion):
-                extra = all_randoms[iregion].extra
+            amr_argss = []
+            for itracer, (data_tracer, randoms_tracer) in enumerate(zip(zip(*all_data, strict=True), zip(*all_randoms, strict=True), strict=True)):
+                amr_argss.append(prepare_AMR(data=data_tracer, randoms=randoms_tracer, regions_zranges=amr_regions_zranges[itracer], apply_to="randoms"))
+            amr_argss = tuple(amr_argss)
+
+            def delete_template_values(particles):
+                extra = particles.extra
                 del extra["template_values"]
-                all_randoms[iregion] = all_randoms[iregion].clone(extra=extra)
-                # data
-                extra = all_data[iregion].extra
-                del extra["template_values"]
-                all_data[iregion] = all_data[iregion].clone(extra=extra)
-            del extra
+                return particles.clone(extra=extra)
+
+            all_data = [[delete_template_values(particles) for particles in data_region] for data_region in all_data]
+            all_randoms = [[delete_template_values(particles) for particles in randoms_region] for randoms_region in all_randoms]
         else:
             extra_effects = "RIC"
-            amr_args = None
+            amr_argss = None
 
         # Turn into FKP fields
-        fkp_fields = [FKPField(data=d, randoms=r, attrs=mattrs) for d, r in zip(all_data, all_randoms, strict=True)]
+        fkp_fields = [
+            [FKPField(data=d, randoms=r, attrs=mattrs) for d, r in zip(data_region, randoms_region, strict=True)]
+            for data_region, randoms_region in zip(all_data, all_randoms, strict=True)
+        ]
 
         del all_data, all_randoms
-        # Compute FKP normalization for each region, with the estimator weights, and for each ell if optimal weights are applied
+
         if optimal_weights is None:
             if jax.process_index() == 0:
                 logger.info("Using FKP weights, computing window for all ells at once.")
             # Using FKP weights which are symetrical, so this remains an autocorr
-            binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectra[0].get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
+            binner = BinMesh2SpectrumPoles(fkp_fields[0][0].attrs, edges=spectra[0].get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
             # get norms from input spectrum
             fkp_norms = [jnp.concatenate([spectrum.get(ell).values("norm") for ell in ellsout], axis=0) for spectrum in spectra]
 
             # Renormalize data and randoms to input spectrum
-            for i, (spectrum, fkp) in enumerate(zip(spectra, fkp_fields, strict=True)):
+            for iregion, (spectrum, fkps) in enumerate(zip(spectra, fkp_fields, strict=True)):
                 # autocorrelation and FKP: component [0, 0]
-                alphad = spectrum.get(0).attrs["wsum_data"][0][0] / (fkp.data.weights * fkp.data.extra["WEIGHT_FKP"]).sum()
-                alphar = spectrum.get(0).attrs["wsum_randoms"][0][0] / (fkp.randoms.weights * fkp.randoms.extra["WEIGHT_FKP"]).sum()
-                fkp_fields[i] = fkp.clone(
-                    data=fkp.data.clone(weights=fkp.data.weights * alphad),
-                    randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar),
-                )
+                # autocorrelation and FKP: component [0, itracer]
+                for itracer, fkp in enumerate(fkps):
+                    # FIXME I think min(itracer, ntracers - 1) always equal to itracer ??
+                    alphad = spectrum.get(0).attrs["wsum_data"][0][min(itracer, ntracers - 1)] / (fkp.data.weights * fkp.data.extra["WEIGHT_FKP"]).sum()
+                    alphar = spectrum.get(0).attrs["wsum_randoms"][0][min(itracer, ntracers - 1)] / (fkp.randoms.weights * fkp.randoms.extra["WEIGHT_FKP"]).sum()
+                    fkp_fields[iregion][itracer] = fkp.clone(
+                        data=fkp.data.clone(weights=fkp.data.weights * alphad),
+                        randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar),
+                    )
+
+            # Needed list of lists for mutability before. Now switch to list of tuples to respect FM input signature
+            fkp_fields = [tuple(fkp_region) for fkp_region in fkp_fields]
 
             ## FM based computations
             windows = {}
@@ -924,8 +965,9 @@ def compute_window_mesh2_spectrum_fm(
                 "fkp_norms": fkp_norms,
                 "binner": binner,
                 "estimator_weights": "WEIGHT_FKP",
-                "data_regions": ric_args.data_regions,
-                "randoms_regions": ric_args.randoms_regions}
+                "data_regions": tuple(ric_arg.data_regions for ric_arg in ric_argss),
+                "randoms_regions": tuple(ric_arg.randoms_regions for ric_arg in ric_argss),
+            }
 
             if geo:
                 if jax.process_index() == 0: logger.info("Computing geometry window with desiwinds...")
@@ -936,11 +978,11 @@ def compute_window_mesh2_spectrum_fm(
                 )
 
             if ric:
-                if jax.process_index() == 0: logger.info("Computing total window with desiwinds...")
+                if jax.process_index() == 0:
+                    logger.info("Computing total window (%s) with desiwinds...", extra_effects)
                 _, windows[extra_effects] = get_window_spikes(
                     **window_fm_kw,
-                    mock_survey_kwargs=mock_survey_kwargs
-                    | {"ric_args": ric_args, "amr_args": amr_args},
+                    mock_survey_kwargs=mock_survey_kwargs | {"ric_args": ric_argss, "amr_args": amr_argss},
                 )
 
             if jax.process_index() == 0: logger.info("desiwinds window computation finished.")
