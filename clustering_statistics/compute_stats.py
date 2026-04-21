@@ -377,9 +377,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         funcs = {"window_mesh2_spectrum_fm": compute_window_mesh2_spectrum_fm}
         for stat, func in funcs.items():
             if stat in stats:
-                # Forward model window only supports auto-correlations currently
-                if len(tracers) > 1:
-                    raise NotImplementedError("Forward model window function not yet implemented for cross-correlations")
+                # if autocorr set tracers = [tracer, tracer], else keep order for cross-corr
+                if len(tracers) == 1:
+                    tracers = [tracers[0], tracers[0]]
 
                 window_options = dict(options[stat])
                 selection_weights = window_options.pop("selection_weights", None)
@@ -425,7 +425,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 kw = options[kind_stat] | {"auw": False, "cut": False}
                                 fn = get_stats_fn(
                                     kind=kind_stat,
-                                    catalog=fn_catalog_options[tracers[0]],
+                                    catalog=fn_catalog_options[tracers[0]]
+                                    if tracers[1] == tracers[0]
+                                    else {tracer: fn_catalog_options[tracer] for tracer in tracers},
                                     **kw | {"region": spectrum_region},
                                 )
                             products_fn[spectrum_region][name] = fn
@@ -435,10 +437,17 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     windows = [types.read(products_fn[spectrum_region]["window"]) for spectrum_region in window_options["spectrum_regions"]]
                     # Combine measurements from multiple regions and fit for theory
                     theory = types.sum(
-                        [run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window, theory='kaiser') for spectrum, window in zip(spectra, windows, strict=True)]
+                        [
+                            run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window, theory="kaiser")
+                            for spectrum, window in zip(spectra, windows, strict=True)
+                        ]
                     )
-                    spectrum = types.sum(spectra)
-                    theory_fn = get_stats_fn(kind=theory_stat, catalog=(fn_catalog_options[tracers[0]]))
+                    theory_fn = get_stats_fn(
+                        kind=theory_stat,
+                        catalog=fn_catalog_options[tracers[0]]
+                        if tracers[1] == tracers[0]
+                        else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                    )
                     tools.write_stats(theory_fn, theory)
 
                 # Synchronize before reading theory
