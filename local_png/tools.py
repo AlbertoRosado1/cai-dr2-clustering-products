@@ -18,8 +18,10 @@ def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='defau
     # Read the data:
     pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum'))
     if add_ic:
+        print('Reading the window with integral constraint contribution...')
         window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', extra='with_ic'))
     else:
+        print('Reading the window without integral constraint contribution...')
         window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum'))
     cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum'))
 
@@ -59,7 +61,7 @@ def rebin_data(pk, window, cov, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=2e-2,
     return pk, window, cov
 
 
-def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bias=True, **kwargs):
+def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bias=True, nickname=None, **kwargs):
     """Apply bias and damping parameter relations between the paramters of the likelihood both for ell=0/2 and auto/cross power spectrum.
 
     Parameters
@@ -68,6 +70,10 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
         Likelihood whose parameters are updated in place.
     tracer : str
         name of the tracers: 'LRGxLRG', 'LRGxQSO', ... 
+    nickname : str, optional
+        Suffix inserted between the tracer shortname and '_ell{ell}' in the cross-correlation theory
+        parameter names (e.g. nickname='LRGxELG' -> 'ELG_LRGxELG_ell0'). Must match the nickname used in
+        get_obervable_and_likelihood. Default is None (no suffix, legacy behaviour).
 
     Returns
     -------
@@ -103,27 +109,28 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
 
     # Cross-correlation: derive cross biases from auto biases or let it free.
     if tracers[0] != tracers[1]:
+        cross_suffix = f'_{nickname}' if nickname is not None else ''
         for i, tt in enumerate(tracers):
             if derived_cross_bias:
                 # derived the bias from the auto-correlation bias, taking into account the different effective redshifts of the auto and cross correlation.
                 zeff = [zeffs['x'.join([tt, tt])][0], zeffs[tracer][0]]
-                _rescale_bias_params(likelihood, tracer=[f"{tt}_ell0", f'{tt}_cross_ell0'], zeff=zeff)
+                _rescale_bias_params(likelihood, tracer=[f"{tt}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
             else:
                 # let free the cross-correlation bias, but fix one of the two biases to break degeneracy.
                 # the first linear bias parameter can be set with kwargs.          
                 if i == 0:      
-                    default_b1 = kwargs.get(f"{tt}_cross_ell0.b1", 1)
-                    likelihood.all_params[f"{tt}_cross_ell0.b1"].update(value=default_b1, fixed=True)    
+                    default_b1 = kwargs.get(f"{tt}{cross_suffix}_ell0.b1", 1)
+                    likelihood.all_params[f"{tt}{cross_suffix}_ell0.b1"].update(value=default_b1, fixed=True)    
 
             if len(zeffs[tracer]) > 1:
                 zeff = [zeffs[tracer][ell] for ell in [0, 2]]
-                _rescale_bias_params(likelihood, tracer=[f"{tt}_cross_ell0", f"{tt}_cross_ell2"], zeff=zeff)
+                _rescale_bias_params(likelihood, tracer=[f"{tt}{cross_suffix}_ell0", f"{tt}{cross_suffix}_ell2"], zeff=zeff)
                 # logger.warning('we neglect the redshift dependence of the damping term, for now')
                 # Note: the first damping term is fixed to 0:
-                if i == 1: likelihood.all_params[f"{tt}_cross_ell2.sigmas"].update(derived='{' + f"{tt}_cross_ell0.sigmas" + '}')
+                if i == 1: likelihood.all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived='{' + f"{tt}{cross_suffix}_ell0.sigmas" + '}')
 
 
-def get_obervable_and_likelihood(pk, window, cov, tracer, zeffs, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, fix_fnl=False, engine='class', **kwargs):
+def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, fix_fnl=False, engine='class', scale_covariance=1, nickname=None, **kwargs):
     """
     Get the observable and likelihood for a given tracer. Each multipole is treated as a different observable, but they share the same parameters in the theory.
 
@@ -135,9 +142,14 @@ def get_obervable_and_likelihood(pk, window, cov, tracer, zeffs, p={'LRG': 1., '
         p (dict, optional): Value of p parameter. Defaults to {'LRG': 1., 'ELG': 1., 'QSO': 1.4}.
         fix_fnl (bool, optional): If true do not fit for $f_{\rm NL}^{\rm loc}$. Defaults to False.
         engine (str, optional): Solver for perturbation theory computation ('class', 'camb' or either that works in cosmoprimo). Defaults to 'class'.
+        nickname (str, optional): Suffix inserted between the tracer shortname and '_ell{ell}' in cross-correlation theory
+            parameter names for cross-correlations. Use this to avoid parameter name collisions when combining
+            multiple cross-correlations that share a tracer (e.g. LRGxELG and ELGxQSO both have ELG).
+            With nickname='LRGxELG', ELG parameters become 'ELG_LRGxELG_ell0.b1'. Default is None.
         
     Kwargs:
-         kwargs[f"LRG_cross_ell0.b1"] value used to fix one of the two b1 in the cross-correlation otherwise fix it to 1 (the damping term is set to 0).
+         kwargs[f"{tt}_{nickname}_ell0.b1"] (or f"{tt}_ell0.b1" if no nickname) value used to fix
+         one of the two b1 in the cross-correlation, otherwise fixed to 1.
 
     Returns:
        observables: list of monopole and quadrupole (if used) desilike observables.
@@ -151,24 +163,21 @@ def get_obervable_and_likelihood(pk, window, cov, tracer, zeffs, p={'LRG': 1., '
     tracers = tuple(tracer.split('x'))
     if len(tracers) == 1: tracers *= 2
     tracers = (tracers[0][:3], tracers[1][:3])  # LRG_zcmb -> LRG, ELGnotqso -> ELG, ...
-
     cross_correlation = (tracers[0] != tracers[1])
 
     observables = []
-
     for ell in pk.ells:  
+        cross_suffix = f'_{nickname}' if (nickname is not None and cross_correlation) else ''
         if cross_correlation: 
-            tracers_theo = [tracer + f'_cross_ell{ell}' for tracer in tracers]
+            tracers_theo = [f'{tt}{cross_suffix}_ell{ell}' for tt in tracers]
         else:
-            tracers_theo = [tracer + f'_ell{ell}' for tracer in tracers]
+            tracers_theo = [f'{tt}_ell{ell}' for tt in tracers]
         if not cross_correlation: tracers_theo = tracers_theo[:1]
         logger.info(f'{tracers_theo=}, {ell=}, zeff={zeffs["x".join(tracers)][ell]:2.4}')
 
         # extract only the mulitpole ell: 
         data = pk.get(ells=[ell])
         wmatrix = window.at.observable.match(data)
-        covariance = cov.at.observable.get(observables='spectrum2', tracers=tracers)  # for the cross-covariance
-        covariance = covariance.at.observable.match(data)
 
         # Define Template and Theory:
         template = FixedPowerSpectrumTemplate(z=zeffs["x".join(tracers)][ell], fiducial=DESI(engine=engine))
@@ -185,10 +194,21 @@ def get_obervable_and_likelihood(pk, window, cov, tracer, zeffs, p={'LRG': 1., '
 
         # Don't forget to give different name for the observable in order to stack them together in the likelihood:
         name = 'pk_' + 'x'.join(tracers) + f'_ell{ell}'
-        observables += [TracerPowerSpectrumMultipolesObservable(name=name, data=data, window=wmatrix, covariance=covariance, theory=theory)] 
+        observables += [TracerPowerSpectrumMultipolesObservable(name=name, data=data, window=wmatrix, theory=theory)] 
 
-    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=cov.at.observable.get(tracers=tracers).value(), scale_covariance=1)
-    fix_likelihood_bias_and_damping(likelihood, tracer='x'.join(tracers), zeffs=zeffs, derived_cross_bias=False, **kwargs)
+    if isinstance(cov, list):
+        import lsstypes
+        logger.info('Using mocks to estimate the covariance matrix.')
+        covariance = lsstypes.cov([mock.match(pk) for mock in cov]).value()
+        correction_covariance = {'correction': 'hartlap-percival2014', 'nobs': len(cov)}
+    else:
+        logger.info('Using analytical covariance matrix.')
+        covariance = cov.at.observable.get(tracers=tracers).value()
+        correction_covariance = None
+
+    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=covariance, 
+                                               correct_covariance=correction_covariance, scale_covariance=scale_covariance)
+    fix_likelihood_bias_and_damping(likelihood, tracer='x'.join(tracers), zeffs=zeffs, derived_cross_bias=False, nickname=nickname, **kwargs)
     likelihood()
 
     return observables, likelihood
@@ -201,7 +221,7 @@ def run_profiler(likelihood, fn_output=None):
     from desilike.profilers import MinuitProfiler
 
     profiler = MinuitProfiler(likelihood, seed=7)
-    profiler.maximize(niterations=20)
+    profiler.maximize(niterations=10)
     logger.info(f'\n{profiler.profiles.to_stats(tablefmt="pretty")}')
 
     if fn_output is not None:
@@ -232,12 +252,23 @@ def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False,
     return sampler
 
 
-def plot_observables(observables):
+def plot_observables(observables, ylims=None):
     """ 
-    Plot the observables (power spectrum multipoles) with their theory predictions and residuals. 
+    Plot the observables (power spectrum multipoles) with their theory predictions and residuals.
+
+    Parameters
+    ----------
+    observables : dict
+        Mapping tracer -> observables.
+    ylims : sequence, optional
+        Y-axis limits for the monopole and quadrupole panels.
+    profile : object, optional
+        Profiler or profile-like object. If provided, an extra column is added to display
+        its summary table.
     """
-    fig, axs = plt.subplots(2, 2,  figsize=(6, 4), sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
+    fig, axs = plt.subplots(2, 2, figsize=(6, 4), sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
     fig.subplots_adjust(hspace=0.1)
+    table_ax = None
 
     for tracer in observables.keys():
         for obs in observables[tracer]:
@@ -259,8 +290,12 @@ def plot_observables(observables):
             for offset in [-2., 2.]: axs[1, j].axhline(offset, color='k', linestyle='--')
             for offset in [-1., 1.]: axs[1, j].axhline(offset, color='lightgray', linestyle=':')
 
-    axs[0, 0].set_ylim(1e4, 8e4)
-    axs[0, 1].set_ylim(2e3, 5e4)
+    if ylims is not None:
+        axs[0, 0].set_ylim(*ylims[0])
+        axs[0, 1].set_ylim(*ylims[1])
+    else:
+        axs[0, 0].set_ylim(1e4, 8e4)
+        axs[0, 1].set_ylim(2e3, 5e4)
 
     axs[0, 0].legend()
     axs[0, 1].legend()
@@ -331,9 +366,12 @@ def combine_analytical_covariances(pks, covs, order=['LRGxLRG', 'LRGxQSO', 'QSOx
     """
     from lsstypes import ObservableTree
 
-    veffs = {'LRG_z0.4-1.1': 11.201, 'LRG_z0.8-1.1': 5.866, 
-             'ELG_z0.8-1.1': 5.663, 'ELG_z0.8-1.6': 16.011, 
-             'QSO_z0.8-1.1': 1.831, 'QSO_z0.8-1.6': 6.494, 'QSO_z0.8-3.5': 14.722}
+    veffs = {'LRG_z0.4-1.0': 9.41, 'LRG_z0.4-1.1': 11.201, 'LRG_z0.8-1.0': 4.075, 'LRG_z0.8-1.1': 5.866,
+             'ELG_z0.8-1.0': 3.637, 'ELG_z0.8-1.1': 5.663, 'ELG_z0.8-1.6': 16.011,
+             'QSO_z0.8-1.0': 1.129, 'QSO_z0.8-1.1': 1.831, 'QSO_z0.8-1.6': 6.494, 'QSO_z0.8-3.5': 14.722, 
+             'LRGxQSO_z0.8-1.0': 2.143, 'LRGxQSO_z0.8-1.1': 3.262,
+             'ELGxLRG_z0.8-1.0': 3.849, 'ELGxLRG_z0.8-1.1': 5.751,
+             'ELGxQSO_z0.8-1.6': 10.151}
 
     def _extract_offdiag_block(pks, covs, tracer1, tracer2):
         """ 
@@ -385,7 +423,7 @@ def combine_analytical_covariances(pks, covs, order=['LRGxLRG', 'LRGxQSO', 'QSOx
         if len(tracer_cross.split('x')) > 2:
             raise ValueError(f'Unexpected tracer_cross: {tracer_cross} from tracer1: {tracer1} and tracer2: {tracer2}')
         zrange = fiducial[tracer_cross]['zrange']
-        veff1_cross, veff2_cross = veffs[f'{tt11}_z{zrange[0]}-{zrange[1]}'], veffs[f'{tt21}_z{zrange[0]}-{zrange[1]}']
+        veff1_cross, veff2_cross = veffs[f'{tracer_cross}_z{zrange[0]}-{zrange[1]}'], veffs[f'{tracer_cross}_z{zrange[0]}-{zrange[1]}']
     
         return veff1_cross / veff1 * veff2_cross / veff2
     
@@ -426,9 +464,43 @@ def combine_analytical_covariances(pks, covs, order=['LRGxLRG', 'LRGxQSO', 'QSOx
     logger.debug('Missing off-diagonal blocks:', missing_offdiag)
 
     covariance_tot = covs[order[0]].clone(observable=observable_tot, value=matrix)
+    logger.debug(covariance_tot.observable)
     try: 
         np.linalg.cholesky(covariance_tot.value())
     except Exception as e:
         logger.warning('Covariance matrix is not positive definite:', e)
-
+        
     return covariance_tot
+
+
+def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale_covariance=1):
+    """ 
+    Build the total likelihood for the combined data vector, by stacking the observables and using the combined covariance matrix.
+    Were are using order to stack the observable in the same order as the covariance matrix. 
+    Note: pks, observables, covs, zeffs, fiducial are dictionaries with keys corresponding to the labels in order.
+    Note2: fiducial is used only to extract the redshift ranges for the different tracers, which are needed to rescale the off-diagonal blocks of the covariance matrix in combine_analytical_covariances.
+    """
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from tools import combine_analytical_covariances, fix_likelihood_bias_and_damping
+
+    total_observables = [observable for tracer in order for observable in observables[tracer]]
+    logger.debug([ff.name for ff in total_observables])
+
+    if isinstance(covs[order[0]], list):
+        logger.info('Using mocks to estimate the covariance matrix.')
+        covariance = np.cov(np.transpose([np.concatenate([covs[tt][i].match(pks[tt]).value() for tt in order]) for i in range(len(covs[order[0]]))]))
+        correction_covariance = {'correction': 'hartlap-percival2014', 'nobs': len(covs[order[0]])}
+    else:
+        logger.info('Using analytical covariance matrix.')
+        covariance = combine_analytical_covariances(pks, covs, order=order, fiducial=fiducial).value()
+        correction_covariance = None
+    
+    total_likelihood = ObservablesGaussianLikelihood(observables=total_observables, covariance=covariance, 
+                                                     correct_covariance=correction_covariance,scale_covariance=scale_covariance)
+    for tracer in order: 
+        # We do not link the damping term from the cross-correlation and the auto-correlation
+        # Because they are different effective redshifts and we do not know the a priori.
+        fix_likelihood_bias_and_damping(total_likelihood, tracer=tracer, zeffs=zeffs, derived_cross_bias=True, nickname=tracer)
+    total_likelihood()
+
+    return total_likelihood
