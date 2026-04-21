@@ -91,8 +91,7 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
         for weight in weights:
             # options will be filled by default options in compute_stats_from_options following analysis='local_png'
             options = dict(catalog=dict(cat_dir=cat_dir, tracer=tracer, zrange=zranges, weight=weight, region=region, ext='fits'), 
-                           mesh2_spectrum={'cut': False}, 
-                           window_mesh2_spectrum={'cut': False})
+                           mesh2_spectrum={'cut': False}, window_mesh2_spectrum={'cut': False})
 
             if 'window_mesh2_spectrum_fm' in stats:
                 options['catalog']['nran'] = 1  # not enough memory to do with more randoms ... 
@@ -125,6 +124,22 @@ def postprocess_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 
         get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir)
         options = dict(catalog=dict(cat_dir=cat_dir, tracer=tracer, zrange=zranges, weight=weight, ext='fits'), 
                        combine_regions={'stats': stats}, mesh2_spectrum={'cut': False}, window_mesh2_spectrum={'cut': False})
+
+        if 'window_mesh2_spectrum_fm' in stats:
+            options['window_mesh2_spectrum_fm'] = {}
+            # for ell=0: 4 is the max that I can fit in memory with nran=1 / for ell=2 -> I need to go down to 3...
+            options['window_mesh2_spectrum_fm']['batch_size'] = 3  
+            options['window_mesh2_spectrum_fm']['spectrum_regions'] = kwargs.get('spectrum_regions', ['NGC', 'SGC'])
+
+            options['window_mesh2_spectrum_fm']['geo'] = kwargs.get('geo', True)
+            options['window_mesh2_spectrum_fm']['ric'] = kwargs.get('ric', True)
+            options['window_mesh2_spectrum_fm']['ellsout'] = kwargs.get('ellsout', None)
+
+            options['window_mesh2_spectrum_fm']['n_realizations'] = 10
+            options['window_mesh2_spectrum_fm']['seeds'] = [50, 20, 77, 80, 97, 6, 52, 64, 76, 81]
+
+            options['window_mesh2_spectrum_fm']['theory_rebin'] = 10  # reduce the number of points -> greatly improve the computation time.
+                    
         postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, analysis='local_png', **options)
 
 
@@ -157,8 +172,10 @@ if __name__ == '__main__':
     salloc -N 1 -C "gpu&hbm80g" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
     source /global/homes/e/edmondc/.bash_profile
     export HDF5_USE_FILE_LOCKING=TRUE
+
+    srun -n 4 python desipipe_data_png.py --interactive --blinded
     
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0 2
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ric --ellsout 0 2
     
     """
     from clustering_statistics import setup_logging
@@ -203,11 +220,11 @@ if __name__ == '__main__':
         
         regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'SGCnoDES', 'DES'][:2]  # + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]]
         
-        #tracers = ['LRG', 'LRG_zcmb', 'ELGnotqso', 'QSO', 'QSO_zcmb', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO')]
-        #tracers = ['LRG', 'QSO', ('LRG', 'QSO')][1:2]
-       # tracers = ['LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO_zcmb', ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]  # NGC+SGC = 2h30
+        #tracers = ['LRG', 'QSO']
+        tracers = [('ELGnotqso', 'QSO')] #'ELGnotqso', ('LRG', 'QSO'), ('LRG', 'ELGnotqso')
 
-        tracers = [('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]
+        #tracers = ['LRG', 'LRG_zcmb', 'ELGnotqso', 'QSO', 'QSO_zcmb', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO')]
+        #tracers = ['LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO_zcmb', ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]  # NGC+SGC = 2h30
 
         for tracer in tracers:
             from clustering_statistics import tools
@@ -235,7 +252,7 @@ if __name__ == '__main__':
 
     else:
         stats = ['window_mesh2_spectrum_fm']
-        postprocess = None
+        postprocess = ['combine_window_mesh2_spectrum']
         logger.info(f'Running stats {stats} and postprocess {postprocess}')
 
         regions = ['ALL']    
@@ -255,5 +272,13 @@ if __name__ == '__main__':
             kwargs = {'geo': args.geo, 'ric': args.ric, 'ellsout': args.ellsout}
             logger.info(kwargs)
 
-            get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, 
-                            regions=regions, stats=stats, spectrum_regions=['NGC', 'SGC'], **kwargs)
+            #get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, 
+            #                regions=regions, stats=stats, spectrum_regions=['NGC', 'SGC'], **kwargs)
+
+            if postprocess:
+                postprocess_stats(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, 
+                                  postprocess=postprocess, stats=stats, **kwargs)
+
+
+# window_mesh2_spectrum_poles_fm_QSO_z0.8-3.5_SGC_weight-default-fkp-oqe_geometry_02_seed=50.h5
+# window_mesh2_spectrum_poles_fm_QSO_z0.8-3.5_GCcomb_weight-default-fkp-oqe_geometry_02_seed=50.h5

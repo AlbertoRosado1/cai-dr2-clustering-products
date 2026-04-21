@@ -544,6 +544,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                 # Normalize window by average normalization (in case norm is k-dependent)
                 # Division corrects for any k-dependent normalization variation
                 window = window.clone(value=window.value() / (norm[..., None] / np.mean(norm)))
+            
             elif method == 'exact':
                 all_mesh = []
                 if jax.process_index() == 0:
@@ -556,7 +557,8 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                     alpha = pole.attrs['wsum_data'][isum][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
                     # Paint random particles with proper normalization onto mesh
                     all_mesh.append(alpha * randoms.paint(**kw_paint, out='real'))
-                window = compute_mesh2_spectrum_window(*all_mesh, edgesin=edgesin, ellsin=ellsin, los=los, bin=bin, pbar=False, flags=('infinite',), norm=1.)
+                # (ellins, 'local') to include first order wide-angle correction:
+                window = compute_mesh2_spectrum_window(*all_mesh, edgesin=edgesin, ellsin=(ellsin, 'local'), los=los, bin=bin, pbar=False, flags=('infinite',), norm=1.)
                 # FIXME
                 window = window.clone(value=window.value().real / norm[..., None])
 

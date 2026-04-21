@@ -494,6 +494,8 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_fiducial[name] = {}
 
     if 'png' in analysis:
+        # Use exact window matrix computation and include 1st order of wide-angle effect:
+        propose_fiducial['window_mesh2_spectrum']['method'] = 'exact'
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': 700, 'cellsize': 20.}
     else:

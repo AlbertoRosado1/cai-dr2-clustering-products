@@ -724,9 +724,8 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
             window_options = options.get(stat, {})
             window_fm_options = options.get(f'{stat}_fm', {})
             window_fm = None
-            # Iterate on cut = False, True
-            for window_geometry_fn, kw in list_stats(
-                stat, get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **{stat: window_options, 'mesh2_spectrum': options.get('mesh2_spectrum', {})})[stat]:
+
+            for window_geometry_fn, kw in list_stats(stat, get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **{stat: window_options, 'mesh2_spectrum': options.get('mesh2_spectrum', {})})[stat]:
                 window_geometry = types.read(window_geometry_fn)
                 if window_fm is None:
                     window_realizations = []
