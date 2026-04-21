@@ -509,52 +509,70 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         # FIXME: for cross-correlations
         if simple_tracers[0] not in ["BGS", "LRG", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
-        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}[simple_tracers[0]]
+        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
 
         propose_regression_zranges = {
             "BGS": [(0.1, 0.4)],
             "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
             "ELG": [(0.8, 1.1), (1.1, 1.6)],
             "QSO": [(0.8, 1.3), (1.3, 2.1), (2.1, 3.5)],
-        }[simple_tracers[0]]
+        }
 
         propose_templates = {
             "BGS": ['STARDENS', 'GALDEPTH_R', 'HI', 'EBV_DIFF_GR', 'EBV_DIFF_RZ'],
             "LRG": ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'HI', 'PSFDEPTH_W1', 'EBV_DIFF_GR', 'EBV_DIFF_RZ'],
             "ELG": ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'EBV_DIFF_GR', 'EBV_DIFF_RZ', 'HI'],
             "QSO": ['PSFDEPTH_W1', 'PSFDEPTH_W2', 'STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'PSFDEPTH_G', 'PSFDEPTH_R', 'PSFDEPTH_Z', 'EBV_DIFF_GR', 'EBV_DIFF_RZ', 'HI'],
-            }[simple_tracers[0]]  # fmt: skip
+            }  # fmt: skip
 
         templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
         translate_template_tracer = {'BGS': 'BGS_BRIGHT', 'ELG_LOPnotqso': 'ELG_LOPnotqso', 'ELG': 'ELG', 'LRG': 'LRG', 'QSO': 'QSO'}
 
-        for tt, template_tracer in translate_template_tracer.items():
-            if tt in tracers[0]:
-                break
-            else:
-                template_tracer = None
+        template_tracers = [translate_template_tracer[tt] for tt in simple_tracers]
 
-        if template_tracer is None:
-            raise ValueError(f'template tracer corresponding to {tracers[0]} not found.')
-
-        propose_fiducial["window_mesh2_spectrum_fm"].update(
-            data_to_randoms_ratio=0.5,
-            catalog_split_seed=975,
-            ric_nbins=1000,
-            ric_regions=propose_photoregions,
-            geo=True,
-            ric=True,
-            amr=True,
-            ellsout=None,
-            regression_maps=propose_templates,
-            templates_paths_kwargs={f'templates_path_{region}': templates_dir / f'{template_tracer}_mapprops_healpix_nested_nside256_{region}.fits' for region in ['N', 'S']},
-            amr_regions_zranges=list(itertools.product(propose_photoregions, propose_regression_zranges)),
-            spectrum_regions=["NGC", "SGC"],
-            unitary_amplitude=True,
-            n_realizations=10,
-            seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
-            batch_size=4,
-        )
+        if len(simple_tracers) > 1:  # cross
+            propose_fiducial["window_mesh2_spectrum_fm"].update(
+                data_to_randoms_ratio=0.5,
+                catalog_split_seed=975,
+                ric_nbins=1000,
+                ric_regions=tuple(propose_photoregions[_tracer] for _tracer in simple_tracers),
+                geo=True,
+                ric=True,
+                amr=True,
+                ellsout=None,
+                regression_maps=tuple(propose_templates[_tracer] for _tracer in simple_tracers),
+                templates_paths_kwargs=tuple(
+                    {f"templates_path_{region}": templates_dir / f"{_tracer}_mapprops_healpix_nested_nside256_{region}.fits" for region in ["N", "S"]}
+                    for _tracer in template_tracers
+                ),
+                amr_regions_zranges=tuple(list(itertools.product(propose_photoregions[_tracer], propose_regression_zranges[_tracer])) for _tracer in simple_tracers),
+                spectrum_regions=["NGC", "SGC"],
+                unitary_amplitude=True,
+                n_realizations=10,
+                seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
+                batch_size=4,
+            )
+        else:  # auto
+            propose_fiducial["window_mesh2_spectrum_fm"].update(
+                data_to_randoms_ratio=0.5,
+                catalog_split_seed=975,
+                ric_nbins=1000,
+                ric_regions=propose_photoregions[simple_tracers[0]],
+                geo=True,
+                ric=True,
+                amr=True,
+                ellsout=None,
+                regression_maps=propose_templates[simple_tracers[0]],
+                templates_paths_kwargs={
+                    f"templates_path_{region}": templates_dir / f"{template_tracers[0]}_mapprops_healpix_nested_nside256_{region}.fits" for region in ["N", "S"]
+                },
+                amr_regions_zranges=list(itertools.product(propose_photoregions[simple_tracers[0]], propose_regression_zranges[simple_tracers[0]])),
+                spectrum_regions=["NGC", "SGC"],
+                unitary_amplitude=True,
+                n_realizations=10,
+                seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
+                batch_size=4,
+            )
 
     return propose_fiducial[kind]
 
