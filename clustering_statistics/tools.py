@@ -700,7 +700,7 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
                         else:
                             if options[stat].get('optimal_weights', None) is not None:
                                 warnings.warn('Removing optimal_weights from mesh2_spectrum as OQE not in weights')
-                            options[stat].pop('optimal_weights', None)
+                            options[stat]['optimal_weights'] = None
         for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'window_mesh2_spectrum_fm']:
             spectrum_options = options[stat.replace('window_', '').replace('_fm', '')]
             spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['selection_weights', 'optimal_weights', 'basis']}
