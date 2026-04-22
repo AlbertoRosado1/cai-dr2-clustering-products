@@ -55,7 +55,7 @@ def run_stats(tracer='LRG', version='abacus-2ndgen', imocks=[0], stats_dir=Path(
         for zsnap in zsnaps:
             for los in 'xyz'[-1:]:
                 options = dict(catalog=dict(version=version, tracer=tracer, zsnap=zsnap, los=los, imock=imock))
-                options['mesh3_spectrum'] = dict(basis='sugiyama', ells=[(0, 0, 0), (0, 2, 2), (1, 1, 0), (1, 1, 2), (2, 2, 0), (2, 2, 2)], mask_edges=['edge1[:, 1] <= nyq / 2.', 'edge2[:, 1] <= nyq / 2.'], buffer_size=31, mattrs={'meshsize': 400})
+                #options['mesh3_spectrum'] = dict(basis='sugiyama', ells=[(0, 0, 0), (0, 2, 2), (1, 1, 0), (1, 1, 2), (2, 2, 0), (2, 2, 2)], mask_edges=['edge1[:, 1] <= nyq / 2.', 'edge2[:, 1] <= nyq / 2.'], buffer_size=31, mattrs={'meshsize': 400})
                 options = fill_box_fiducial_options(options)
                 compute_box_stats_from_options(stats, get_box_stats_fn=get_box_stats_fn, cache=cache, **options)
 
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     #stats = ['window_mesh2_spectrum']
     #stats = ['window_mesh3_spectrum']
     #postprocess = ['combine_regions']
-    imocks = 1+np.arange(1)
+    imocks = 1 + np.arange(1)
 
     # stats_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe/box/')
     stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 

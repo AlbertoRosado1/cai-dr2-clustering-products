@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import logging
+import functools
 
 import numpy as np
 from mpi4py import MPI
@@ -120,7 +121,7 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
     if 'abacus' in version:
         propose_fiducial['catalog'].update({'cosmo': '000'})
     if 'ezmock' in version:
-        propose_fiducial['catalog'].update({'cosmo': '000'})
+        propose_fiducial['catalog'].update({'cosmo': '000', 'boxsize': 6000.})
     if 'abacus-hf' in version:
         hod = 'base'
         if 'BGS' in tracer or 'LRG' in tracer:
@@ -259,38 +260,77 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
     """
     mpiroot = 0
     catalog = None
-    boxsize, scalev = None, None
+    scalev = None
     zsnap = kwargs.get('zsnap', None)
     version = kwargs.get('version', '')
     tracer = get_simple_tracer(kwargs.get('tracer', ''))
     cosmo = kwargs.get('cosmo', '000')
+    boxsize = kwargs.get('boxsize', None)
+    nprocesses = kwargs.get('nprocesses', None)
 
-    def read_catalog(fn):
+    def barrier_idle(mpicomm, tag=0, sleep=1.):
+        """
+        MPI barrier fonction that solves the problem that idle processes occupy 100% CPU.
+        See: https://goo.gl/NofOO9.
+        """
+        import time
+        size = mpicomm.size
+        if size == 1: return
+        rank = mpicomm.rank
+        mask = 1
+        while mask < size:
+            dst = (rank + mask) % size
+            src = (rank - mask + size) % size
+            req = mpicomm.isend(None, dst, tag)
+            while not mpicomm.Iprobe(src, tag):
+                time.sleep(sleep)
+            mpicomm.recv(None, src, tag)
+            req.Wait()
+            mask <<= 1
+
+    def read_catalog(fn, nprocesses=nprocesses):
         kwargs = {}
         if 'uchuu' in version:
             if 'LRG' in tracer: kwargs['group'] = 'galaxies'
             elif 'QSO' in tracer: kwargs['group'] = '/'
             else: kwargs['group'] = 'df'
-        return _read_catalog(fn, mpicomm=MPI.COMM_SELF, **kwargs)
+        is_list = isinstance(fn, (tuple, list))
+        if is_list and nprocesses is not None:
+            # Not faster than MPI
+            fns = list(fn)
+            nprocesses = min(len(fns), nprocesses)
+            catalog = None
+            from concurrent.futures import ProcessPoolExecutor
+            if mpicomm.rank == 0:
+                with ProcessPoolExecutor(max_workers=nprocesses) as pool:
+                    catalogs = list(pool.map(functools.partial(_read_catalog, mpicomm=MPI.COMM_SELF, **kwargs), fns))
+                    for catalog in catalogs:
+                        # Attach manually, as not propagated by pickle
+                        catalog.mpicomm = MPI.COMM_SELF
+                    catalog = Catalog.concatenate(catalogs)
+                    del catalogs
+            barrier_idle(mpicomm=mpicomm, tag=0, sleep=0.2)
+            catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=0)
+        else:
+            catalog = _read_catalog(fn, mpicomm=mpicomm, **kwargs)
+        return catalog
 
     def recenter(positions, boxsize):
         if 'uchuu-hf' in version:
             return positions - boxsize / 2.
         return positions
 
+    fn = get_box_catalog_fn(kind=kind, los=los, **kwargs)
+    catalog = read_catalog(fn)
+    if boxsize is None:
+        boxsize = catalog.attrs.get('BOXSIZE', None)
+    scalev = catalog.attrs.get('VELZ2KMS', None)
+
     if mpicomm.rank == mpiroot:
-        fn = get_box_catalog_fn(kind=kind, los=los, **kwargs)
-        catalog = read_catalog(fn)
-        boxsize = catalog.header.get('BOXSIZE', 2000.)
-        scalev = catalog.header.get('VELZ2KMS', None)
-        logger.info('Finished reading catalogs.')
+        logger.info(f'Finished reading catalogs.')
 
-    if mpicomm.size > 1:
-        catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=mpiroot)
-    for name in catalog.columns():
-        catalog[name.upper()] = catalog.pop(name)
-
-    boxsize, scalev = mpicomm.bcast((boxsize, scalev), root=mpiroot)
+    if boxsize is None:
+        raise ValueError('provide boxsize in options["catalog"]')
 
     if scalev is None:
         from cosmoprimo.fiducial import AbacusSummit
@@ -298,6 +338,9 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
         a = 1.0 / (1.0 + zsnap)
         E = cosmo.efunc(zsnap)
         scalev = 100.0 * a * E
+
+    for name in catalog.columns():
+        catalog[name.upper()] = catalog.pop(name)
 
     positions = np.column_stack([catalog[name] for name in ['X', 'Y', 'Z']])
     positions = recenter(positions, boxsize)
