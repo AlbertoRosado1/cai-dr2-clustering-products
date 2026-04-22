@@ -994,96 +994,168 @@ def compute_window_mesh2_spectrum_fm(
 
         else:
             # Optimal weights: non symmetrical, so need to compute "cross-correlation" (same tracer, different weights) + not the same for all ells
+            # If actual cross-spectra, need to compute A_w1 x B_w2 and A_w2 x B_w1 -> double the amount of spectra as well (and for each ell)
             # Proceed ell per ell and sum the windows at the end
             if jax.process_index() == 0: logger.info("Using optimal weights, computing windows for each ell separately.")
 
-            def _attach_weights(fkp_field, ell):
-                data_w1, data_w2 = next(
-                    optimal_weights(ell,
-                                    [{column: fkp_field.data.extra[column] for column in ["Z", *columns_optimal_weights]}
-                                    | {"INDWEIGHT": fkp_field.data.weights * fkp_field.data.extra["WEIGHT_FKP"]}]))
+            # Double up RIC/AMR arguments even for auto-spectra to simplify the logic in the FM call
+            if len(ric_argss) == 1:
+                ric_argss = ric_argss * 2
+                if amr:
+                    amr_argss = amr_argss * 2
 
-                randoms_w1, randoms_w2 = next(
-                    optimal_weights(ell,
-                                    [{column: fkp_field.randoms.extra[column] for column in ["Z", *columns_optimal_weights]}
-                                    | {"INDWEIGHT": fkp_field.randoms.weights * fkp_field.randoms.extra["WEIGHT_FKP"]}]))
+            # Prepare optimal weigts generators with same structure as fkp_fields
+            optimal_weights_data = [
+                lambda ell, fkp_region=fkp_region: optimal_weights(  # use default to avoid late binding in the loop
+                    ell,
+                    [
+                        (
+                            {column: fkp_field.data.extra[column] for column in ["Z", *columns_optimal_weights]}
+                            | {"INDWEIGHT": fkp_field.data.weights * fkp_field.data.extra["WEIGHT_FKP"]}
+                        )
+                        for fkp_field in fkp_region
+                    ],
+                )
+                for fkp_region in fkp_fields
+            ]
+            optimal_weights_randoms = [
+                lambda ell, fkp_region=fkp_region: optimal_weights(  # use default to avoid late binding in the loop
+                    ell,
+                    [
+                        (
+                            {column: fkp_field.randoms.extra[column] for column in ["Z", *columns_optimal_weights]}
+                            | {"INDWEIGHT": fkp_field.randoms.weights * fkp_field.randoms.extra["WEIGHT_FKP"]}
+                        )
+                        for fkp_field in fkp_region
+                    ],
+                )
+                for fkp_region in fkp_fields
+            ]
 
+            def _attach_weights(fkp_region: tuple[FKPField], data_w1, data_w2, randoms_w1, randoms_w2):
+                """
+                Attach optimal weights to FKP fields in fields `'optimal_1'` and `'optimal_2'` for data and randoms.
+
+                If the input fkp_region contains one tracer, both optimal weights are attached to the same tracer and the field is duplicated to have a length 2 output.
+                If the input fkp_region contains two tracers, the first optimal weight is attached to the first tracer and the second optimal weight to the second tracer.
+                """
                 # These weights also contain real weights and FKP weights ; need to remove the real weights to isolate the "estimator weights" to apply at computation time in the FM
-                return fkp_field.clone(
-                    data=fkp_field.data.clone(
-                        extra=fkp_field.data.extra
-                        | {"weight_optimal_1": _safe_divide(data_w1, fkp_field.data.weights),
-                           "weight_optimal_2": _safe_divide(data_w2, fkp_field.data.weights)}),
-                    randoms=fkp_field.randoms.clone(
-                        extra=fkp_field.randoms.extra
-                        | {"weight_optimal_1": _safe_divide(randoms_w1, fkp_field.randoms.weights),
-                           "weight_optimal_2": _safe_divide(randoms_w2, fkp_field.randoms.weights)}))
+                if len(fkp_region) == 1:
+                    return (
+                        fkp_region[0].clone(
+                            data=fkp_region[0].data.clone(
+                                extra=fkp_region[0].data.extra
+                                | {"weight_optimal_1": _safe_divide(data_w1, fkp_region[0].data.weights), "weight_optimal_2": _safe_divide(data_w2, fkp_region[0].data.weights)}
+                            ),
+                            randoms=fkp_region[0].randoms.clone(
+                                extra=fkp_region[0].randoms.extra
+                                | {
+                                    "weight_optimal_1": _safe_divide(randoms_w1, fkp_region[0].randoms.weights),
+                                    "weight_optimal_2": _safe_divide(randoms_w2, fkp_region[0].randoms.weights),
+                                }
+                            ),
+                        ),
+                    ) * 2
+                elif len(fkp_region) == 2:
+                    return (
+                        fkp_region[0].clone(
+                            data=fkp_region[0].data.clone(extra=fkp_region[0].data.extra | {"weight_optimal_1": _safe_divide(data_w1, fkp_region[0].data.weights)}),
+                            randoms=fkp_region[0].randoms.clone(extra=fkp_region[0].randoms.extra | {"weight_optimal_1": _safe_divide(randoms_w1, fkp_region[0].randoms.weights)}),
+                        ),
+                        fkp_region[1].clone(
+                            data=fkp_region[1].data.clone(extra=fkp_region[1].data.extra | {"weight_optimal_2": _safe_divide(data_w2, fkp_region[1].data.weights)}),
+                            randoms=fkp_region[1].randoms.clone(extra=fkp_region[1].randoms.extra | {"weight_optimal_2": _safe_divide(randoms_w2, fkp_region[1].randoms.weights)}),
+                        ),
+                    )
+                else:
+                    raise ValueError(f"Unexpected number of tracers in fkp_region: {len(fkp_region)}")
 
             windows = {}
             if geo:
-                windows["geometry"] = {}
+                windows["geometry"] = {ell: [] for ell in ellsout}
             if ric:
-                windows[extra_effects] = {}
+                windows[extra_effects] = {ell: [] for ell in ellsout}
 
             for ell in ellsout:
-                binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectra[0].get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
-                fkp_fields = [_attach_weights(fkp_field, ell) for fkp_field in fkp_fields]
+                binner = BinMesh2SpectrumPoles(fkp_fields[0][0].attrs, edges=spectra[0].get(ell).edges("k"), ells=[ell])  # TODO: check edges are ok
                 # Recover FKP normalization for each region and this ell only from input spectrum
                 fkp_norms = [jnp.concatenate([spectrum.get(ill).values("norm") for ill in [ell]], axis=0) for spectrum in spectra]
-                _fkp_fields = []
-                # Renormalize data and randoms to input spectrum
-                for i, (spectrum, fkp) in enumerate(zip(spectra, fkp_fields, strict=True)):
-                    # for FKP, looks like wsum_data is [[number, number]]
-                    alphad1 = spectrum.get(ell).attrs["wsum_data"][0][0] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_1"]).weights.sum()
-                    alphad2 = spectrum.get(ell).attrs["wsum_data"][0][1] / fkp.data.clone(weights=fkp.data.weights * fkp.data.extra["weight_optimal_2"]).weights.sum()
-                    alphar1 = spectrum.get(ell).attrs["wsum_randoms"][0][0] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_1"]).weights.sum()
-                    alphar2 = spectrum.get(ell).attrs["wsum_randoms"][0][1] / fkp.randoms.clone(weights=fkp.randoms.weights * fkp.randoms.extra["weight_optimal_2"]).weights.sum()
-                    # Renormalize the optimal weights so that the final mesh is properly normalized
-                    _fkp_fields.append(
-                        (
-                            fkp.clone(
-                                data=fkp.data.clone(weights=fkp.data.weights * alphad1),
-                                randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar1),
+
+                for iopt, optweights in enumerate(zip(*[owd(ell) for owd in optimal_weights_data], *[owr(ell) for owr in optimal_weights_randoms], strict=True)):
+                    # This loop will iterate once for auto and twice for cross (A_w1 x B_w2 and A_w2 x B_w1)
+                    # _fkp_fields lists length 2 tuples (that might be one field duplicated for auto) with the optimal weights attached in the extra
+                    _fkp_fields = [_attach_weights(fkp_region, *optweights[iregion], *optweights[nregion + iregion]) for iregion, fkp_region in enumerate(fkp_fields)]
+
+                    # Renormalize data and randoms to input spectrum
+                    for iregion, (spectrum, (fkp1, fkp2)) in enumerate(zip(spectra, _fkp_fields, strict=True)):
+                        # OQE auto AxA: [[w1sum_A, w2sum_A]] | OQE cross AxB: [[w1sum_A, w2sum_B], [w2sum_A, w1sum_B]]
+                        alphad1 = spectrum.get(ell).attrs["wsum_data"][iopt][0] / fkp1.data.clone(weights=fkp1.data.weights * fkp1.data.extra["weight_optimal_1"]).weights.sum()
+                        alphad2 = spectrum.get(ell).attrs["wsum_data"][iopt][1] / fkp2.data.clone(weights=fkp2.data.weights * fkp2.data.extra["weight_optimal_2"]).weights.sum()
+                        alphar1 = (
+                            spectrum.get(ell).attrs["wsum_randoms"][iopt][0]
+                            / fkp1.randoms.clone(weights=fkp1.randoms.weights * fkp1.randoms.extra["weight_optimal_1"]).weights.sum()
+                        )
+                        alphar2 = (
+                            spectrum.get(ell).attrs["wsum_randoms"][iopt][1]
+                            / fkp2.randoms.clone(weights=fkp2.randoms.weights * fkp2.randoms.extra["weight_optimal_2"]).weights.sum()
+                        )
+                        # Renormalize the optimal weights so that the final mesh is properly normalized
+                        _fkp_fields[iregion] = (
+                            fkp1.clone(
+                                data=fkp1.data.clone(weights=fkp1.data.weights * alphad1),
+                                randoms=fkp1.randoms.clone(weights=fkp1.randoms.weights * alphar1),
                             ),
-                            fkp.clone(
-                                data=fkp.data.clone(weights=fkp.data.weights * alphad2),
-                                randoms=fkp.randoms.clone(weights=fkp.randoms.weights * alphar2),
+                            fkp2.clone(
+                                data=fkp2.data.clone(weights=fkp2.data.weights * alphad2),
+                                randoms=fkp2.randoms.clone(weights=fkp2.randoms.weights * alphar2),
                             ),
                         )
+
+                    # Shared window FM arguments
+                    window_fm_kw = {
+                        "mock_survey": mock_survey_catalog,
+                        "theory": theory,
+                        "nreal": n_realizations,
+                        "seeds": seeds,
+                        "batch_size": batch_size,
+                        "mock_survey_args": _fkp_fields,  # list of tuples of FKP fields with different norm and optimal weights
+                        "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
+                        "tmpdir": None,  # No temporary output
+                        "survey_names": spectrum_regions,
+                    }
+
+                    mock_survey_kwargs = {
+                        "los": los,
+                        "unitary_amplitude": unitary_amplitude,
+                        "nam_args": None,
+                        "fkp_norms": [jnp.ones_like(fkp_norm) for fkp_norm in fkp_norms],  # will renormalize manually when summing cross corr windows
+                        "binner": binner,  # one ell only
+                        "estimator_weights": ("weight_optimal_1", "weight_optimal_2"),
+                        "data_regions": tuple(ric_arg.data_regions for ric_arg in ric_argss),
+                        "randoms_regions": tuple(ric_arg.randoms_regions for ric_arg in ric_argss),
+                    }
+
+                    if geo:
+                        if jax.process_index() == 0:
+                            logger.info("Computing geometry window for ell=%i, optimal weights combination %i with desiwinds...", ell, iopt)
+                        _, _windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None})
+                        windows["geometry"][ell].append(_windows_fm_geo)
+
+                    if ric:
+                        if jax.process_index() == 0:
+                            logger.info("Computing %s window for ell=%i, optimal weights combination %i with desiwinds...", extra_effects, ell, iopt)
+                        _, _windows_fm = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": ric_argss, "amr_args": amr_argss})
+                        windows[extra_effects][ell].append(_windows_fm)
+
+                # Sum over weights iteration (ie for cross AxB, sum A_w1 x B_w2 and A_w2 x B_w1) to get the final window for this ell before summing over ells
+                # Also renormalize now
+                for effect in windows:
+                    windows[effect][ell] = jax.tree.map(
+                        (lambda *windows_and_norm: windows_and_norm[0].clone(value=np.sum([wd.value() for wd in windows_and_norm[:-1]], axis=0) / windows_and_norm[-1][..., None])),
+                        *windows[effect][ell],
+                        [fkp_norms] * n_realizations,
+                        is_leaf=lambda x: isinstance(x, types.WindowMatrix),
                     )
-
-                # Shared window FM arguments
-                window_fm_kw = {
-                    "mock_survey": mock_survey_catalog,
-                    "theory": theory,
-                    "nreal": n_realizations,
-                    "seeds": seeds,
-                    "batch_size": batch_size,
-                    "mock_survey_args": _fkp_fields,  # list of tuples of FKP fields with different norm and optimal weights
-                    "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
-                    "tmpdir": None,  # No temporary output
-                    "survey_names": spectrum_regions,
-                }
-
-                mock_survey_kwargs = {
-                    "los": los,
-                    "unitary_amplitude": unitary_amplitude,
-                    "nam_args": None,
-                    "fkp_norms": fkp_norms,
-                    "binner": binner,  # one ell only
-                    "estimator_weights": ("weight_optimal_1", "weight_optimal_2"),
-                    "data_regions": ric_args.data_regions,
-                    "randoms_regions": ric_args.randoms_regions}
-
-                if geo:
-                    if jax.process_index() == 0: logger.info("Computing geometry window for ell=%i with desiwinds...", ell)
-                    _, _windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None})
-                    windows["geometry"][ell] = _windows_fm_geo
-
-                if ric:
-                    if jax.process_index() == 0: logger.info("Computing total window for ell=%i with desiwinds...", ell)
-                    _, _windows_fm = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": (ric_args,) * 2, "amr_args": (amr_args,) * 2})
-                    windows[extra_effects][ell] = _windows_fm
 
             if jax.process_index() == 0: logger.info("desiwinds window computation finished.")
 
