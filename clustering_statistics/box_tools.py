@@ -18,7 +18,7 @@ def get_zrange_from_snap(tracer, zsnap=None, version='abacus-2ndgen'):
     """
     tracer = get_simple_tracer(tracer)
     zrange = {}
-    if version in ['abacus-2ndgen', 'ezmock-dr1']:
+    if version in ['abacus-2ndgen', 'ezmock']:
         if tracer == 'BGS':
             zrange[0.200] = (0.1, 0.4)
         elif tracer == 'LRG':
@@ -210,7 +210,7 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
     fn : Path
         Catalog file name(s).
     """
-    if version == 'ezmock-dr1':
+    if version == 'ezmock':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/EZmock/CubicBox_6Gpc/{stracer}/z{zsnap:.3f}/'
         return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]   
@@ -362,7 +362,7 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
     return catalog
 
 def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
-                     kind='mesh2_spectrum', extra='', ext='h5', **kwargs):
+                     kind='mesh2_spectrum', project='', extra='', ext='h5', **kwargs):
     """
     Return measurement filename for box mocks with given parameters.
 
@@ -370,6 +370,8 @@ def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
     ----------
     stats_dir : str, Path
         Directory containing the measurements.
+    project : str
+        KP analysis to which the measurement corresponds. For example: 'mock_challenge', 'full_shape/base', 'local_png/base', 'bao/base', etc.
     version : str, optional
         Measurement version. Default is 'v2'.
     kind : str
@@ -413,7 +415,7 @@ def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
         fns = [get_box_stats_fn(stats_dir=stats_dir, kind=kind, ext=ext, catalog=catalog_options | dict(imock=(imock,)), **kwargs) for imock in range(1000)]
         return [fn for fn in fns if os.path.exists(fn)]
 
-    stats_dir = Path(stats_dir)
+    stats_dir = Path(stats_dir) / project
 
     def join_if_not_none(f, key):
         items = catalog_options[key]
