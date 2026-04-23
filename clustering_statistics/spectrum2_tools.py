@@ -699,7 +699,7 @@ def compute_window_mesh2_spectrum_fm(
     regression_maps: list[str] | tuple[list[str], list[str]] | None,
     templates_paths_kwargs: dict | tuple[dict, dict] | None,
     amr_regions_zranges: list[tuple[str, tuple[float, float]]] | tuple[list[tuple[str, tuple[float, float]]], list[tuple[str, tuple[float, float]]]] | None,
-    spectrum_regions: list[str] | None,
+    spectrum_regions_zranges: list[str] | None,
     unitary_amplitude: bool = True,
     n_realizations: int,
     seeds: list[int] | None,
@@ -744,8 +744,8 @@ def compute_window_mesh2_spectrum_fm(
         Keyword arguments to pass to the function loading the templates maps, e.g. paths to the templates files, EBV map, nside, etc. Not needed if ``amr=False``. Must at least contain the keys ``templates_path_N`` and ``templates_path_S`` with the paths to the templates files for the Northern and Southern regions, respectively. Can (must) provide as tuple for cross-spectra.
     amr_regions_zranges : list[tuple[str, tuple[float, float]]] | tuple[list[tuple[str, tuple[float, float]]], list[tuple[str, tuple[float, float]]]] | None
         Regions where to apply the regressions for the AMR, and corresponding redshift ranges. Can be set to ``None`` if ``amr=False``. Can provide as tuple for cross-spectra.
-    spectrum_regions : list[str] | None
-        Regions for which to compute the window and power spectrum. If ``None``, the whole catalog is used as one region. Typically ``["NGC", "SGC"]``.
+    spectrum_regions_zranges : list[tuple[str, tuple[float, float]]] | None
+        Regions for which to compute the window and power spectrum, along with their corresponding redshift ranges. If ``None``, the whole catalog is used as one region. Typically ``[("NGC", (zmin, zmax)), ("SGC", (zmin, zmax))]``.
     n_realizations : int
         Number of realizations to compute.
     seeds : list[int] | None
@@ -774,8 +774,10 @@ def compute_window_mesh2_spectrum_fm(
     def _add_photometric_template_values(catalogs: dict[str, mpy.Catalog], regression_maps, templates_paths_kwargs):
         return {name: add_photometric_template_values(catalogs[name], regression_maps, **templates_paths_kwargs) for name in catalogs}
 
-    def _select_region(catalogs: dict[str, mpy.Catalog], spectrum_region: str) -> dict[str, mpy.Catalog]:
-        return {name: catalog[select_region(ra=catalog["RA"], dec=catalog["DEC"], region=spectrum_region)] for name, catalog in catalogs.items()}
+    def _select_region_zrange(catalogs: dict[str, mpy.Catalog], spectrum_region_zrange: tuple[str, tuple[float, float]]) -> dict[str, mpy.Catalog]:
+        spectrum_region, zrange = spectrum_region_zrange
+        # Mimic read_clustering_catalog: <= on lower, < on upper
+        return {name: cat[select_region(ra=cat["RA"], dec=cat["DEC"], region=spectrum_region) & (cat["Z"] >= zrange[0]) & (cat["Z"] < zrange[1])] for name, cat in catalogs.items()}
 
     def _split_data_randoms(catalogs: dict[str, mpy.Catalog]) -> dict[str, mpy.Catalog]:
         """Split the randoms into "data" and "randoms" based on the provided ratio. Overwrite original "data"."""
@@ -792,7 +794,7 @@ def compute_window_mesh2_spectrum_fm(
 
     get_data_randoms = list(get_data_randoms)  # for mutability
 
-    spectrum_regions = spectrum_regions or []
+    spectrum_regions_zranges = spectrum_regions_zranges or []
     columns_optimal_weights = []
     if optimal_weights is not None:  # FIXME should this be doubled up for cross-spectra?
         columns_optimal_weights += getattr(optimal_weights, "columns", [])  # to compute optimal weights, e.g. for fnl
@@ -838,12 +840,13 @@ def compute_window_mesh2_spectrum_fm(
 
         get_data_randoms = [wrap(_get_data_randoms) for _get_data_randoms in get_data_randoms]
 
-        if len(spectrum_regions) > 0:  # Split catalogs into pk regions, if specified
+        if len(spectrum_regions_zranges) > 0:  # Split catalogs into pk regions, if specified
+
             def wrap(f, spectrum_region):
-                return lambda: _select_region(f(), spectrum_region)
+                return lambda: _select_region_zrange(f(), spectrum_region)
 
             get_data_randoms = [
-                wrap(_get_data_randoms, spectrum_region) for spectrum_region in spectrum_regions for _get_data_randoms in get_data_randoms
+                wrap(_get_data_randoms, spectrum_region_zrange) for spectrum_region_zrange in spectrum_regions_zranges for _get_data_randoms in get_data_randoms
             ]  # [func1_region1, func2_region1, func3_region1 ... func1_region2, func2_region2, func3_region2 ...]
 
         all_particles = prepare_jaxpower_particles(
@@ -858,7 +861,7 @@ def compute_window_mesh2_spectrum_fm(
         del all_particles
 
         # Make into len(spectrum_regions) catalogs if split into spectrum regions, otherwise one catalog
-        nregion = len(spectrum_regions) if len(spectrum_regions) > 0 else 1
+        nregion = len(spectrum_regions_zranges) if len(spectrum_regions_zranges) > 0 else 1
         nrandoms = len(all_randoms)
         ntracers = nrandoms // nregion
         all_randoms = [[all_randoms[ntracers * i + itracer] for itracer in range(ntracers)] for i in range(nregion)]
@@ -956,7 +959,8 @@ def compute_window_mesh2_spectrum_fm(
                 "mock_survey_args": (*fkp_fields,),
                 "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
                 "tmpdir": None,  # No temporary output
-                "survey_names": spectrum_regions}
+                "survey_names": [f"{srz[0]}_{srz[1][0]}-{srz[1][1]}" for srz in spectrum_regions_zranges],
+            }
 
             mock_survey_kwargs = {
                 "los": los,
@@ -988,9 +992,7 @@ def compute_window_mesh2_spectrum_fm(
             if jax.process_index() == 0: logger.info("desiwinds window computation finished.")
 
             for effect in windows:
-                windows[effect] = {
-                    spectrum_region: [windows[effect][ireal][idx] for ireal in range(n_realizations)]
-                    for idx, spectrum_region in enumerate(spectrum_regions)}
+                windows[effect] = {region_zrange: [windows[effect][ireal][idx] for ireal in range(n_realizations)] for idx, region_zrange in enumerate(spectrum_regions_zranges)}
 
         else:
             # Optimal weights: non symmetrical, so need to compute "cross-correlation" (same tracer, different weights) + not the same for all ells
@@ -1121,7 +1123,7 @@ def compute_window_mesh2_spectrum_fm(
                         "mock_survey_args": _fkp_fields,  # list of tuples of FKP fields with different norm and optimal weights
                         "static_argnames": ["los", "unitary_amplitude", "estimator_weights"],
                         "tmpdir": None,  # No temporary output
-                        "survey_names": spectrum_regions,
+                        "survey_names": [f"{srz[0]}_{srz[1][0]}-{srz[1][1]}" for srz in spectrum_regions_zranges],
                     }
 
                     mock_survey_kwargs = {
@@ -1168,8 +1170,9 @@ def compute_window_mesh2_spectrum_fm(
 
             for effect in windows:
                 windows[effect] = {
-                    spectrum_region: [_combine_ells([windows[effect][ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
-                    for idx, spectrum_region in enumerate(spectrum_regions)}
+                    region_zrange: [_combine_ells([windows[effect][ell][ireal][idx] for ell in ellsout]) for ireal in range(n_realizations)]
+                    for idx, region_zrange in enumerate(spectrum_regions_zranges)
+                }
 
         return windows
 
