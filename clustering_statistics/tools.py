@@ -1161,11 +1161,12 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
             catalog = Catalog.read(fn, group='LSS', mpicomm=mpicomm, **kwargs)
         except KeyError:
             catalog = Catalog.read(fn, mpicomm=mpicomm, **kwargs)
-    elif one_fn.endswith('.fits'):
+    elif one_fn.endswith('.fits') or one_fn.endswith('.fits.gz'):
         catalog = Catalog.read(fn, mpicomm=mpicomm, backend=kwargs.get('backend', 'fitsio'))
         catalog.get(catalog.columns())  # Faster to read all columns at once
     else:
         catalog = Catalog.read(fn, mpicomm=mpicomm)
+    catalog.attrs.update(catalog.header)  # for header not transmitted in pickling
     if 'WEIGHT' not in catalog:
         warnings.warn('WEIGHT not in catalog')
         catalog['WEIGHT'] = catalog.ones()
