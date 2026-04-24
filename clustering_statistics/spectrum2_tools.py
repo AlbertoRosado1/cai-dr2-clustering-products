@@ -700,6 +700,7 @@ def compute_window_mesh2_spectrum_fm(
     templates_paths_kwargs: dict | tuple[dict, dict] | None,
     amr_regions_zranges: list[tuple[str, tuple[float, float]]] | tuple[list[tuple[str, tuple[float, float]]], list[tuple[str, tuple[float, float]]]] | None,
     spectrum_regions_zranges: list[str] | None,
+    total_region_zrange: tuple[str, tuple[float, float]],
     unitary_amplitude: bool = True,
     n_realizations: int,
     seeds: list[int] | None,
@@ -746,6 +747,8 @@ def compute_window_mesh2_spectrum_fm(
         Regions where to apply the regressions for the AMR, and corresponding redshift ranges. Can be set to ``None`` if ``amr=False``. Can provide as tuple for cross-spectra.
     spectrum_regions_zranges : list[tuple[str, tuple[float, float]]] | None
         Regions for which to compute the window and power spectrum, along with their corresponding redshift ranges. If ``None``, the whole catalog is used as one region. Typically ``[("NGC", (zmin, zmax)), ("SGC", (zmin, zmax))]``.
+    total_region_zrange : tuple[str, tuple[float, float]]
+        Total region and redshift range to use for the forward model (but not necessarily the spectra). Should at least encompass all the spectrum regions. Should generally be ("ALL", (zmin, zmax)) with the full redshift range of the tracer, with some exceptions for cross-correlations.
     n_realizations : int
         Number of realizations to compute.
     seeds : list[int] | None
@@ -785,6 +788,8 @@ def compute_window_mesh2_spectrum_fm(
         return {name: cat[select_region(ra=cat["RA"], dec=cat["DEC"], region=spectrum_region) & (cat["Z"] >= zrange[0]) & (cat["Z"] < zrange[1])] for name, cat in catalogs.items()}
 
     def _select_region_zrange_complement(catalogs: dict[str, mpy.Catalog]) -> dict[str, mpy.Catalog]:
+        """Select objects outside the spectrum regions and redshift ranges, but inside the total region and redshift range."""
+        total_region, total_zrange = total_region_zrange
         return {
             name: cat[
                 jnp.invert(
@@ -799,6 +804,7 @@ def compute_window_mesh2_spectrum_fm(
                         axis=0,
                     )
                 )
+                & (select_region(ra=cat["RA"], dec=cat["DEC"], region=total_region) & (cat["Z"] >= total_zrange[0]) & (cat["Z"] < total_zrange[1]))
             ]
             for name, cat in catalogs.items()
         }

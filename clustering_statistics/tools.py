@@ -506,7 +506,8 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
-        # FIXME: for cross-correlations
+        _zranges = zrange or propose_zranges[simple_tracer]
+
         if simple_tracers[0] not in ["BGS", "LRG", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
         propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
@@ -516,6 +517,14 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
             "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
             "ELG": [(0.8, 1.1), (1.1, 1.6)],
             "QSO": [(0.8, 1.3), (1.3, 2.1), (2.1, 3.5)],
+        propose_total_region_zrange = {
+            "BGS": ("ALL", (_zranges[0][0], _zranges[-1][1])),
+            "LRG": ("ALL", (_zranges[0][0], _zranges[-1][1])),
+            "ELG": ("ALL", (_zranges[0][0], _zranges[-1][1])),
+            "QSO": ("ALL", (_zranges[0][0], _zranges[-1][1])),
+            "LRGxELG": ("ALL", (0.8, 1.1)),
+            "LRGxQSO": ("ALL", (0.8, 1.3)),
+            "ELGxQSO": ("ALL", (0.8, 2.1)),
         }
 
         propose_templates = {
@@ -529,8 +538,6 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         translate_template_tracer = {'BGS': 'BGS_BRIGHT', 'ELG_LOPnotqso': 'ELG_LOPnotqso', 'ELG': 'ELG', 'LRG': 'LRG', 'QSO': 'QSO'}
 
         template_tracers = [translate_template_tracer[tt] for tt in simple_tracers]
-
-        _zrange = zrange or propose_zranges[simple_tracer]
 
         if len(simple_tracers) > 1:  # cross
             propose_fiducial["window_mesh2_spectrum_fm"].update(
@@ -548,7 +555,8 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
                     for _tracer in template_tracers
                 ),
                 amr_regions_zranges=tuple(list(itertools.product(propose_photoregions[_tracer], propose_regression_zranges[_tracer])) for _tracer in simple_tracers),
-                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zrange)),
+                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zranges)),
+                total_region_zrange=propose_total_region_zrange[simple_tracer],
                 unitary_amplitude=True,
                 n_realizations=10,
                 seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
@@ -569,7 +577,8 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
                     f"templates_path_{region}": templates_dir / f"{template_tracers[0]}_mapprops_healpix_nested_nside256_{region}.fits" for region in ["N", "S"]
                 },
                 amr_regions_zranges=list(itertools.product(propose_photoregions[simple_tracers[0]], propose_regression_zranges[simple_tracers[0]])),
-                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zrange)),
+                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zranges)),
+                total_region_zrange=propose_total_region_zrange[simple_tracer],
                 unitary_amplitude=True,
                 n_realizations=10,
                 seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
