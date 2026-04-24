@@ -548,7 +548,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
                     for _tracer in template_tracers
                 ),
                 amr_regions_zranges=tuple(list(itertools.product(propose_photoregions[_tracer], propose_regression_zranges[_tracer])) for _tracer in simple_tracers),
-                spectrum_regions_zranges=[("NGC", _zrange), ("SGC", _zrange)],
+                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zrange)),
                 unitary_amplitude=True,
                 n_realizations=10,
                 seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
@@ -569,7 +569,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
                     f"templates_path_{region}": templates_dir / f"{template_tracers[0]}_mapprops_healpix_nested_nside256_{region}.fits" for region in ["N", "S"]
                 },
                 amr_regions_zranges=list(itertools.product(propose_photoregions[simple_tracers[0]], propose_regression_zranges[simple_tracers[0]])),
-                spectrum_regions_zranges=[("NGC", _zrange), ("SGC", _zrange)],
+                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zrange)),
                 unitary_amplitude=True,
                 n_realizations=10,
                 seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],

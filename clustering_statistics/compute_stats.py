@@ -412,9 +412,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
                 if theory_fn is None:
                     # Auto-compute fiducial theory from spectrum and window
-                    products_fn = {spectrum_region: {} for spectrum_region in window_options["spectrum_regions"]}
+                    products_fn = {spectrum_region: {} for spectrum_region in window_options["spectrum_regions_zranges"]}
                     # Collect power spectrum and window, for each region if relevant
-                    for spectrum_region in window_options["spectrum_regions"]:
+                    for _region, _zrange in window_options["spectrum_regions_zranges"]:
                         for name in ["spectrum", "window"]:
                             kind_stat = (
                                 stat.replace("window_", "").replace("_fm", "") if name == "spectrum" else stat.replace("window_", f"{name}_").replace("_fm", "")
@@ -425,16 +425,14 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 kw = options[kind_stat] | {"auw": False, "cut": False}
                                 fn = get_stats_fn(
                                     kind=kind_stat,
-                                    catalog=fn_catalog_options[tracers[0]]
-                                    if tracers[1] == tracers[0]
-                                    else {tracer: fn_catalog_options[tracer] for tracer in tracers},
-                                    **kw | {"region": spectrum_region},
+                                    catalog=fn_catalog_options[tracers[0]] if tracers[1] == tracers[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                                    **kw | {"region": _region, "zrange": _zrange},
                                 )
-                            products_fn[spectrum_region][name] = fn
+                            products_fn[(_region, _zrange)][name] = fn
 
                     # Load spectra and windows from disk
-                    spectra = [types.read(products_fn[spectrum_region]["spectrum"]) for spectrum_region in window_options["spectrum_regions"]]
-                    windows = [types.read(products_fn[spectrum_region]["window"]) for spectrum_region in window_options["spectrum_regions"]]
+                    spectra = [types.read(products_fn[(_region, _zrange)]["spectrum"]) for _region, _zrange in window_options["spectrum_regions_zranges"]]
+                    windows = [types.read(products_fn[(_region, _zrange)]["window"]) for _region, _zrange in window_options["spectrum_regions_zranges"]]
                     # Combine measurements from multiple regions and fit for theory
                     theory = types.sum(
                         [
@@ -493,10 +491,12 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 if spectra_fn is None:
                     spectra_fn = []
                     spectrum_stat = stat.replace("window_", "").replace("_fm", "")
-                    for spectrum_region in window_options["spectrum_regions"]:
+                    for _region, _zrange in window_options["spectrum_regions_zranges"]:
                         fn_window_options = options[spectrum_stat] | fn_window_options
                         spectra_fn.append(
-                            get_stats_fn(kind=spectrum_stat, catalog=fn_catalog_options, **(options[spectrum_stat] | {"auw": False, "cut": False} | {"region": spectrum_region}))
+                            get_stats_fn(
+                                kind=spectrum_stat, catalog=fn_catalog_options, **(options[spectrum_stat] | {"auw": False, "cut": False} | {"region": _region, "zrange": _zrange})
+                            )
                         )
                 spectra = [types.read(spectrum_fn) for spectrum_fn in spectra_fn]
 
@@ -504,7 +504,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectra=spectra, theory=theory, **window_options)
                 # This is a dict of dict of lists of windows : {modeled_effect: {spectrum_region: [window, ...], ...}, ...}
                 for effect in window:  # geo, RIC or RIC+AMR
-                    for spectrum_region in window_options["spectrum_regions"]:  # window[effect]:  # eg NGC, SGC
+                    for _region, _zrange in window_options["spectrum_regions_zranges"]:  # window[effect]:  # eg NGC, SGC and a zrange
                         for i, seed in enumerate(window_options['seeds']):
                             # FIXME this overrides the extra option pre-defined in get_stats_fn through e.g. functools.partial. Not sure this is an actual issue.
                             if window_options['ellsout'] is None:
@@ -513,8 +513,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 listell = "".join(map(str, window_options['ellsout']))
                                 extra = f'{effect}_{listell}_seed={seed}'
 
-                            options = fn_window_options | {"extra": extra, "region": spectrum_region}
-                            tools.write_stats(get_stats_fn(kind=stat, catalog=fn_catalog_options, **options), window[effect][spectrum_region][i])
+                            options = fn_window_options | {"extra": extra, "region": _region, "zrange": _zrange}
+                            tools.write_stats(get_stats_fn(kind=stat, catalog=fn_catalog_options, **options), window[effect][(_region, _zrange)][i])
 
                 # synchronize here to avoid postprocess trying to load windows that haven't been written yet
                 jax.experimental.multihost_utils.sync_global_devices("window_fm_IO")  # wait for the writer
