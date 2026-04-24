@@ -517,6 +517,11 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
             "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
             "ELG": [(0.8, 1.1), (1.1, 1.6)],
             "QSO": [(0.8, 1.3), (1.3, 2.1), (2.1, 3.5)],
+            "LRGxELG": {"LRG": [(0.8, 0.9), (0.9, 1.0), (1.0, 1.1)], "ELG": [(0.8, 1.1)]},
+            "LRGxQSO": {"LRG": [(0.8, 0.9), (0.9, 1.0), (1.0, 1.1)], "QSO": [(0.8, 1.3)]},
+            "ELGxQSO": {"ELG": [(0.8, 1.1), (1.1, 1.6)], "QSO": [(0.8, 1.3), (1.3, 2.1)]},
+        }
+
         propose_total_region_zrange = {
             "BGS": ("ALL", (_zranges[0][0], _zranges[-1][1])),
             "LRG": ("ALL", (_zranges[0][0], _zranges[-1][1])),
@@ -554,7 +559,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
                     {f"templates_path_{region}": templates_dir / f"{_tracer}_mapprops_healpix_nested_nside256_{region}.fits" for region in ["N", "S"]}
                     for _tracer in template_tracers
                 ),
-                amr_regions_zranges=tuple(list(itertools.product(propose_photoregions[_tracer], propose_regression_zranges[_tracer])) for _tracer in simple_tracers),
+                amr_regions_zranges=tuple(list(itertools.product(propose_photoregions[_tracer], propose_regression_zranges[simple_tracer][_tracer])) for _tracer in simple_tracers),
                 spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zranges)),
                 total_region_zrange=propose_total_region_zrange[simple_tracer],
                 unitary_amplitude=True,
