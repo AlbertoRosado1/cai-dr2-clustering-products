@@ -759,6 +759,11 @@ def compute_window_mesh2_spectrum_fm(
     -------
     dict[str, dict[str, list[lsstypes.WindowMatrix]]]
         Dictionary, per effect included (geometry, RIC, RIC+AMR) and per region, of lists of window matrices (one per realization).
+
+    Notes
+    -----
+    * Particles loaded by ``get_data_randoms`` but not present in any of ``spectrum_regions_zranges`` are used for observational effects (RIC, AMR, data-to-randoms ratio renormalization...) but not taken into account in power spectrum computations. In general, ``get_data_randoms`` should load the full footprint and range of redshifts available, *including outside the overlap for cross-correlations*.
+    * Power spectrum regions/redshift ranges should not overlap. Overlapping regions require separate calls to this function.
     """
     assert len(seeds) == n_realizations if seeds is not None else True, "If seeds are provided, their number must match n_realizations."
     # Notes to self:
@@ -767,7 +772,7 @@ def compute_window_mesh2_spectrum_fm(
     import mpytools as mpy
     from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
     from desiwinds.window import get_window_spikes
-    from jaxpower import BinMesh2SpectrumPoles, FKPField, create_sharding_mesh
+    from jaxpower import BinMesh2SpectrumPoles, FKPField, create_sharding_mesh, ParticleField
 
     from .tools import add_photometric_template_values, select_region
 
@@ -778,6 +783,25 @@ def compute_window_mesh2_spectrum_fm(
         spectrum_region, zrange = spectrum_region_zrange
         # Mimic read_clustering_catalog: <= on lower, < on upper
         return {name: cat[select_region(ra=cat["RA"], dec=cat["DEC"], region=spectrum_region) & (cat["Z"] >= zrange[0]) & (cat["Z"] < zrange[1])] for name, cat in catalogs.items()}
+
+    def _select_region_zrange_complement(catalogs: dict[str, mpy.Catalog]) -> dict[str, mpy.Catalog]:
+        return {
+            name: cat[
+                jnp.invert(
+                    jnp.any(
+                        jnp.stack(
+                            [
+                                (select_region(ra=cat["RA"], dec=cat["DEC"], region=spectrum_region) & (cat["Z"] >= zrange[0]) & (cat["Z"] < zrange[1]))
+                                for (spectrum_region, zrange) in spectrum_regions_zranges
+                            ],
+                            axis=0,
+                        ),
+                        axis=0,
+                    )
+                )
+            ]
+            for name, cat in catalogs.items()
+        }
 
     def _split_data_randoms(catalogs: dict[str, mpy.Catalog]) -> dict[str, mpy.Catalog]:
         """Split the randoms into "data" and "randoms" based on the provided ratio. Overwrite original "data"."""
@@ -840,7 +864,14 @@ def compute_window_mesh2_spectrum_fm(
 
         get_data_randoms = [wrap(_get_data_randoms) for _get_data_randoms in get_data_randoms]
 
-        if len(spectrum_regions_zranges) > 0:  # Split catalogs into pk regions, if specified
+        if len(spectrum_regions_zranges) > 0:
+            # Also get particles that might not be in the region selection
+            def wrap(f):
+                return lambda: _select_region_zrange_complement(f())
+
+            get_extra_data_randoms = [wrap(_get_data_randoms) for _get_data_randoms in get_data_randoms]
+
+            # Split catalogs into pk regions, if specified
 
             def wrap(f, spectrum_region):
                 return lambda: _select_region_zrange(f(), spectrum_region)
@@ -848,6 +879,8 @@ def compute_window_mesh2_spectrum_fm(
             get_data_randoms = [
                 wrap(_get_data_randoms, spectrum_region_zrange) for spectrum_region_zrange in spectrum_regions_zranges for _get_data_randoms in get_data_randoms
             ]  # [func1_region1, func2_region1, func3_region1 ... func1_region2, func2_region2, func3_region2 ...]
+        else:
+            get_extra_data_randoms = []
 
         all_particles = prepare_jaxpower_particles(
             *get_data_randoms,
@@ -856,9 +889,23 @@ def compute_window_mesh2_spectrum_fm(
             add_data=["WEIGHT_FKP", "Z", *columns_optimal_weights] + (all_regression_maps if amr else []),
         )
 
+        if get_extra_data_randoms:
+            extra_particles = prepare_jaxpower_particles(
+                *get_extra_data_randoms,
+                mattrs=mattrs,
+                add_randoms=["IDS", "WEIGHT_FKP", "Z", *columns_optimal_weights] + (all_regression_maps if amr else []),
+                add_data=["WEIGHT_FKP", "Z", *columns_optimal_weights] + (all_regression_maps if amr else []),
+                check=False,  # these particles will be outside mattrs but it doesn't matter
+            )
+        else:
+            extra_particles = []
+
         all_randoms = [particles["randoms"] for particles in all_particles]
         all_data = [particles["data"] for particles in all_particles]
-        del all_particles
+        # Extra data and randoms are needed for observational effects but shouldn't be in spectrum computations
+        extra_data = [particles["data"] for particles in extra_particles]
+        extra_randoms = [particles["randoms"] for particles in extra_particles]
+        del all_particles, extra_particles
 
         # Make into len(spectrum_regions) catalogs if split into spectrum regions, otherwise one catalog
         nregion = len(spectrum_regions_zranges) if len(spectrum_regions_zranges) > 0 else 1
@@ -869,8 +916,8 @@ def compute_window_mesh2_spectrum_fm(
         # [[tracer1_region1, tracer2_region1, ...], [tracer1_region2, tracer2_region2, ...], ...]
 
         for iregion in range(nregion):
-            # Randoms
             for itracer in range(len(all_randoms[iregion])):
+                # Randoms
                 extra = all_randoms[iregion][itracer].extra
                 if amr:
                     extra.update({"template_values": jnp.stack([extra.pop(map_name) for map_name in regression_maps[itracer]], axis=-1)})
@@ -887,6 +934,35 @@ def compute_window_mesh2_spectrum_fm(
                         del extra[map]  # remove maps not used for this tracer to save memory
                 all_data[iregion][itracer] = all_data[iregion][itracer].clone(extra=extra, weights=_safe_divide(all_data[iregion][itracer].weights, extra["WEIGHT_FKP"]))
         del extra
+
+        # Add extra data and randoms with WEIGHT_FKP = 0 to avoid them contributing to the window computation, but still have actual weights in RIC/AMR
+        for itracer in range(ntracers):
+            # Randoms
+            extra = extra_randoms[itracer].extra
+            if amr:
+                extra.update({"template_values": jnp.stack([extra.pop(map_name) for map_name in regression_maps[itracer]], axis=-1)})
+                for map in set(all_regression_maps) - set(regression_maps[itracer]):
+                    del extra[map]  # remove maps not used for this tracer to save memory
+            # Isolate weights and set WEIGHT_FKP to 0
+            extra_randoms[itracer] = extra_randoms[itracer].clone(
+                extra=extra | {"WEIGHT_FKP": jnp.zeros_like(extra["WEIGHT_FKP"])}, weights=_safe_divide(extra_randoms[itracer].weights, extra["WEIGHT_FKP"])
+            )
+            # Concatenate to first randoms catalog for this tracer
+            all_randoms[0][itracer] = ParticleField.concatenate([all_randoms[0][itracer], extra_randoms[itracer]])
+
+            # Data
+            extra = extra_data[itracer].extra
+            if amr:
+                extra.update({"template_values": jnp.stack([extra.pop(map_name) for map_name in regression_maps[itracer]], axis=-1)})
+                for map in set(all_regression_maps) - set(regression_maps[itracer]):
+                    del extra[map]  # remove maps not used for this tracer to save memory
+            # Isolate weights and set WEIGHT_FKP to 0
+            extra_data[itracer] = extra_data[itracer].clone(
+                extra=extra | {"WEIGHT_FKP": jnp.zeros_like(extra["WEIGHT_FKP"])}, weights=_safe_divide(extra_data[itracer].weights, extra["WEIGHT_FKP"])
+            )
+            # Concatenate to first data catalog for this tracer
+            all_data[0][itracer] = ParticleField.concatenate([all_data[0][itracer], extra_data[itracer]])
+        del extra, extra_randoms, extra_data
 
         if jax.process_index() == 0: logger.info("Catalogs ready, starting preparation...")
 
