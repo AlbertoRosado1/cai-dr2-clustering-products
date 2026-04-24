@@ -26,7 +26,7 @@ logger = logging.getLogger('spectrum2')
 
 
 @default_mpicomm
-def prepare_jaxpower_particles(*get_data_randoms, mattrs=None, add_data=tuple(), add_randoms=tuple(), **kwargs):
+def prepare_jaxpower_particles(*get_data_randoms, mattrs=None, add_data=tuple(), add_randoms=tuple(), check=True, **kwargs):
     """
     Prepare :class:`jaxpower.ParticleField` objects from data and randoms catalogs.
 
@@ -58,7 +58,7 @@ def prepare_jaxpower_particles(*get_data_randoms, mattrs=None, add_data=tuple(),
 
     # Define the mesh attributes; pass in positions only
     # check=True validates that all positions are within mesh bounds
-    mattrs = get_mesh_attrs(*[catalog['POSITION'] for catalogs in all_catalogs for catalog in catalogs.values()], check=True, **(mattrs or {}))
+    mattrs = get_mesh_attrs(*[catalog["POSITION"] for catalogs in all_catalogs for catalog in catalogs.values()], check=check, **(mattrs or {}))
     if jax.process_index() == 0:
         logger.info(f'Using mesh {mattrs}.')
 
