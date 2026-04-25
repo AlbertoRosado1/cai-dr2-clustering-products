@@ -612,6 +612,7 @@ def list_stats(stats, get_stats_fn=tools.get_stats_fn, **kwargs):
         stats = [stats]
 
     # Fill fiducial defaults
+    extra = kwargs.pop('extra', None)
     kwargs = fill_fiducial_options(kwargs)
     catalog_options = kwargs['catalog']
     tracers = list(catalog_options.keys())
@@ -627,7 +628,7 @@ def list_stats(stats, get_stats_fn=tools.get_stats_fn, **kwargs):
             # Generate option combinations (raw, cut, auw)
             for kw in _expand_cut_auw_options(stat, kwargs[stat]).values():
                 kw = dict(catalog=_catalog_options, **kw)
-                fn = get_stats_fn(kind=stat, **kw)
+                fn = get_stats_fn(kind=stat, **(kw | {"extra": extra}))
                 toret[stat].append((fn, kw))
     return toret
 
@@ -653,6 +654,8 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
         postprocess = [postprocess]
 
     imocks = kwargs.pop('imocks', None)
+    extra = kwargs.pop('extra', None)
+    
     # Fill fiducial defaults
     options = fill_fiducial_options(kwargs, analysis=analysis)
     catalog_options = options['catalog']
@@ -710,11 +713,11 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                 for stat in stats:
                     if 'window' in stat or 'covariance' in stat:
                         # Window and covariance don't need to loop over mocks
-                        _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **options)
+                        _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(options| {"extra": extra}))
                     else:
                         # Measurements need to loop over mocks
                         for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options)):
-                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **_options)
+                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(_options| {"extra": extra}))
 
         if 'combine_window_mesh2_spectrum' in postprocess:
             # Combine base window calculation with forward-modeled windows
@@ -746,7 +749,8 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                     downscale = np.kron(np.eye(len(window_geometry.theory.ells)), block)
                     # use it to "interpolate" the forward-modeled window to the geometry of the base window
                     window_fm = window_fm.clone(value=window_fm.value().dot(downscale))
-                fn = get_stats_fn(kind=stat, **kw)
+                
+                fn = get_stats_fn(kind=stat, **(kw | {"extra": effect}))
                 # Adding all effects
                 window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
                 tools.write_stats(fn, window)
