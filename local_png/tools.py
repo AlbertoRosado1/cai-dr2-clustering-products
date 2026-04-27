@@ -2,45 +2,77 @@ import numpy as np
 import matplotlib.pyplot as plt
 import logging
 
+
 logger = logging.getLogger('PNG fitting tools')
 
 
-def read_data(stats_dir='.', tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', add_ic=False, **kwargs):
+def read_data(data_dir='.', mocks_dir=None, 
+              tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', 
+              add_ic=False, aladr1=False, weight_type_mocks=None, **kwargs):
     """ 
     Read the data from the clustering statistics output. This is a wrapper of clustering_statistics.tools.get_stats_fn.
     """
     import lsstypes
-    from clustering_statistics import tools
-    import functools 
-    
-    get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region)
+    from clustering_statistics.tools import get_stats_fn
 
     # Read the data:
-    pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum'))
-    if add_ic:
-        print('Reading the window with integral constraint contribution...')
-        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', extra='with_ic'))
+    pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
+
+    # Read the window matrix:
+    if add_ic and aladr1:
+        logger.info('Reading the window with integral constraint contribution (DR1 style) ...')
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra='with_ic'))
+    elif add_ic and not aladr1:
+        logger.info('Reading the window with integral constraint contribution (DR2 style)...') 
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra='RIC+AIC'))
     else:
-        print('Reading the window without integral constraint contribution...')
-        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum'))
-    cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum'))
+        logger.info('Reading the window without integral constraint contribution...')
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
 
-    return pk, window, cov
+    # Read the analytical covariance matrix:
+    try: 
+        cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
+    except:
+        logger.info('Do not find the analytical covariance matrix. Please provide mocks_dir to estimate the covariance matrix from mocks.')
+        cov = None
+
+    # Read the mocks:
+    mocks = None
+    if mocks_dir is not None: 
+        weight_type_mocks = weight_type_mocks or weight_type
+
+        nmocks = 1000 if weight_type_mocks == 'default-fkp-oqe' else 100
+        fns_mock = [get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=mocks_dir, project='holi-v3-altmtl', tracer=tracer, region=region, zrange=zrange, 
+                                 weight=weight_type_mocks, imock=imock) for imock in range(nmocks)]    
+        # These mocks are not available yet with altmtl due to sysnet error -> should be ready soon.  
+        if nmocks == 1000:
+            for i, bad_mocks in enumerate([363, 565]):
+                _ = fns_mock.pop(bad_mocks - i)  # don't forget pop remove the object from the list, so the next bad_mocks index is shifted by -1.
+
+        mocks = [lsstypes.read(fn) for fn in fns_mock]
+
+    return pk, window, cov, mocks
 
 
-def rebin_data(pk, window, cov, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=2e-2, nrebin=2, use_ell2=True, **kwargs):
+def rebin_data(pk, window, cov, mocks, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=[1e-2, 2e-2], nrebin=[2,2], use_ell2=True, rebin_ell2=True, **kwargs):
     """ 
     Rebin the data with k > kpivot by a factor nrebin. The quadrupole is rebinned again by a factor nrebin for the full range.
     Then, select data in the k range [kmin, kmax]. If use_ell2 is False, we only keep the monopole.
     Finally, we match the size of the window and covariance to the size of the power spectrum.
     Return the rebinned power spectrum, window and covariance.
     """
+    if not isinstance(kpivot, (list, tuple)): kpivot = [kpivot]
+    if not isinstance(nrebin, (list, tuple)): nrebin = [nrebin]
+    assert len(kpivot) == len(nrebin), "kpivot and nrebin should have the same length."
+    
     # Let's rebin the power spectrum : 
-    # print(f'Original k shape (ell=0): {pk.get(0).k.shape[0]}')
-    pk = pk.map(lambda pole: pole.at(k=(kpivot, 1.)).select(k=slice(0, None, nrebin)))
-    pk = pk.at(2).select(k=slice(0, None, nrebin))  # Rebin the quadrupole again but for the full range.
-    # kpivot, nrebin = 4e-2, 2
-    # pk = pk.map(lambda pole: pole.at(k=(kpivot, 1.)).select(k=slice(0, None, nrebin)))
+    for pivot, rebin in zip(kpivot, nrebin):
+        pk = pk.map(lambda pole: pole.at(k=(pivot, 1.)).select(k=slice(0, None, rebin)))
+        
+    if rebin_ell2:
+        # Rebin the quadrupole again but for the full range.
+        pk = pk.at(2).at(k=(0, 1e-2)).select(k=slice(0, None, 2))  
+        pk = pk.at(2).select(k=slice(0, None, 2))  
 
     # Let's select the k range and ells:
     kmin_ell2, kmax_ell2 = kwargs.get('kmin_ell2', kmin), kwargs.get('kmax_ell2', kmax)
@@ -50,15 +82,19 @@ def rebin_data(pk, window, cov, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=2e-2,
  
     # Match the size of wmatrix and covariance: 
     if window is not None: window = window.at.observable.match(pk)
+    
     if cov is not None: 
         tracers = tuple(tracer.split('x')) 
         if len(tracers) == 1: tracers *= 2
         tracers = (tracers[0][:3], tracers[1][:3])  # LRG_zcmb -> LRG, ELGnotqso -> ELG, ... 
         cov = cov.at.observable.at(observables='spectrum2', tracers=tracers).match(pk)
+
+    if mocks is not None:
+        mocks = [mock.match(pk) for mock in mocks]
     
     logger.debug(f'After rebinning and k range selection: {pk.get(0).k.shape[0]} and {pk.get(2).k.shape[0] if use_ell2 else "Not used"} data points.')
 
-    return pk, window, cov
+    return pk, window, cov, mocks
 
 
 def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bias=True, nickname=None, **kwargs):
@@ -214,7 +250,7 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
     return observables, likelihood
 
 
-def run_profiler(likelihood, fn_output=None):
+def run_profiler(likelihood, fn_output=None, sigfigs=2):
     """ 
     Run the iminuit profiler on the likelihood, the results are saved in a text file if output_name is provided. fn_output should be a .txt file. 
     """
@@ -225,8 +261,12 @@ def run_profiler(likelihood, fn_output=None):
     logger.info(f'\n{profiler.profiles.to_stats(tablefmt="pretty")}')
 
     if fn_output is not None:
-        _ = profiler.profiles.to_stats(fn=fn_output)
-        np.savetxt(fn_output.replace('.txt', '_list.txt'), profiler.profiles.to_stats(tablefmt='list')[0], fmt='%s')
+        to_save = profiler.profiles.to_stats(tablefmt='list', sigfigs=sigfigs, params=profiler.profiles.choice().bestfit.params())[0]
+        np.save(fn_output, to_save)
+
+        # for latex table:
+        #_ = profiler.profiles.to_stats(fn=fn_output)
+        #np.savetxt(fn_output.replace('.txt', '_list.txt'), profiler.profiles.to_stats(tablefmt='list')[0], fmt='%s')
 
     return profiler
 
@@ -252,7 +292,7 @@ def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False,
     return sampler
 
 
-def plot_observables(observables, ylims=None):
+def plot_observables(observables, ylims=None, show=True, fn_output=None):
     """ 
     Plot the observables (power spectrum multipoles) with their theory predictions and residuals.
 
@@ -307,7 +347,11 @@ def plot_observables(observables, ylims=None):
     axs[1, 1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
 
     plt.tight_layout()
-    plt.show()
+    if fn_output is not None: plt.savefig(fn_output)
+    if show:
+        plt.show()
+    else:
+        plt.close()
 
 
 def get_getdist_plotter(fig_width_inch=5, fontsize=14, legend_fontsize=12, axes_labelsize=12, axes_fontsize=14, line_lables=True):
@@ -504,3 +548,71 @@ def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale
     total_likelihood()
 
     return total_likelihood
+
+
+def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, analytical_covariance=True, 
+                           force_profiling=False, base_dir=None, fiducial=None, return_profiler=False):
+    """Run the profiler on a single mock realisation and save the result to disk.
+
+    Parameters
+    ----------
+    mocks : list
+        List of mock power spectrum observables.
+    window : lsstypes WindowMatrix
+        Window matrix for the tracer.
+    cov : lsstypes CovarianceMatrix
+        Analytical covariance matrix for the tracer.
+    tracer : str
+        Tracer name (e.g. 'LRGxLRG').
+    imock : int, optional
+        Index of the mock to fit. Default is 0.
+    kmin : float, optional
+        Minimum k value for the fit. Default is 1e-3.
+    analytical_covariance : bool, optional
+        If True, use the analytical covariance. If False, use mock covariance. Default is True.
+    force_profiling : bool, optional
+        If True, rerun even if output file already exists. Default is False.
+    base_dir : str, optional
+        Base directory (stats_dir + project). Profile outputs are written under the corresponding profiles directory.
+    """
+    import os
+
+    kwargs = {'LRG_LRGxQSO_ell0.b1': 2.15, 'LRG_LRGxELG_ell0.b1': 2.15, 'ELG_ELGxQSO_ell0.b1': 1.2, 'scale_covariance': 1}
+
+    fn_profile = base_dir.replace('summary_statistics', 'profiles') + f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}.npy"
+    if (os.path.isfile(fn_profile) and force_profiling) or (not os.path.isfile(fn_profile)):
+        os.makedirs(os.path.dirname(fn_profile), exist_ok=True)
+        
+        tracers = tracer.split('-')
+
+        obs, lik, zeffs = {}, {}, {}
+        pks = {}
+        for tt in tracers:
+            pk = mocks[tt][imock].select(k=(kmin, 1))
+            pks[tt] = pk
+            
+            window = windows[tt].at.observable.match(pk)
+
+            zeffs[tt] = {ell: window.observable.get(ell).attrs['zeff'] for ell in pk.ells}  # Keep only the zeff for the used multipoles.
+
+            if analytical_covariance:
+                covariance = covs[tt].at.observable.at(observables='spectrum2', tracers=tuple(tt.split("x"))).match(pk)
+            else:
+                covariance = [mm.match(pk) for mm in mocks[tt]]
+
+            obs[tt], lik[tt] = get_observable_and_likelihood(pk, window, covariance, tt, zeffs, engine='camb', fix_fnl=False, nickname=tt, **kwargs)
+
+        if len(tracers) > 1:
+            lik = build_total_likelihood(tracers, pks, obs, covs if analytical_covariance else mocks, zeffs, fiducial)
+        else:
+            obs, lik = obs[tracers[0]], lik[tracers[0]]
+
+        profiler = run_profiler(lik, fn_output=fn_profile, sigfigs=5)
+
+        if (kmin == 1e-3) and analytical_covariance and (len(tracers) == 1):
+            ylims = [(2e3, 4e4), (2e3, 4e4)] if tracer in ['ELGxELG', 'ELGxQSO'] else None
+            fn_obs = base_dir.replace('summary_statistics', 'profiles') + f"mock{imock}/bestfit_{tracer}_analytical_cov.png"
+            plot_observables({tracer: obs}, ylims=ylims, fn_output=fn_obs, show=False)
+
+        if return_profiler:
+            return profiler
