@@ -207,8 +207,11 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                 sattrs = {'theta': (0., 0.05)}
                 bitwise = angular = None
                 if with_bitweights:
-                    # Reconstruct weights for fiber collision corrections
-                    all_data = [convert_particles(fkp.data, weights=list(fkp.data.extra['BITWEIGHT']) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
+                    # Weights for fiber collision corrections
+                    # 1) systematic weights --- without completeness
+                    # 2) bitweights
+                    # 3) weights to subtract off (already in the mesh-based P(k) estimation)
+                    all_data = [convert_particles(fkp.data, weights=[fkp.data.extra['INDWEIGHT_NO_COMP']] + list(jnp.unpack(fkp.data.extra['BITWEIGHT'], axis=-1)) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
                     # Extract bitwise weight structure (sets nrealizations based on BITWEIGHT size, fine to use the first)
                     bitwise = dict(weights=all_data[0].get('bitwise_weight'))
                     if jax.process_index() == 0:

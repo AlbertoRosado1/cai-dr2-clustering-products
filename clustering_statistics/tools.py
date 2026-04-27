@@ -1145,10 +1145,20 @@ def _format_bitweights(bitweights):
     if bitweights is None:
         return []
     if isinstance(bitweights, (tuple, list)):
-        return list(bitweights)
-    if bitweights.ndim == 2:
-        return list(bitweights.T)
-    return [bitweights]
+        bitweights = list(bitweights)
+    elif bitweights.ndim == 2:
+        bitweights = list(bitweights.T)
+    else:
+        bitweights = [bitweights]
+
+    def _native_endian(array):
+        # move from big endian (>) from FITS to native endian (=)
+        array = np.asarray(array)
+        if array.dtype.byteorder not in ("=", "|"):
+            array = array.byteswap().view(array.dtype.newbyteorder("="))
+        return array
+
+    return [_native_endian(array) for array in bitweights]
 
 
 @default_mpicomm

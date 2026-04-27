@@ -81,7 +81,9 @@ def prepare_jaxpower_particles(*get_data_randoms, mattrs=None, add_data=tuple(),
             if name == 'data':
                 # Extract and process bitwise weights (fiber weights, completeness, etc.)
                 bitweights = None
-                if 'BITWEIGHT' in catalog and 'BITWEIGHT' in add[name]:
+                with_bitweights = 'BITWEIGHT' in catalog and 'BITWEIGHT' in add[name]
+                if with_bitweights:
+                    # WARNING: indweights is assumed not to contain completeness correction (this is in BITWEIGHT)
                     # Parse bitwise weight array into individual weight components
                     bitweights = _format_bitweights(catalog['BITWEIGHT'])
                     from cucount.jax import BitwiseWeight
@@ -89,7 +91,8 @@ def prepare_jaxpower_particles(*get_data_randoms, mattrs=None, add_data=tuple(),
                     # p_correction_nbits=False: no impact on IIP computation
                     iip = BitwiseWeight(weights=bitweights, p_correction_nbits=False)(bitweights)
                     # Store original bitweights in extra
-                    extra['BITWEIGHT'] = [indweights] + bitweights
+                    extra['BITWEIGHT'] = jnp.column_stack(bitweights)
+                    extra['INDWEIGHT_NO_COMP'] = indweights
                     # Multiply individual weights by IIP to correct fiber assignment at large scales
                     indweights = indweights * iip
                 # Add any additional columns (e.g., Z, WEIGHT_FKP) to extra dictionary
@@ -105,7 +108,7 @@ def prepare_jaxpower_particles(*get_data_randoms, mattrs=None, add_data=tuple(),
             # Create ParticleField object: positions + weights + mesh attributes
             # exchange=True: distribute particles across MPI processes by spatial location
             # This ensures load balancing across processes
-            particle = ParticleField(catalog["POSITION"], indweights, attrs=mattrs, exchange=True, backend=backend, extra=extra, **kwargs)
+            particle = ParticleField(catalog['POSITION'], indweights, attrs=mattrs, exchange=True, backend=backend, extra=extra, **kwargs)
             particles[name] = particle
         all_particles.append(particles)
     if jax.process_index() == 0:
@@ -268,8 +271,11 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                 sattrs = {'theta': (0., 0.1)}
                 bitwise = angular = None
                 if with_bitweights:
-                    # Reconstruct weights for fiber collision corrections
-                    all_data = [convert_particles(fkp.data, weights=list(fkp.data.extra['BITWEIGHT']) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
+                    # Weights for fiber collision corrections
+                    # 1) systematic weights --- without completeness
+                    # 2) bitweights
+                    # 3) weights to subtract off (already in the mesh-based P(k) estimation)
+                    all_data = [convert_particles(fkp.data, weights=[fkp.data.extra['INDWEIGHT_NO_COMP']] + list(jnp.unstack(fkp.data.extra['BITWEIGHT'], axis=-1)) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
                     # Extract bitwise weight structure (sets nrealizations based on BITWEIGHT size, fine to use the first)
                     bitwise = dict(weights=all_data[0].get('bitwise_weight'))
                     if jax.process_index() == 0:

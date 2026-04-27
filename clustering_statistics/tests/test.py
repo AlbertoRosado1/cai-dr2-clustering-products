@@ -42,7 +42,7 @@ def test_stats_fn(stats=['mesh2_spectrum']):
             assert fn2 == fn1, f'{fn2} != {fn1}'
 
 
-def test_auw2(stats=['mesh2_spectrum']):
+def test_auw2(stats=['mesh2_spectrum', 'particle2_correlation']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in ['LRG']:
         zranges = tools.propose_fiducial('zranges', tracer)
@@ -85,7 +85,7 @@ def test_blinding(stats=['mesh2_spectrum', 'mesh3_spectrum']):
                 assert not np.allclose(protected.value(), blinded.value())
 
 
-def test_bitwise(stats=['mesh2_spectrum']):
+def test_bitwise(stats=['mesh2_spectrum', 'particle2_correlation']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in ['LRG']:
         zranges = tools.propose_fiducial('zranges', tracer)
@@ -93,6 +93,7 @@ def test_bitwise(stats=['mesh2_spectrum']):
             #catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451)
             catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-bitwise-FKP', nran=1)
             compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'cut': True, 'auw': True, 'mattrs': {'meshsize': 512}}, particle2_correlation={'auw': True})
+            #compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'mattrs': {'meshsize': 512}})
 
 
 def test_spectrum3(stats=['mesh3_spectrum']):
@@ -358,11 +359,8 @@ def test_window_fm(tracer='QSO'):
 
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
     for region in ['NGC', 'SGC']:
-        compute_stats_from_options(
-         ['mesh2_spectrum', 'window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
-<<<<<<< HEAD
+        compute_stats_from_options(['mesh2_spectrum', 'window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
-    compute_stats_from_options(['window_mesh2_spectrum_fm'], get_stats_fn=get_stats_fn, **options, analysis=analysis)
     for region in ['NGC', 'SGC']:
         postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
@@ -402,11 +400,6 @@ def test_interp_window():
     #method = 'spline'
     method = 'gaussian_process'
     window = interpolate_window_realizations(window_geometry, window_realizations=window_realizations, method=method)
-=======
-
-    compute_stats_from_options(['window_mesh2_spectrum_fm'], get_stats_fn=get_stats_fn, **options, analysis=analysis)
-    for region in ['NGC', 'SGC']:
-        postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
 
 def test_interp_window():
@@ -502,7 +495,7 @@ if __name__ == '__main__':
     setup_logging()
 
     jax.distributed.initialize()
-    test_window_fm('LRG')
+    #test_window_fm('LRG')
 
     # test_auw3()
     # test_window_fm('LRG')
@@ -518,8 +511,8 @@ if __name__ == '__main__':
     # test_rotation()
     # test_window3()
     # test_stats_fn()
-    # test_auw(stats=['mesh2_spectrum'])
-    # test_bitwise(stats=['mesh2_spectrum'])
+    # test_auw2()
+    test_bitwise()
     # test_expand_randoms_stats()
     # test_optimal_weights()
     # test_cross()
