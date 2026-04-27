@@ -3,9 +3,7 @@ Script to create and spawn desipipe tasks to compute clustering measurements on 
 To create and spawn the tasks on NERSC, use the following commands:
 ```bash
 salloc -N 1 -C "gpu&hbm80g" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
-export MPICH_MPIIO_DVS_STRIPE_WIDTH=1
-source /global/common/software/desi/users/adematti/cosmodesi_environment.sh new
-export PYTHONPATH=$HOME/cai-dr2-clustering-products/:$PYTHONPATH
+source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 python desipipe_glam-uchuu_mocks.py         # create the list of tasks
 desipipe tasks  -q glam-uchuu_mocks         # check the list of tasks
 desipipe spawn  -q glam-uchuu_mocks --spawn # spawn the jobs
@@ -183,7 +181,7 @@ if __name__ == '__main__':
         run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
         if True:
             if any('window' in stat for stat in stats):
-                _imocks = [201]
+                _imocks = [150]
                 nbatches = 1
                 tasks = []
                 for ibatch in range(nbatches):
@@ -193,7 +191,7 @@ if __name__ == '__main__':
                     # Add dependence on other tasks
                     get_run_stats()(imocks=_imocks, ibatch=nbatches, tasks=tasks, **run_stats_kws)
             elif any('covariance' in stat for stat in stats):
-                get_run_stats()(imocks=[201], **run_stats_kws)
+                get_run_stats()(imocks=[150], **run_stats_kws)
             elif stats:
                 batch_imocks = np.array_split(imocks, max(len(imocks) // max_mocks_per_batch, 1)) if len(imocks) else []
                 for _imocks in batch_imocks:

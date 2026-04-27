@@ -61,7 +61,7 @@ def compute_particle3_angular_upweights(*get_data):
             all_parent_data.append(parent_data)
 
         # Define angular separation bins (in degrees)
-        theta = 10**np.arange(-5, np.log10(180.) + 0.1, 0.1)
+        theta = 10**np.arange(-4, np.log10(180.), 0.2)
         battrs = BinAttrs(theta=theta)
         sattrs = SelectionAttrs(theta=(0., 0.05))
 
@@ -78,10 +78,9 @@ def compute_particle3_angular_upweights(*get_data):
         kw = dict(battrs12=battrs, battrs13=battrs, battrs23=battrs)
 
         def count3close_resol(*all_particles, wattrs=None):
-            weight = 0.
             theta_limits = [(0., 0.3), (0.3, 1.), (1., 5.), (5., 180.)]
-            # 196
-            nsides = [None, 1024, 256, 64]  # 55, 75, 50
+            nsides = [None, 512, 128, 32]  # 55, 75, 50
+            #nsides = [None, 1024, 256, 64]
             #theta_limits = [(0., 0.5), (0.5, 1.), (1., 5.), (5., 180.)]
             #nsides = [None, 512, 256, 64]  # 55, 75, 50 
             #theta_limits, nsides = theta_limits[sl], nsides[sl]
@@ -104,24 +103,28 @@ def compute_particle3_angular_upweights(*get_data):
                 pix_positions = np.column_stack(hp.pix2vec(nside, np.flatnonzero(mask), nest=False))
                 return Particles(pix_positions, pix_weights, exchange=False)
 
-            result = 0.
+            all_particles = list(all_particles) + [all_particles[-1]] * (3 - len(all_particles))
+            results = []
             for theta_limit, nside in zip(theta_limits, nsides):
-                #t0 = time.time()
-                sattrs13 = SelectionAttrs(theta=theta_limit)
-                all_particles = list(all_particles) + [all_particles[-1]] * (3 - len(all_particles))
+                sattrs_limit = SelectionAttrs(theta=theta_limit)
+                # 1) close-pair (1, 2)
                 all_particles_resol = list(all_particles)
                 if nside is not None:
-                    all_particles_resol[-1] = digitize(nside, all_particles_resol[-1])
-                # 1) 2 close-pair with 1
-                result += count3close(*all_particles_resol, sattrs12=sattrs, sattrs13=sattrs13, **kw)['weight'].value()
-                # 2) 3 close-pair with 1, excluding 1<->2 close pairs
-                all_particles_resol = list(all_particles[:1] + all_particles[:0:-1])
+                    all_particles_resol[2] = digitize(nside, all_particles_resol[2])
+                result12 = count3close(*all_particles_resol, close_pair=(1, 2), sattrs12=sattrs, sattrs13=sattrs_limit, **kw)['weight']
+                # 2) close-pair (1, 3), excluding (1, 2) close pairs
+                all_particles_resol = list(all_particles)
                 if nside is not None:
-                    all_particles_resol[-1] = digitize(nside, all_particles_resol[-1])
-                result += count3close(*all_particles_resol, sattrs12=sattrs, sattrs13=sattrs13, veto13=True, wattrs=wattrs, **kw)['weight'].value()
-                #print(theta, nside, time.time() - t0, flush=True)
-
-            return weight
+                    all_particles_resol[1] = digitize(nside, all_particles_resol[1])
+                result13 = count3close(*all_particles_resol, close_pair=(1, 3), sattrs12=sattrs_limit, sattrs13=sattrs, veto12=sattrs, wattrs=wattrs, **kw)['weight']
+                # 3) close-pair (2, 3), excluding (1, 2), (1, 3) close pairs
+                all_particles_resol = list(all_particles)
+                if nside is not None:
+                    all_particles_resol[0] = digitize(nside, all_particles_resol[0])
+                result23 = count3close(*all_particles_resol, close_pair=(2, 3), sattrs12=sattrs_limit, sattrs23=sattrs, veto12=sattrs, veto13=sattrs, wattrs=wattrs, shard_particle=2, **kw)['weight']
+                results += [result12, result13, result23]
+            result = results[0].clone(counts=sum(result.values('counts') for result in results), norm=results[0].values('norm'))
+            return result
 
         DDDfibered = count3close_resol(*all_fibered_data, wattrs=wattrs)
         # Compute triplet counts for parent (unfiber-limited) data without bitwise weights
@@ -135,8 +138,9 @@ def compute_particle3_angular_upweights(*get_data):
         kw[f'{coord}_edges'] = battrs.edges('theta')
     auw = {}
     # Angular upweights = ratio of parent to fibered pair counts (1 where no pairs)
-    auw['DDD'] = ObservableLeaf(value=np.where(DDDfibered == 0., 1., DDDparent / DDDfibered), **kw)
-
+    auw['DDD'] = ObservableLeaf(value=np.where(DDDfibered.value() == 0., 1., DDDparent.value() / DDDfibered.value()), **kw)
+    auw['DDDparent'] = DDDparent
+    auw['DDDfibered'] = DDDfibered
     # Wrap in ObservableTree for consistent data structure
     auw = ObservableTree(list(auw.values()), triplets=list(auw.keys()))
     return auw

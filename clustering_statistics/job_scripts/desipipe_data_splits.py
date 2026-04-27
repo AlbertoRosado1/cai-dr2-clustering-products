@@ -44,7 +44,6 @@ combine_region_sources = {
     'GCcomb_noDES': ['NGC', 'SGCnoDES'],
 }
 
-
 def run_stats(version='data-dr2-v2', tracer='LRG', regions=['NGC', 'SGC'], weight='default-FKP', stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', project='', stats=['mesh2_spectrum'], ibatch=None, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
@@ -94,13 +93,13 @@ if __name__ == '__main__':
     # parser.add_argument('--zrange', nargs='+', type=str, default=(0.1, 0.4), help='Redshift bins')
     # parser.add_argument('--regions', nargs='+', type=str, default=['NGC'], help='Sky regions to include.')  
     # parser.add_argument('--subver', default=None, choices=['zcmb', None], help='sub version for data catalogs')
-    parser.add_argument('--tracers', nargs='+', type=str, default=['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOPnotqso', 'QSO'], choices=['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOPnotqso', 'QSO'], help='Tracers')
+    parser.add_argument('--tracers', nargs='+', type=str, default=['LRG', 'ELG_LOPnotqso', 'QSO'], choices=['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOPnotqso', 'QSO'], help='Tracers')
     parser.add_argument('--versions', nargs='+', type=str,  default=['data-dr2-v2'], choices=['data-dr2-v2'], help='Catalog versions to use.')
-    parser.add_argument('--todo', nargs='*', type=str, default=['mesh2_spectrum'],
-                        choices=['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'count2_correlation', 'blinded_mesh2_spectrum'], help='Which processing steps to run.')
-
+    parser.add_argument('--weight_types', nargs='+', type=str, default=['default-FKP'],
+                        help='Weighting schemes to use: default, default-FKP, default_thetacut, default_auw, bitwise, bitwise-FKP, bitwise_auw')
+    parser.add_argument('--todo', nargs='+', type=str, default=['mesh3_spectrum'],
+                        choices=['auw', 'mesh2_spectrum', 'mesh3_spectrum', 'window_mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'count2_correlation', 'blinded_mesh2_spectrum'], help='Which processing steps to run.')
     args = parser.parse_args()
-
     mode = 'interactive'
     stats = args.todo
     check_for_existing_measurements = True
@@ -114,7 +113,7 @@ if __name__ == '__main__':
     postprocess = ['combine_regions']
     postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES']
 
-    for version, tracer in itertools.product(args.versions, args.tracers):
+    for version, tracer, weight_type in itertools.product(args.versions, args.tracers, args.weight_types):
         regions_to_run = list(regions)
         if check_for_existing_measurements and stats:
             rerun_regions = []
@@ -147,7 +146,6 @@ if __name__ == '__main__':
                 _tm = tmw
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
         if regions_to_run:
-            get_run_stats()(version=version, tracer=tracer, regions=regions_to_run, stats_dir=stats_dir, stats=stats, project=project)
+            get_run_stats()(version=version, tracer=tracer, regions=regions_to_run, stats_dir=stats_dir, stats=stats, project=project, weight=weight_type)
         if postprocess:
-            postprocess_stats(version=version, tracer=tracer, regions=postregions, stats_dir=stats_dir, project=project, postprocess=postprocess)
-
+            postprocess_stats(version=version, tracer=tracer, regions=postregions, stats_dir=stats_dir, project=project, weight=weight_type, postprocess=postprocess)

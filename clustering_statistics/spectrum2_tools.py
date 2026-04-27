@@ -394,7 +394,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
 
 
 def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2SpectrumPoles, optimal_weights: Callable=None, cut
-: bool=None, zeff: dict=None):
+: bool=None, zeff: dict=None, method: str='smooth'):
     r"""
     Compute the 2-point spectrum window with :mod:`jaxpower`.
 
@@ -423,7 +423,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
     # FIXME: data is not used, could be dropped, add auw
     # Import window and correlation computation tools from jaxpower
     from jaxpower import (create_sharding_mesh, BinMesh2SpectrumPoles, BinMesh2CorrelationPoles, compute_mesh2_correlation, BinParticle2CorrelationPoles, compute_particle2, compute_particle2_shotnoise,
-                           compute_smooth2_spectrum_window, get_smooth2_window_bin_attrs, interpolate_window_function, split_particles)
+                           compute_smooth2_spectrum_window, get_smooth2_window_bin_attrs, interpolate_window_function, split_particles, compute_mesh2_spectrum_window)
 
     # Extract multipole moments from input spectrum
     ells = spectrum.ells
@@ -478,76 +478,96 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
             bin = BinMesh2SpectrumPoles(mattrs, edges=pole.edges('k'), ells=ells)
             # Get normalization from input power spectrum
             norm = jnp.concatenate([spectrum.get(ell).values('norm') for ell in ells], axis=0)
+
             results = {}
-            correlations = []
-            # Get window basis attributes (which multipoles to compute in correlation space)
-            kw_window = get_smooth2_window_bin_attrs(ells, ellsin)
-            # JIT-compile correlation computation for memory efficiency
-            # donate_argnums=[0] allows JAX to reuse memory of first argument
-            jitted_compute_mesh2_correlation = jax.jit(compute_mesh2_correlation, static_argnames=['los'], donate_argnums=[0])
-            # Window computed in configuration space, summing Bessel functions over the Fourier-space mesh
-            # Use logarithmic s-grid for robust interpolation
-            coords = jnp.logspace(-3, 5, 4 * 1024)
-            list_edges = []
-            # Loop over scale factors for multigrid window computation (coarse then fine)
-            for scale in [1, 4]:
-                # Create coarser mesh (larger boxsize) for computational efficiency at coarse scales
-                mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
-                if jax.process_index() == 0:
-                    logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
+            if method == 'smooth':
+                correlations = []
+                # Get window basis attributes (which multipoles to compute in correlation space)
+                kw_window = get_smooth2_window_bin_attrs(ells, ellsin)
+                # JIT-compile correlation computation for memory efficiency
+                # donate_argnums=[0] allows JAX to reuse memory of first argument
+                jitted_compute_mesh2_correlation = jax.jit(compute_mesh2_correlation, static_argnames=['los'], donate_argnums=[0])
+                # Window computed in configuration space, summing Bessel functions over the Fourier-space mesh
+                # Use logarithmic s-grid for robust interpolation
+                coords = jnp.logspace(-3, 5, 4 * 1024)
+                list_edges = []
+                # Loop over scale factors for multigrid window computation (coarse then fine)
+                for scale in [1, 4]:
+                    # Create coarser mesh (larger boxsize) for computational efficiency at coarse scales
+                    mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
+                    if jax.process_index() == 0:
+                        logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
+                    all_mesh = []
+                    # Paint random catalogs on mesh
+                    for iran, randoms in enumerate(split_particles(all_randoms + [None] * (2 - len(all_randoms)), seed=seed, fields=fields)):
+                        # Redistribute particles to mesh and exchange across MPI processes
+                        randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
+                        # Compute weight normalization (data/random density ratio from input spectrum)
+                        alpha = pole.attrs['wsum_data'][isum][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
+                        # Paint random particles with proper normalization onto mesh
+                        all_mesh.append(alpha * randoms.paint(**kw_paint, out='real'))
+                    # Define radial binning for correlation space window
+                    # distmax: use 1/4 of boxsize minimum dimension for correlation range
+                    distmax, cellsize = mattrs2.boxsize.min() / 4., mattrs2.cellsize.min()
+                    # Create radial bins from 0 to distmax
+                    edges = np.arange(0., distmax + cellsize, cellsize)
+                    list_edges.append(edges)
+                    # Create binning for correlation function (configuration space)
+                    sbin = BinMesh2CorrelationPoles(mattrs2, edges=edges, **kw_window, basis='bessel')
+                    # Compute correlation function via FFT (inverse Fourier transform of painted mesh)
+                    correlation = jitted_compute_mesh2_correlation(all_mesh, bin=sbin, los=los).clone(norm=[np.mean(norm)] * len(sbin.ells))
+                    # Free mesh memory
+                    del all_mesh
+                    #if jax.process_index() == 0: correlation.write(f'_tests/window_correlation2_{scale:.0f}.h5')
+                    # Interpolate correlation to fine logarithmic k-grid for FFTLog integration
+                    correlation = interpolate_window_function(correlation, coords=coords, order=3)
+                    correlations.append(correlation)
+                # Create transition masks between coarse and fine scale grids
+                # Masks ensure each point is covered by exactly one scale
+                masks = [coords < edges[-3] for edges in list_edges[:-1]]
+                # Last mask covers remainder
+                masks.append((coords < np.inf))
+                # Convert masks to exclusive regions (each point weighted by only one scale)
+                weights = []
+                for mask in masks:
+                    if len(weights):
+                        # Exclude already-weighted regions from previous scales
+                        weights.append(mask & (~weights[-1]))
+                    else:
+                        weights.append(mask)
+                # Regularize weights to avoid division by zero
+                weights = [np.maximum(mask, 1e-6) for mask in weights]
+                # Combine correlations from different scales using smooth weights
+                results['window_mesh2_correlation_raw'] = correlation = correlations[0].sum(correlations, weights=weights)
+                # Convert correlation to power spectrum window via FFTLog
+                window = compute_smooth2_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',))
+                # Normalize window by average normalization (in case norm is k-dependent)
+                # Division corrects for any k-dependent normalization variation
+                window = window.clone(value=window.value() / (norm[..., None] / np.mean(norm)))
+            elif method == 'exact':
                 all_mesh = []
-                # Paint random catalogs on coarse mesh
+                if jax.process_index() == 0:
+                    logger.info(f'Using {mattrs}')
+                # Paint random catalogs on mesh
                 for iran, randoms in enumerate(split_particles(all_randoms + [None] * (2 - len(all_randoms)), seed=seed, fields=fields)):
-                    # Redistribute particles to coarse mesh and exchange across MPI processes
-                    randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
+                    # Redistribute particles to mesh and exchange across MPI processes
+                    randoms = randoms.clone(attrs=mattrs).exchange(backend='mpi')
                     # Compute weight normalization (data/random density ratio from input spectrum)
                     alpha = pole.attrs['wsum_data'][isum][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
                     # Paint random particles with proper normalization onto mesh
                     all_mesh.append(alpha * randoms.paint(**kw_paint, out='real'))
-                # Define radial binning for correlation space window
-                # distmax: use 1/4 of boxsize minimum dimension for correlation range
-                distmax, cellsize = mattrs2.boxsize.min() / 4., mattrs2.cellsize.min()
-                # Create radial bins from 0 to distmax
-                edges = np.arange(0., distmax + cellsize, cellsize)
-                list_edges.append(edges)
-                # Create binning for correlation function (configuration space)
-                sbin = BinMesh2CorrelationPoles(mattrs2, edges=edges, **kw_window, basis='bessel')
-                # Compute correlation function via FFT (inverse Fourier transform of painted mesh)
-                correlation = jitted_compute_mesh2_correlation(all_mesh, bin=sbin, los=los).clone(norm=[np.mean(norm)] * len(sbin.ells))
-                # Free mesh memory
-                del all_mesh
-                #if jax.process_index() == 0: correlation.write(f'_tests/window_correlation2_{scale:.0f}.h5')
-                # Interpolate correlation to fine logarithmic k-grid for FFTLog integration
-                correlation = interpolate_window_function(correlation, coords=coords, order=3)
-                correlations.append(correlation)
-            # Create transition masks between coarse and fine scale grids
-            # Masks ensure each point is covered by exactly one scale
-            masks = [coords < edges[-3] for edges in list_edges[:-1]]
-            # Last mask covers remainder
-            masks.append((coords < np.inf))
-            # Convert masks to exclusive regions (each point weighted by only one scale)
-            weights = []
-            for mask in masks:
-                if len(weights):
-                    # Exclude already-weighted regions from previous scales
-                    weights.append(mask & (~weights[-1]))
-                else:
-                    weights.append(mask)
-            # Regularize weights to avoid division by zero
-            weights = [np.maximum(mask, 1e-6) for mask in weights]
-            # Combine correlations from different scales using smooth weights
-            results['window_mesh2_correlation_raw'] = correlation = correlations[0].sum(correlations, weights=weights)
+                window = compute_mesh2_spectrum_window(*all_mesh, edgesin=edgesin, ellsin=ellsin, los=los, bin=bin, pbar=False, flags=('infinite',), norm=1.)
+                # FIXME
+                window = window.clone(value=window.value().real / norm[..., None])
 
-            # Convert correlation to power spectrum window via FFTLog
-            window = compute_smooth2_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',))
             # Update window with spectrum normalization from input power spectrum
             observable = window.observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'), attrs=pole.attrs), input_label=True)
-            # Normalize window by average normalization (in case norm is k-dependent)
-            # Division corrects for any k-dependent normalization variation
-            results['raw'] = window.clone(observable=observable, value=window.value() / (norm[..., None] / np.mean(norm)))  # just in case norm is k-dependent
+            results['raw'] = window.clone(observable=observable)
+
             if cut:
                 # Compute theta-cut contribution to window
                 sattrs = {'theta': (0., 0.05)}
+                kw_window = get_smooth2_window_bin_attrs(ells, ellsin)
                 #pbin = BinParticle2SpectrumPoles(mattrs, edges=bin.edges, xavg=bin.xavg, sattrs=sattrs, **kw_window)
                 # Use correlation binning for close pairs (finer bins than spectrum)
                 pbin = BinParticle2CorrelationPoles(mattrs, edges={'step': 0.1}, sattrs=sattrs, **kw_window)
@@ -560,16 +580,17 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                 # Count close pairs directly
                 correlation = compute_particle2(*all_particles, bin=pbin, los=los)
                 # Attach normalization and shot noise
-                correlation = correlation.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields), norm=[np.mean(norm)] * len(sbin.ells))
+                correlation = correlation.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields), norm=[np.mean(norm)] * len(pbin.ells))
                 pole = next(iter(correlation))
                 # Interpolate close pair correlation to logarithmic grid
+                coords = jnp.logspace(-3, 5, 4 * 1024)
                 correlation = interpolate_window_function(correlation, coords=coords, order=3)
                 results['window_mesh2_correlation_cut'] = correlation
-                # Combine raw and close-pair correlations (remove contributions)
-                correlation = correlation.clone(value=results['window_mesh2_correlation_raw'].value() - correlation.value())
+                ## Combine raw and close-pair correlations (remove contributions)
+                #correlation = correlation.clone(value=results['window_mesh2_correlation_raw'].value() - correlation.value())
                 # Convert combined correlation to power spectrum window
                 window = compute_smooth2_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',))
-                results['cut'] = window.clone(observable=results['raw'].observable, value=window.value() / (norm[..., None] / np.mean(norm)))
+                results['cut'] = window.clone(observable=results['raw'].observable, value=results['raw'].value() - window.value() / (norm[..., None] / np.mean(norm)))
             # Convert correlation results to observable tree structure (for consistency with other outputs)
             for key, result in results.items():
                 if 'correlation' in key:
@@ -716,7 +737,7 @@ def compute_window_mesh2_spectrum_fm(
     amr : bool
         Whether to apply the angular mode removal (AMR), i.e. to forward model the power loss due to linear angular systematics weights.
     ellsout : list[int] | None
-        For which ells the window is computed. Default None and use ellsout extracted from corresponding power spectra. Usefull to split the computation.
+        For which ells the window is computed. Default None and use ellsout extracted from corresponding power spectra. Useful to split the computation.
     regression_maps : list[str] | None
         Names of the systematics templates to use for the AMR. Can be set to ``None`` if ``amr=False``.
     templates_paths_kwargs : dict
@@ -812,9 +833,9 @@ def compute_window_mesh2_spectrum_fm(
         all_particles = prepare_jaxpower_particles(
             *get_data_randoms,
             mattrs=mattrs,
-            add_randoms=["IDS", "WEIGHT_FKP", "Z", *regression_maps, *columns_optimal_weights],
-            add_data=["WEIGHT_FKP", "Z", *regression_maps, *columns_optimal_weights])
-        
+            add_randoms=["IDS", "WEIGHT_FKP", "Z", *columns_optimal_weights] + (list(regression_maps) if amr else []),
+            add_data=["WEIGHT_FKP", "Z", *columns_optimal_weights] + (list(regression_maps) if amr else []))
+
         all_randoms = [particles["randoms"] for particles in all_particles]
         all_data = [particles["data"] for particles in all_particles]
         del all_particles
@@ -875,8 +896,9 @@ def compute_window_mesh2_spectrum_fm(
             binner = BinMesh2SpectrumPoles(fkp_fields[0].attrs, edges=spectrum.get(0).edges("k"), ells=ellsout)  # TODO: check edges are ok
 
             # Temporarily add FKP weights to the fkp_fields weights for norm and analytical computation
+            # FIXME: cellsize (actually, read normalization from data pk as in compute_mesh2_window_spectrum)
             fkp_norms = [
-                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "WEIGHT_FKP"), bin=binner, cellsize=10.0)
+                compute_fkp2_normalization(_update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "WEIGHT_FKP"), bin=binner, cellsize=20.0)
                 for fkp in fkp_fields]
 
             ## FM based computations
@@ -947,7 +969,7 @@ def compute_window_mesh2_spectrum_fm(
             windows = {}
             if geo:
                 windows["geometry"] = {}
-            if ric: 
+            if ric:
                 windows[extra_effects] = {}
 
             for ell in ellsout:
@@ -956,11 +978,13 @@ def compute_window_mesh2_spectrum_fm(
                 # Compute FKP normalization for each region, with the estimator weights (cross correlation), and for given ell = binner
                 fkp_norms = [
                     compute_fkp2_normalization(
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_optimal_1"),
-                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, "weight_optimal_2"),
+                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_1'),
+                        _update_fkp(fkp.data.weights, fkp.randoms.weights, fkp, 'weight_optimal_2'),
                         bin=binner,
-                        cellsize=10.0)
-                    for fkp in fkp_fields]
+                        cellsize=20.0,  # FIXME 10. for 2pt+3pt, 20. for PNG, should read from input pk
+                    )
+                    for fkp in fkp_fields
+                ]
 
                 # Shared window FM arguments
                 window_fm_kw = {
@@ -989,7 +1013,7 @@ def compute_window_mesh2_spectrum_fm(
                     _, _windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None})
                     windows["geometry"][ell] = _windows_fm_geo
 
-                if ric: 
+                if ric:
                     if jax.process_index() == 0: logger.info("Computing total window for ell=%i with desiwinds...", ell)
                     _, _windows_fm = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": (ric_args,) * 2, "amr_args": (amr_args,) * 2})
                     windows[extra_effects][ell] = _windows_fm
@@ -1175,7 +1199,7 @@ def compute_covariance_mesh2_spectrum(*get_data_randoms, theory=None, fields=Non
             windows = windows.map(lambda window: interpolate_window_function(window, coords=coords), level=1)
         # Store raw correlation windows for diagnostics
         results['window_covariance_mesh2_correlation'] = windows
- 
+
     # Convert correlation to power spectrum covariance matrix via FFTLog
     covariance = compute_spectrum2_covariance(windows, theory, flags=['smooth'] + (['fftlog'] if fftlog else []))
     # Update label names to match observable structure

@@ -18,7 +18,7 @@ from clustering_statistics import tools
 
 setup_logging()
 
-def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', regions=['NGC','SGC'], ibatch=None, postprocess=None, zranges=None, **kwargs):
+def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', do_jackknife=False, regions=['NGC','SGC'], ibatch=None, postprocess=None, zranges=None, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -46,6 +46,7 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
+                           particle2_correlation={'jackknife': {'nsplits': 60}} if do_jackknife else {},
                            window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
             options = fill_fiducial_options(options, analysis=analysis)
             
@@ -55,7 +56,8 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
                 if onthefly == 'complete':
                     options['catalog'][itracer]['complete'] = {}
                 elif onthefly == 'reshuffle':
-                    options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'][itracer] | dict(region='ALL')))}                
+                    merged_dir = Path(f'/pscratch/sd/a/arosado/cai-dr2-benchmarks/merged_catalogs/{version}/')
+                    options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', cat_dir=merged_dir, **(options['catalog'][itracer] | dict(region='ALL')))}                
             
             get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project, extra=onthefly if onthefly else '')
             compute_stats_from_options(stats, analysis=analysis, get_stats_fn=get_stats_fn, cache=cache, **options)
@@ -76,6 +78,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     if onthefly == 'complete':
         get_stats_fn = functools.partial(tools.get_stats_fn, extra='complete', **stats_dir_kws)
     elif onthefly == 'reshuffle':
+        # get_stats_fn = functools.partial(tools.get_stats_fn, extra='reshuffle', **stats_dir_kws)
         get_stats_fn = functools.partial(tools.get_stats_fn, extra='reshuffle', **stats_dir_kws)
     else:
         get_stats_fn = functools.partial(tools.get_stats_fn, **stats_dir_kws)
@@ -88,33 +91,37 @@ if __name__ == '__main__':
 
     stats, postprocess = [], []
     # version  = 'glam-uchuu-v2-altmtl'
-    version  = 'holi-v3-altmtl'
-    check_for_existing_measurements = True
+    # version  = 'holi-v3-altmtl'
+    version  = 'abacus-hf-dr2-v2-altmtl'
+    check_for_existing_measurements = False # True
     
     # test run 
     # imocks2run = 150 + np.arange(1)
-    # imocks2run = np.arange(1)
-    # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
+    imocks2run = np.arange(1)
+    stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
     
     # official run
     # imocks2run = 150 + np.arange(50)
     # imocks2run = np.arange(1)
-    imocks2run = np.arange(50)
-    if version == 'holi-v3-altmtl':
-        # do not perform measurements on dubious mocks
-        bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
-        imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
-    stats_dir  = tools.base_stats_dir
+    # imocks2run = np.arange(50)
+    # if version == 'holi-v3-altmtl':
+    #     # do not perform measurements on dubious mocks
+    #     bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
+    #     imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
+    # stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
     # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
-    # postprocess = ['combine_regions']
-    # analysis = 'full_shape'
-    # project  = f'{analysis}/base'
-    # weight   = 'default-FKP'
-    # regions  = ['NGC','SGC']
+    # stats       = ['mesh3_spectrum', 'window_mesh3_spectrum']
+    stats = ['mesh2_spectrum']
+    postprocess = ['combine_regions']
+    analysis = 'full_shape'
+    project  = f'{analysis}/base'
+    weight   = 'default-FKP'
+    regions  = ['NGC','SGC']
     # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # max_mocks_per_batch = 1
+    tracers  = ['QSO']
+    max_mocks_per_batch = 1
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
@@ -126,16 +133,20 @@ if __name__ == '__main__':
     # max_mocks_per_batch = 1 
 
     # run fiducial local_png
-    stats       = ['mesh2_spectrum']
-    postprocess = ['combine_regions']
-    analysis = 'local_png'
-    project  = f'{analysis}/base'
-    weight   = 'default-fkp-oqe'
-    regions  = ['NGC','SGC']
-    tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    max_mocks_per_batch = 1
+    # stats       = ['mesh2_spectrum']
+    # postprocess = ['combine_regions']
+    # analysis = 'local_png'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-noimsys-fkp-oqe'
+    # regions  = ['NGC','SGC']
+    # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
+    # tracers = ['ELGnotqso']
+    # max_mocks_per_batch = 1
 
-    onthefly = 'reshuffle'
+    onthefly = 'complete'
+    # onthefly = 'reshuffle'
+    # onthefly = None
+    do_jackknife = False
     
     for tracer in tracers:
         if 'png' in analysis:
@@ -159,7 +170,7 @@ if __name__ == '__main__':
         else:
             imocks = imocks2run
             
-        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
+        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, do_jackknife=do_jackknife, regions=regions, weight=weight, postprocess=postprocess)
         batch_imocks = np.array_split(imocks, max(len(imocks) // max_mocks_per_batch, 1)) if len(imocks) else []
         for _imocks in batch_imocks:
             run_stats(imocks=_imocks, **run_stats_kws)

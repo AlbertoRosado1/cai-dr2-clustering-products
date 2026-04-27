@@ -500,16 +500,17 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_meshsizes = {'BGS': 864, 'LRG': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10.}
-    
+
     propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
-    
+    propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
+
     if "window_mesh2_spectrum_fm" in kind:
         # FIXME: for cross-correlations
         if simple_tracers[0] not in ["BGS", "LRG", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
         propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}[simple_tracers[0]]
-        
+
         propose_regression_zranges = {
             "BGS": [(0.1, 0.4)],
             "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
@@ -526,7 +527,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
 
         templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
         translate_template_tracer = {'BGS': 'BGS_BRIGHT', 'ELG_LOPnotqso': 'ELG_LOPnotqso', 'ELG': 'ELG', 'LRG': 'LRG', 'QSO': 'QSO'}
-        
+
         for tt, template_tracer in translate_template_tracer.items():
             if tt in tracers[0]:
                 break
@@ -542,7 +543,9 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
             ric_nbins=1000,
             ric_regions=propose_photoregions,
             geo=True,
+            ric=True,
             amr=True,
+            ellsout=None,
             regression_maps=propose_templates,
             templates_paths_kwargs={f'templates_path_{region}': templates_dir / f'{template_tracer}_mapprops_healpix_nested_nside256_{region}.fits' for region in ['N', 'S']},
             amr_regions_zranges=list(itertools.product(propose_photoregions, propose_regression_zranges)),
@@ -598,7 +601,6 @@ def apply_blinding(data, tracer, zrange):
     else:
         raise NotImplementedError
 
-
 def _unzip_catalog_options(catalog):
     """From a catalog dictionary with nran, zrange, ..., tracer, return {tracer: {nran:..., zrange: ...}}"""
     if 'tracer' in catalog:
@@ -616,11 +618,11 @@ def _unzip_catalog_options(catalog):
     return toret
 
 
-def _zip_catalog_options(catalog, squeeze=True, unique=True):
+def _zip_catalog_options(catalog, squeeze=True, unique=True, ignore=()):
     """From {tracer: {nran:..., zrange: ...}}, return {tracer: tuple or single tracer if same, nran: tuple or single number if same}"""
     tracers = tuple(catalog.keys())
-    toret = {key: [] for tracer in tracers for key in catalog[tracer]}
-    num = {key: 0 for tracer in tracers for key in catalog[tracer]}
+    toret = {key: [] for tracer in tracers for key in catalog[tracer] if key not in ignore}
+    num = {key: 0 for tracer in tracers for key in catalog[tracer] if key not in ignore}
     for tracer in tracers:
         for key in toret:
             value = catalog[tracer].get(key, None)
@@ -710,7 +712,7 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             # spectrum_options | fiducial_options because we override mattrs if given
             options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
-        for stat in ['rotation_mesh2_spectrum']:
+        for stat in ['combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum']:
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | options.get(stat, {})
     return options
@@ -916,6 +918,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
 
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
@@ -962,7 +966,7 @@ def float2str(value, prec_min=1, prec_max=10):
     return s
 
 
-def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', project='', kind='mesh2_spectrum', 
+def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', project='', kind='mesh2_spectrum',
                  auw=None, cut=None, extra='', ext='h5', **kwargs):
     """
     Return measurement filename for given parameters.
@@ -1017,7 +1021,8 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options, imock=imock, **kwargs) for imock in range(2001)]
         return [fn for fn in fns if os.path.exists(fn)]
 
-    catalog_options = _zip_catalog_options(catalog_options, squeeze=False, unique=True)
+    # catalog_options[tracer]['expand'] is a complicated object, ensuring uniqueness significantly slows things down
+    catalog_options = _zip_catalog_options(catalog_options, squeeze=False, unique=True, ignore=['expand'])
     stats_dir = Path(stats_dir) / project
 
     def join_if_not_none(f, key):
@@ -1156,11 +1161,12 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
             catalog = Catalog.read(fn, group='LSS', mpicomm=mpicomm, **kwargs)
         except KeyError:
             catalog = Catalog.read(fn, mpicomm=mpicomm, **kwargs)
-    elif one_fn.endswith('.fits'):
+    elif one_fn.endswith('.fits') or one_fn.endswith('.fits.gz'):
         catalog = Catalog.read(fn, mpicomm=mpicomm, backend=kwargs.get('backend', 'fitsio'))
         catalog.get(catalog.columns())  # Faster to read all columns at once
     else:
         catalog = Catalog.read(fn, mpicomm=mpicomm)
+    catalog.attrs.update(catalog.header)  # for header not transmitted in pickling
     if 'WEIGHT' not in catalog:
         warnings.warn('WEIGHT not in catalog')
         catalog['WEIGHT'] = catalog.ones()
@@ -1390,6 +1396,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             forfa_data = _read_catalog(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
             return complete_from_full_data(forfa_data, full_data, nz=nz, tracer=tracer,
                                     with_completeness=complete.get('with_completeness', True),
+                                    downsample_nobj=complete.get('downsample_nobj', False),
                                     seed=complete.get('seed', 100 * imock))
 
         if kind == 'data':
@@ -1530,6 +1537,8 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 logger.info('Multiplying individual weights by WEIGHT_FKP') if FKP_P0 is None else logger.info(f'Multiplying individual weights by FKP weight computed with FKP_P0 = {FKP_P0}')
             if FKP_P0 is not None:
                 catalog['WEIGHT_FKP'] = 1. / (1. + catalog['NX'] * FKP_P0)
+            elif 'WEIGHT_FKP' not in catalog.columns():
+                raise ValueError('WEIGHT_FKP column does not exist! Provide a value for FKP_P0.')         
             individual_weight *= catalog['WEIGHT_FKP']
 
         if 'noimsys' in weight_type:
@@ -2144,7 +2153,7 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     return randoms
 
 
-def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, seed=42):
+def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, downsample_nobj=False, seed=42):
     """
     Create complete data catalog from For Fiber Assignment (FA) and Full catalogs.
 
@@ -2184,10 +2193,17 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
         r = rng.random(data.size)
         downsample_z = np.where(data['Z'] < 1.49, r < 0.96, r < 0.76)
         data = data[downsample_z]
+    _mask_assigned = data['ZWARN'] != 999999
     if with_completeness:
-        mask_assigned = data['ZWARN'] != 999999
+        mask_assigned = _mask_assigned
     else:
         mask_assigned = data.ones(dtype=bool)
+    if downsample_nobj:
+        rng = np.random.RandomState(seed=seed)
+        r = rng.random(data.size)
+        mask = r <= _mask_assigned.sum() / _mask_assigned.size
+        data = data[mask]
+        mask_assigned = mask_assigned[mask]
     for name in ['WEIGHT', 'WEIGHT_COMP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'FRAC_TLOBS_TILES']:
         data[name] = data.ones()
     for name in ['NZ', 'NX']:
@@ -2291,3 +2307,126 @@ def add_photometric_template_values(
     for i, name in enumerate(template_names):
         catalog[name] = template_values[:, i]
     return catalog
+
+
+def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_realizations: list[types.WindowMatrix],
+                                    method: str='spline', **kwargs) -> types.WindowMatrix:
+
+    """
+    Interpolate window function realizations onto a common theory grid using spline or Gaussian process regression.
+
+    This function takes multiple window matrix realizations (e.g., from different
+    forward-model batches) and combines them into a single smooth window matrix by interpolating
+    onto the theory grid of a reference window. This is useful for obtaining a robust
+    window estimate when individual realizations are noisy or computed at different k-points.
+
+    Parameters
+    ----------
+    window_geometry : types.WindowMatrix
+        Reference window matrix defining the output theory and observable grids. Typically computed
+        from the survey geometry (mask, selection, etc.) without systematics. The theory and
+        observable axes are used as the interpolation targets.
+    window_realizations : list[types.WindowMatrix] or types.WindowMatrix
+        List of window matrix realizations to interpolate and combine. Each realization should have
+        the same observable structure as ``window_geometry``.
+        Indicate theory bins for why the window has *not* been computed with 0 (else 1) in
+        ``[pole.get('nmodes') for pole in window.theory]``.
+        If a single WindowMatrix is provided, it is converted to a list of length 1.
+    method : str, optional
+        Interpolation method. Options are:
+        - 'spline': 2D spline (default). Uses :class:`scipy.interpolate.SmoothBivariateSpline`
+          with default kx=ky=3 (cubic). Supports additional kwargs 'kx', 'ky'
+          and other spline parameters (s, eps, etc.).
+        - 'gaussian_process': Gaussian process regression. Uses scikit-learn's
+          :class:`GaussianProcessRegressor` with a Matern kernel. Supports additional kwargs
+          for kernel configuration (length_scale, nu, etc.).
+    **kwargs : dict, optional
+        Additional keyword arguments passed to the interpolation method.
+
+    Returns
+    -------
+    window_interpolated : types.WindowMatrix
+        Interpolated window matrix with the same structure as ``window_geometry`` (same observable
+        and theory axes).
+
+    Examples
+    --------
+    Combine multiple forward-model window realizations into a single smooth window::
+
+        import lsstypes as types
+        # Load reference geometry window (from randoms)
+        window_geo = types.read('window_geometry.h5')
+        # Load forward-model windows (e.g., from 10 mock surveys)
+        windows_fm = [types.read(f'window_fm_batch{i}.h5') for i in range(10)]
+        # Interpolate onto geometry grid using cubic splines
+        window_smooth = tools.interpolate_window_realizations(
+            window_geo, windows_fm, method='spline', kx=3, ky=3
+        )
+        window_smooth.write('window_combined.h5')
+
+    Use Gaussian process for smoother results on sparse grids::
+
+        window_smooth = interpolate_window_realizations(
+            window_geo, windows_fm, method='gaussian_process',
+            length_scale=0.1, nu=1.5
+        )
+
+    """
+    if isinstance(window_realizations, types.WindowMatrix):
+        window_realizations = [window_realizations]
+
+    values, weights = [], []
+    for window_realization in window_realizations:
+        values.append(window_realization.value())
+        weights.append(np.ones(window_geometry.observable.size)[:, None] * np.concatenate([pole.values('nmodes') for pole in window_realization.theory.flatten()]))
+
+    mean = sum(value * weight for value, weight in zip(values, weights))
+    sweights = sum(weights)
+    mean = mean / np.where(sweights, sweights, 1.)
+    mean = np.where(sweights != 0, mean, 0.)
+    sweights2 = sum(weight**2 for weight in weights)
+    scale = sweights / np.where(sweights != 0, (sweights**2 - sweights2), 1.)
+    var = scale * sum(weight * (value - mean)**2 for value, weight in zip(values, weights))
+    ivar = 1. / np.where(sweights != 0, var, np.inf)
+    window_mean = window_geometry.clone(value=mean)
+    window_ivar = window_geometry.clone(value=ivar)
+
+    # Iterate on output and input multipoles
+    value = []
+    for olabel, opole in window_mean.observable.items(level=None):
+        row = []
+        for tlabel, tpole in window_mean.theory.items(level=None):
+            block_mean = window_mean.at.theory.get(**tlabel).at.observable.get(**olabel)
+            xt = block_mean.theory.coords(0)  # theory k
+            xo = block_mean.observable.coords(0)  # observable k
+            xt, xo = np.meshgrid(xt, xo, indexing='ij')
+            points = [(xt - xo).ravel(), xo.ravel()]  # interpolation in (xt - xo), xo space
+            points = np.column_stack(points)
+            mean = block_mean.value()
+            ivar = window_ivar.at.theory.get(**tlabel).at.observable.get(**olabel).value()
+            mask = np.ravel(ivar > 0)
+            if method == 'spline':
+                from scipy.interpolate import SmoothBivariateSpline
+                spline = SmoothBivariateSpline(*points[mask].T, mean.ravel()[mask], w=ivar.ravel()[mask], **kwargs)
+                block = spline(*points.T, grid=False)
+            elif method == 'gaussian_process':
+                from sklearn.gaussian_process import GaussianProcessRegressor
+                from sklearn.gaussian_process.kernels import ConstantKernel, Matern
+                # X: shape (M, 2)
+                # y: observed means at each point
+                # se: standard error of each mean
+                kernel = ConstantKernel(1.0) * Matern(**kwargs)
+                gpr = GaussianProcessRegressor(
+                    kernel=kernel,
+                    alpha=1. / ivar.ravel()[mask],
+                    normalize_y=True,
+                    n_restarts_optimizer=5
+                )
+                gpr.fit(points[mask], mean.ravel()[mask])
+                # predict at new points Xnew: shape (K, 2)
+                block, y_std = gpr.predict(points, return_std=True)
+            block = block.reshape(xt.shape)
+            row.append(block)
+        value.append(row)
+    window_mean = window_mean.clone(value=np.block(value))
+    return window_mean

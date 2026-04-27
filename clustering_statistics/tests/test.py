@@ -248,13 +248,13 @@ def test_window(stats=['mesh2_spectrum']):
     #    print(edges, len(edges))
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for stat in stats:
-        """
         for tracer in ['LRG']:
             zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
-                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
-                #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-                compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={}, window_mesh2_spectrum={'cut': True})
+                for method in ['smooth', 'exact'][1:]:
+                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
+                    #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
+                    compute_stats_from_options([stat, f'window_{stat}'], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'mattrs': {'meshsize': 250, 'boxsize': 6000.}}, window_mesh2_spectrum={'cut': True, 'method': method})
         if 'mesh3' in stat: continue
         """
         for tracer in [('LRG', 'ELG_LOPnotqso')]:
@@ -263,6 +263,7 @@ def test_window(stats=['mesh2_spectrum']):
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
                 compute_stats_from_options([stat, f'window_{stat}'], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={}, window_mesh2_spectrum={'cut': True}, analysis='png_local')
+        """
 
 
 def test_window3(stats=['mesh3_spectrum']):
@@ -329,39 +330,77 @@ def test_norm():
 
 
 def test_window_fm(tracer='QSO'):
+    # FIXME:
+    # - zrange should be None when reading the catalog, then compute_stats loops over another independent list of zranges can be provided for the measurements
+    # - region may be ALL when reading the catalog, then compute_stats loops over regions
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    fiducial = tools.propose_fiducial(kind="window_mesh2_spectrum_fm", tracer=tracer, analysis="png_local")
     catalog_options = {
-        "version": "holi-v1-altmtl",
-        "tracer": tracer,
-        "zrange": tools.propose_fiducial("zranges", tracer, analysis="png_local"),
-        "region": "ALL",
-        "imock": 451,
-        "nran": 1,
-        "keep_columns": True,
-        "weight": "default-OQE",
+        'version': 'holi-v1-altmtl',
+        'tracer': tracer,
+        'zrange': {'QSO': (0.8, 3.5), 'LRG': (0.4, 1.1)}[tracer],
+        'region': 'ALL',
+        'imock': 451,
+        'nran': 1,
+        'keep_columns': True,
+        'weight': 'default-oqe',
     }
-    mattrs = {"cellsize": 40.0}
+    analysis = 'png_local'
+    mattrs = {'cellsize': 80.0}
     extra = f"mytest_tracer_{tracer}"
+    options = {
+        'catalog': catalog_options,
+        'mattrs': mattrs,
+        'mesh2_spectrum': {'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer)},
+        'window_mesh2_spectrum': {'method': 'exact'},
+        'combine_window_mesh2_spectrum': {'effect': 'RIC+AMR'},
+        'window_mesh2_spectrum_fm': {'theory': None, 'n_realizations': 2, 'seeds': [42, 84], 'theory_rebin': 5},
+    }
 
-    for region in ['NGC', 'SGC'][:0]:
-        compute_stats_from_options(["mesh2_spectrum", "window_mesh2_spectrum"],
-            catalog=catalog_options | dict(region=region),
-            mattrs=mattrs,
-            get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
-            mesh2_spectrum={"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),},
-        )
+    get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
+    for region in ['NGC', 'SGC']:
+        compute_stats_from_options(
+         ['mesh2_spectrum', 'window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
-    templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
-    compute_stats_from_options(["window_mesh2_spectrum_fm"],
-        catalog=catalog_options,
-        mattrs=mattrs,
-        get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
-        mesh2_spectrum={"optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),},
-        window_mesh2_spectrum_fm=fiducial | {"theory": None, "n_realizations": 1, "seeds": [42],
-        "optimal_weights": functools.partial(tools.compute_fiducial_png_weights, tracer=tracer),
-        },
-    )
+    compute_stats_from_options(['window_mesh2_spectrum_fm'], get_stats_fn=get_stats_fn, **options, analysis=analysis)
+    for region in ['NGC', 'SGC']:
+        postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
+
+
+def test_interp_window():
+    from clustering_statistics.tools import interpolate_window_realizations
+
+    def get_spectrum2_data(size=20):
+        edges = np.linspace(0., 0.2, size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        k = np.mean(edges, axis=-1)
+        value = np.zeros_like(k)
+        ells = [0, 2, 4]
+        data = [types.Mesh2SpectrumPole(k=k, num_raw=value, k_edges=edges, ell=ell) for ell in ells]
+        return types.Mesh2SpectrumPoles(data)
+
+    def get_spectrum2_window(observable, size=40):
+        edges = np.linspace(0., 0.2, size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        k = np.mean(edges, axis=-1)
+        ells = [0, 2, 4]
+        theory = [types.Mesh2SpectrumPole(k=k, num_raw=np.zeros_like(k), k_edges=edges, ell=ell) for ell in ells]
+        theory = types.ObservableTree(theory, ells=ells, wa_orders=[0] * len(ells))
+        window = np.zeros((observable.size, theory.size))
+        return types.WindowMatrix(observable=observable, theory=theory, value=window)
+
+    observable = get_spectrum2_data()
+    window_geometry = get_spectrum2_window(observable)
+    window_realizations = []
+    rng = np.random.RandomState(42)
+    for ireal in range(20):
+        # mask = compute for some theory bins only
+        #theory = window_geometry.theory.map(lambda pole: pole.clone(nmodes=1. * (rng.uniform(size=pole.size) < 0.8)))
+        theory = window_geometry.theory.map(lambda pole: pole.clone(nmodes=1. * (np.arange(pole.size) % 3 == 0)))
+        window_realization = window_geometry.clone(value=rng.uniform(size=window_geometry.shape), theory=theory)
+        window_realizations.append(window_realization)
+    #method = 'spline'
+    method = 'gaussian_process'
+    window = interpolate_window_realizations(window_geometry, window_realizations=window_realizations, method=method)
 
 
 def test_count3close():
@@ -399,56 +438,53 @@ def test_count3close():
 
 def test_auw3(stats=['mesh3_spectrum']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    for tracer in ['ELG_LOPnotqso']:
-        zranges = tools.propose_fiducial('zranges', tracer)[1:]
+    for tracer in ['LRG', 'ELG_LOPnotqso'][:1]:
+        zranges = tools.propose_fiducial('zranges', tracer)[-1:]
         for region in ['NGC', 'SGC'][:1]:
-            catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=2)
+            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zranges, region=region, imock=1, nran=2)
             #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh3_spectrum={'auw': True})
+            catalog_options['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
+            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh3_spectrum={'ells': [(0, 0, 0), (2, 0, 2)], 'auw': True})
 
 
 
 if __name__ == '__main__':
 
-    #os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.1'
-    #from jax import config
-    #config.update('jax_enable_x64', True)
-    #config.update('jax_num_cpu_devices', 4)
-    #config.update('jax_platform_name', 'cpu')
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.85'
 
-    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     from jax import config
     config.update('jax_enable_x64', True)
+    # jax.config.update('jax_debug_nans', True)
     #config.update('jax_num_cpu_devices', 4)
     #config.update('jax_platform_name', 'cpu')
 
     setup_logging()
 
     jax.distributed.initialize()
-    test_auw3()
-    exit()
-    #test_correlation()
-    #test_covariance()
-    #test_stats_fn()
-    #test_complete_catalog()
-    #test_expand_randoms_catalog()
-    #test_complete_stats()
-    #test_expand_randoms_stats()
 
-    #test_window()
-    #test_blinding()
-    test_covariance()
-    #test_rotation()
-    #test_window3()
-    #test_stats_fn()
-    #test_auw2(stats=['mesh2_spectrum'])
-    #test_bitwise(stats=['mesh2_spectrum'])
-    #test_expand_randoms_stats()
-    #test_optimal_weights()
-    #test_cross()
-    #test_window()
-    #test_spectrum3()
-    #test_norm()
-    #test_recon()
-    #test_covariance()
-    #jax.distributed.shutdown()
+    test_auw3()
+    # test_window_fm('LRG')
+    # test_correlation()
+    # test_covariance()
+    # test_stats_fn()
+    # test_complete_catalog()
+    # test_expand_randoms_catalog()
+    # test_complete_stats()
+    # test_expand_randoms_stats()
+    # test_blinding()
+    # test_covariance()
+    # test_rotation()
+    # test_window3()
+    # test_stats_fn()
+    # test_auw(stats=['mesh2_spectrum'])
+    # test_bitwise(stats=['mesh2_spectrum'])
+    # test_expand_randoms_stats()
+    # test_optimal_weights()
+    # test_cross()
+    # test_window()
+    # test_spectrum3()
+    # test_norm()
+    # test_recon()
+    # test_covariance()t
+    # test_interp_window()
+    # jax.distributed.shutdown()
