@@ -544,50 +544,40 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
 
         template_tracers = [translate_template_tracer[tt] for tt in simple_tracers]
 
+        propose_fiducial["window_mesh2_spectrum_fm"].update(
+            data_to_randoms_ratio=0.5,
+            catalog_split_seed=975,
+            ric_nbins=1000,
+            geo=True,
+            ric=True,
+            amr=True,
+            ellsout=None,
+            unitary_amplitude=True,
+            n_realizations=10,
+            seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
+            batch_size=4,
+            spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zranges)),
+            total_region_zrange=propose_total_region_zrange[simple_tracer],
+        )
+
         if len(simple_tracers) > 1:  # cross
             propose_fiducial["window_mesh2_spectrum_fm"].update(
-                data_to_randoms_ratio=0.5,
-                catalog_split_seed=975,
-                ric_nbins=1000,
                 ric_regions=tuple(propose_photoregions[_tracer] for _tracer in simple_tracers),
-                geo=True,
-                ric=True,
-                amr=True,
-                ellsout=None,
                 regression_maps=tuple(propose_templates[_tracer] for _tracer in simple_tracers),
                 templates_paths_kwargs=tuple(
                     {f"templates_path_{region}": templates_dir / f"{_tracer}_mapprops_healpix_nested_nside256_{region}.fits" for region in ["N", "S"]}
                     for _tracer in template_tracers
                 ),
                 amr_regions_zranges=tuple(list(itertools.product(propose_photoregions[_tracer], propose_regression_zranges[simple_tracer][_tracer])) for _tracer in simple_tracers),
-                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zranges)),
-                total_region_zrange=propose_total_region_zrange[simple_tracer],
-                unitary_amplitude=True,
-                n_realizations=10,
-                seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
-                batch_size=4,
             )
         else:  # auto
             propose_fiducial["window_mesh2_spectrum_fm"].update(
-                data_to_randoms_ratio=0.5,
-                catalog_split_seed=975,
-                ric_nbins=1000,
                 ric_regions=propose_photoregions[simple_tracers[0]],
-                geo=True,
-                ric=True,
-                amr=True,
-                ellsout=None,
                 regression_maps=propose_templates[simple_tracers[0]],
                 templates_paths_kwargs={
                     f"templates_path_{region}": templates_dir / f"{template_tracers[0]}_mapprops_healpix_nested_nside256_{region}.fits" for region in ["N", "S"]
                 },
                 amr_regions_zranges=list(itertools.product(propose_photoregions[simple_tracers[0]], propose_regression_zranges[simple_tracers[0]])),
-                spectrum_regions_zranges=list(itertools.product(["NGC", "SGC"], _zranges)),
-                total_region_zrange=propose_total_region_zrange[simple_tracer],
-                unitary_amplitude=True,
-                n_realizations=10,
-                seeds=[85, 95, 75, 65, 91, 37, 46, 87, 19, 38],
-                batch_size=4,
             )
 
     return propose_fiducial[kind]
