@@ -104,7 +104,7 @@ if __name__ == '__main__':
                     stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
                                      version=version, project=project, tracer=tracer, zsnap=zsnap,  cosmo=cosmo, los=los)
                     rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(box_tools.get_box_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
-                    print(missing)
+                    # print(missing)
                     rerun += [imock for imock in imocks if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
             imocks = sorted(set(rerun))
         else:
