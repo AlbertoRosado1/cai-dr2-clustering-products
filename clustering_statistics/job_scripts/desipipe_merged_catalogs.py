@@ -69,11 +69,11 @@ if __name__ == '__main__':
     # tracers = ['ELGnotqso']
     regions = ['NGC', 'SGC']
     # imocks = 150 + np.arange(50) # number of mocks to merge
-    imocks = np.arange(1000) # number of mocks to merge
-    if version == 'holi-v3-altmtl':
-        # do not perform measurements on dubious mocks
-        bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
-        imocks = imocks[~np.isin(imocks,bad_imocks)]
+    imocks = np.arange(100) # number of mocks to merge
+    # if version == 'holi-v3-altmtl':
+    #     # do not perform measurements on dubious mocks
+    #     bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
+    #     imocks = imocks[~np.isin(imocks,bad_imocks)]
     nran_list = np.arange(18) # randoms to process
     fraction_to_keep = 0.1 # keep only ~10% of the catalogs
     

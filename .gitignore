@@ -20,6 +20,7 @@ doc/_build/
 **/bak
 **/_plots/*
 **/desipipe_data_splits_unblinded.py
+**/auw3.ipynb
 
 **/log
 **/tmp

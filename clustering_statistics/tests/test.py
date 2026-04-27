@@ -42,7 +42,7 @@ def test_stats_fn(stats=['mesh2_spectrum']):
             assert fn2 == fn1, f'{fn2} != {fn1}'
 
 
-def test_auw(stats=['mesh2_spectrum']):
+def test_auw2(stats=['mesh2_spectrum', 'particle2_correlation']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in ['LRG']:
         zranges = tools.propose_fiducial('zranges', tracer)
@@ -85,7 +85,7 @@ def test_blinding(stats=['mesh2_spectrum', 'mesh3_spectrum']):
                 assert not np.allclose(protected.value(), blinded.value())
 
 
-def test_bitwise(stats=['mesh2_spectrum']):
+def test_bitwise(stats=['mesh2_spectrum', 'particle2_correlation']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in ['LRG']:
         zranges = tools.propose_fiducial('zranges', tracer)
@@ -93,6 +93,7 @@ def test_bitwise(stats=['mesh2_spectrum']):
             #catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451)
             catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-bitwise-FKP', nran=1)
             compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'cut': True, 'auw': True, 'mattrs': {'meshsize': 512}}, particle2_correlation={'auw': True})
+            #compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'mattrs': {'meshsize': 512}})
 
 
 def test_spectrum3(stats=['mesh3_spectrum']):
@@ -359,13 +360,10 @@ def test_window_fm(tracer='QSO'):
 
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
     for region in ['NGC', 'SGC']:
-        compute_stats_from_options(
-            ["mesh2_spectrum", "window_mesh2_spectrum"], get_stats_fn=get_stats_fn, **(options | {"catalog": catalog_options | dict(region=region)}), analysis=analysis
-        )
+        compute_stats_from_options(['mesh2_spectrum', 'window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
-    compute_stats_from_options(['window_mesh2_spectrum_fm'], get_stats_fn=get_stats_fn, **options, analysis=analysis)
-    #for region in ['NGC', 'SGC']:
-    #    postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
+    for region in ['NGC', 'SGC']:
+        postprocess_stats_from_options(['combine_window_mesh2_spectrum'], get_stats_fn=get_stats_fn, **(options | {'catalog': catalog_options | dict(region=region)}), analysis=analysis)
 
 
 def test_interp_window():
@@ -405,6 +403,87 @@ def test_interp_window():
     window = interpolate_window_realizations(window_geometry, window_realizations=window_realizations, method=method)
 
 
+def test_interp_window():
+    from clustering_statistics.tools import interpolate_window_realizations
+
+    def get_spectrum2_data(size=20):
+        edges = np.linspace(0., 0.2, size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        k = np.mean(edges, axis=-1)
+        value = np.zeros_like(k)
+        ells = [0, 2, 4]
+        data = [types.Mesh2SpectrumPole(k=k, num_raw=value, k_edges=edges, ell=ell) for ell in ells]
+        return types.Mesh2SpectrumPoles(data)
+
+    def get_spectrum2_window(observable, size=40):
+        edges = np.linspace(0., 0.2, size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        k = np.mean(edges, axis=-1)
+        ells = [0, 2, 4]
+        theory = [types.Mesh2SpectrumPole(k=k, num_raw=np.zeros_like(k), k_edges=edges, ell=ell) for ell in ells]
+        theory = types.ObservableTree(theory, ells=ells, wa_orders=[0] * len(ells))
+        window = np.zeros((observable.size, theory.size))
+        return types.WindowMatrix(observable=observable, theory=theory, value=window)
+
+    observable = get_spectrum2_data()
+    window_geometry = get_spectrum2_window(observable)
+    window_realizations = []
+    rng = np.random.RandomState(42)
+    for ireal in range(20):
+        # mask = compute for some theory bins only
+        #theory = window_geometry.theory.map(lambda pole: pole.clone(nmodes=1. * (rng.uniform(size=pole.size) < 0.8)))
+        theory = window_geometry.theory.map(lambda pole: pole.clone(nmodes=1. * (np.arange(pole.size) % 3 == 0)))
+        window_realization = window_geometry.clone(value=rng.uniform(size=window_geometry.shape), theory=theory)
+        window_realizations.append(window_realization)
+    #method = 'spline'
+    method = 'gaussian_process'
+    window = interpolate_window_realizations(window_geometry, window_realizations=window_realizations, method=method)
+
+
+def test_count3close():
+    for tracer in ['BGS_BRIGHT-21.35', 'LRG', 'ELG_LOPnotqso', 'QSO'][1:2]:
+        for zrange in tools.propose_fiducial('zranges', tracer):
+            for region in ['NGC', 'SGC'][:1]:
+                version = 'data-dr2-v2'
+                catalog_options = dict(version=version, tracer=tracer, zrange=zrange, region=region, weight='default-FKP', nran=1)
+                data = tools.read_clustering_catalog(kind='data', keep_columns=True, **catalog_options)
+                from cucount.numpy import count2, count3close, Particles, BinAttrs, SelectionAttrs, MeshAttrs, setup_logging
+                setup_logging()
+                data = Particles(data['POSITION'], data['INDWEIGHT'])
+                battrs = BinAttrs(theta=np.linspace(0., 1., 100))
+                import time
+                t0 = time.time()
+                counts = count2(data, data, battrs=battrs)['weight']
+                print(f'count2 {time.time() - t0:.2f}')
+                """
+                t0 = time.time()
+                sattrs = SelectionAttrs(theta=(0., 0.05))
+                counts = count3close(data, data, data, battrs12=battrs, sattrs12=sattrs, battrs13=battrs)['weight']
+                print(f'count3 {time.time() - t0:.2f}')
+                """
+                t0 = time.time()
+                battrs = BinAttrs(s=np.linspace(0., 100., 100))
+                counts = count2(data, data, battrs=battrs)['weight']
+                print(f'count2 {time.time() - t0:.2f}')
+                t0 = time.time()
+                sattrs = SelectionAttrs(theta=(0., 0.05))
+                battrs = BinAttrs(s=np.linspace(0., 100., 100))
+                counts = count3close(data, data, data, battrs12=battrs, sattrs12=sattrs, battrs13=battrs)['weight']
+                print(f'count3 {time.time() - t0:.2f}')
+
+
+
+def test_auw3(stats=['mesh3_spectrum']):
+    stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
+    for tracer in ['LRG', 'ELG_LOPnotqso'][:1]:
+        zranges = tools.propose_fiducial('zranges', tracer)[-1:]
+        for region in ['NGC', 'SGC'][:1]:
+            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zranges, region=region, imock=1, nran=2)
+            #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
+            catalog_options['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
+            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh3_spectrum={'ells': [(0, 0, 0), (2, 0, 2)], 'auw': True})
+
+
 if __name__ == '__main__':
 
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.85'
@@ -417,7 +496,10 @@ if __name__ == '__main__':
     setup_logging()
 
     jax.distributed.initialize()
-    test_window_fm('LRG')
+    #test_window_fm('LRG')
+
+    # test_auw3()
+    # test_window_fm('LRG')
     # test_correlation()
     # test_covariance()
     # test_stats_fn()
@@ -430,8 +512,8 @@ if __name__ == '__main__':
     # test_rotation()
     # test_window3()
     # test_stats_fn()
-    # test_auw(stats=['mesh2_spectrum'])
-    # test_bitwise(stats=['mesh2_spectrum'])
+    # test_auw2()
+    test_bitwise()
     # test_expand_randoms_stats()
     # test_optimal_weights()
     # test_cross()

@@ -944,6 +944,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
 
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
@@ -1169,10 +1171,20 @@ def _format_bitweights(bitweights):
     if bitweights is None:
         return []
     if isinstance(bitweights, (tuple, list)):
-        return list(bitweights)
-    if bitweights.ndim == 2:
-        return list(bitweights.T)
-    return [bitweights]
+        bitweights = list(bitweights)
+    elif bitweights.ndim == 2:
+        bitweights = list(bitweights.T)
+    else:
+        bitweights = [bitweights]
+
+    def _native_endian(array):
+        # move from big endian (>) from FITS to native endian (=)
+        array = np.asarray(array)
+        if array.dtype.byteorder not in ("=", "|"):
+            array = array.byteswap().view(array.dtype.newbyteorder("="))
+        return array
+
+    return [_native_endian(array) for array in bitweights]
 
 
 @default_mpicomm
@@ -1185,11 +1197,12 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
             catalog = Catalog.read(fn, group='LSS', mpicomm=mpicomm, **kwargs)
         except KeyError:
             catalog = Catalog.read(fn, mpicomm=mpicomm, **kwargs)
-    elif one_fn.endswith('.fits'):
+    elif one_fn.endswith('.fits') or one_fn.endswith('.fits.gz'):
         catalog = Catalog.read(fn, mpicomm=mpicomm, backend=kwargs.get('backend', 'fitsio'))
         catalog.get(catalog.columns())  # Faster to read all columns at once
     else:
         catalog = Catalog.read(fn, mpicomm=mpicomm)
+    catalog.attrs.update(catalog.header)  # for header not transmitted in pickling
     if 'WEIGHT' not in catalog:
         warnings.warn('WEIGHT not in catalog')
         catalog['WEIGHT'] = catalog.ones()
@@ -1419,6 +1432,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             forfa_data = _read_catalog(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
             return complete_from_full_data(forfa_data, full_data, nz=nz, tracer=tracer,
                                     with_completeness=complete.get('with_completeness', True),
+                                    downsample_nobj=complete.get('downsample_nobj', False),
                                     seed=complete.get('seed', 100 * imock))
 
         if kind == 'data':
@@ -2175,7 +2189,7 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     return randoms
 
 
-def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, seed=42):
+def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, downsample_nobj=False, seed=42):
     """
     Create complete data catalog from For Fiber Assignment (FA) and Full catalogs.
 
@@ -2215,10 +2229,17 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
         r = rng.random(data.size)
         downsample_z = np.where(data['Z'] < 1.49, r < 0.96, r < 0.76)
         data = data[downsample_z]
+    _mask_assigned = data['ZWARN'] != 999999
     if with_completeness:
-        mask_assigned = data['ZWARN'] != 999999
+        mask_assigned = _mask_assigned
     else:
         mask_assigned = data.ones(dtype=bool)
+    if downsample_nobj:
+        rng = np.random.RandomState(seed=seed)
+        r = rng.random(data.size)
+        mask = r <= _mask_assigned.sum() / _mask_assigned.size
+        data = data[mask]
+        mask_assigned = mask_assigned[mask]
     for name in ['WEIGHT', 'WEIGHT_COMP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'FRAC_TLOBS_TILES']:
         data[name] = data.ones()
     for name in ['NZ', 'NX']:
