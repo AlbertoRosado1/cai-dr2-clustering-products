@@ -31,7 +31,8 @@ import lsstypes as types
 
 from . import tools
 from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, setup_logging
-from .correlation2_tools import compute_angular_upweights, compute_particle2_correlation
+from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation
+
 from .spectrum2_tools import (
     compute_mesh2_spectrum,
     compute_window_mesh2_spectrum,
@@ -40,6 +41,7 @@ from .spectrum2_tools import (
     compute_rotation_mesh2_spectrum,
     compute_window_mesh2_spectrum_fm,
 )
+from .correlation3_tools import compute_particle3_angular_upweights
 from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum
 from .recon_tools import compute_reconstruction
 
@@ -193,22 +195,28 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             randoms[tracer] = randoms[tracer][:catalog_options[tracer]['nran']]  # keep only relevant random files
 
     # Compute angular upweights for fiber collision corrections if requested
-    if with_catalogs and any(options[stat].get('auw', False) for stat in stats):
+    if with_catalogs:
 
         def get_data(tracer):
             # Load full parent catalogs (before any selection) for AUW computation
             _catalog_options = catalog_options[tracer] | dict(zrange=None)
             return {kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_data', 'parent_data']}
 
-        # Compute angular upweights from fibered vs parent catalogs
-        auw = compute_angular_upweights(*[functools.partial(get_data, tracer) for tracer in tracers])
-        fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=None) for tracer in tracers}
-        fn = get_stats_fn(kind='particle2_angular_upweights', catalog=fn_catalog_options)
-        # Write computed angular upweights to disk
-        tools.write_stats(fn, auw)
-        # Update all statistics options with computed angular upweights
-        for key, kw in options.items():
-            if kw.get('auw', False): kw['auw'] = auw  # update with angular upweights
+        funcs = {2: compute_particle2_angular_upweights, 3: compute_particle3_angular_upweights}
+
+        for npt, func in funcs.items():
+            stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}'])]
+            if any(options[stat].get('auw', False) for stat in stats_npt):
+                # Compute angular upweights from fibered vs parent catalogs
+                auw = func(*[functools.partial(get_data, tracer) for tracer in tracers])
+                fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=None) for tracer in tracers}
+                fn = get_stats_fn(kind=f'particle{npt:d}_angular_upweights', catalog=fn_catalog_options)
+                #auw = types.read(fn)
+                # Write computed angular upweights to disk
+                tools.write_stats(fn, auw)
+                # Update all statistics options with computed angular upweights
+                for stat in stats_npt:
+                    if options[stat].get('auw', False): options[stat]['auw'] = auw  # update with angular upweights
 
     # Loop over all requested redshift bins
     for zvals in zip(*(zranges[tracer] for tracer in tracers)):
