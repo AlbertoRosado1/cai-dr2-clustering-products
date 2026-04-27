@@ -31,6 +31,7 @@ import logging
 
 import os
 from pathlib import Path
+import itertools
 import functools
 
 import numpy as np
@@ -100,7 +101,9 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
                 options['window_mesh2_spectrum_fm'] = {}
                 # for ell=0: 4 is the max that I can fit in memory with nran=1 / for ell=2 -> I need to go down to 3...
                 options['window_mesh2_spectrum_fm']['batch_size'] = 3  
-                options['window_mesh2_spectrum_fm']['spectrum_regions'] = kwargs.get('spectrum_regions', ['NGC', 'SGC'])
+
+                if 'spectrum_regions_zranges' in kwargs:
+                    options['window_mesh2_spectrum_fm']['spectrum_regions_zranges'] = kwargs['spectrum_regions_zranges']
 
                 options['window_mesh2_spectrum_fm']['geo'] = kwargs.get('geo', True)
                 options['window_mesh2_spectrum_fm']['ric'] = kwargs.get('ric', True)
@@ -127,8 +130,6 @@ def postprocess_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 
 
         if 'extra' in kwargs: options['extra'] = kwargs['extra']
 
-        print(options)
-
         if 'window_mesh2_spectrum_fm' in stats:
             options['window_mesh2_spectrum_fm'] = {}
 
@@ -138,8 +139,6 @@ def postprocess_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 
 
             options['window_mesh2_spectrum_fm']['n_realizations'] = 10 #10
             options['window_mesh2_spectrum_fm']['seeds'] = [50, 20, 77, 80, 97, 6, 52, 64, 76, 81]
-
-            options['window_mesh2_spectrum_fm']['theory_rebin'] = 10  # reduce the number of points -> greatly improve the computation time.
             
             for region in regions: 
                 options['catalog']['region'] = region
@@ -182,6 +181,7 @@ if __name__ == '__main__':
 
     srun -n 4 python desipipe_data_png.py --interactive --blinded
     
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0 2
     srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ric --ellsout 0 2
     
     """
@@ -259,14 +259,14 @@ if __name__ == '__main__':
 
     else:
         stats = ['window_mesh2_spectrum_fm']
-        postprocess = ['combine_window_mesh2_spectrum', 'combine_regions']
+        postprocess = ['combine_window_mesh2_spectrum', 'combine_regions'] if args.geo and args.ric else []
         logger.info(f'Running stats {stats} and postprocess {postprocess}')
 
         regions = ['ALL']    
         spectrum_regions = ['NGC', 'SGC']
         logger.info(f'Input regions: {regions} and Output regions: {spectrum_regions}')
 
-        tracers = ['LRG', 'QSO'][1:]
+        tracers = ['LRG', 'QSO'][:1]
         for tracer in tracers:
             from clustering_statistics import tools
             logger.info(tracer)
@@ -277,11 +277,11 @@ if __name__ == '__main__':
             weights = ['default-fkp-oqe']
             logger.info(f'{weights=}')
 
-            kwargs = {'geo': args.geo, 'ric': args.ric, 'ellsout': args.ellsout}
+            kwargs = {'geo': args.geo, 'ric': args.ric, 'ellsout': args.ellsout, 'spectrum_regions_zranges': list(itertools.product(["NGC", "SGC"], zranges))}
             logger.info(kwargs)
 
-            # get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, 
-            #                regions=regions, stats=stats, spectrum_regions=['NGC', 'SGC'], **kwargs)
+            get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, 
+                           regions=regions, stats=stats, **kwargs)
 
             if 'combine_window_mesh2_spectrum' in postprocess:
                 postprocess_stats(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, 
