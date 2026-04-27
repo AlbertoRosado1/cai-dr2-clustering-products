@@ -24,7 +24,7 @@ def read_data(data_dir='.', mocks_dir=None,
         window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra='with_ic'))
     elif add_ic and not aladr1:
         logger.info('Reading the window with integral constraint contribution (DR2 style)...') 
-        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra='RIC+AIC'))
+        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra='RIC+AMR'))
     else:
         logger.info('Reading the window without integral constraint contribution...')
         window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
