@@ -56,8 +56,8 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
                 if onthefly == 'complete':
                     options['catalog'][itracer]['complete'] = {}
                 elif onthefly == 'reshuffle':
-                    merged_dir = Path(f'/pscratch/sd/a/arosado/cai-dr2-benchmarks/merged_catalogs/{version}/')
-                    options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', cat_dir=merged_dir, **(options['catalog'][itracer] | dict(region='ALL')))}                
+                    merged_dir = tools.base_stats_dir / 'merged_catalogs' / version
+                    options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', cat_dir=merged_dir, **(options['catalog'][itracer] | dict(region='ALL')))}               
             
             get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project, extra=onthefly if onthefly else '')
             compute_stats_from_options(stats, analysis=analysis, get_stats_fn=get_stats_fn, cache=cache, **options)
