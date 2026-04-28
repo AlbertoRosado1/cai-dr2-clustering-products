@@ -132,7 +132,7 @@ if __name__ == '__main__':
     regions  = ['NGC','SGC']
     tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
     max_mocks_per_batch_qso = 20
-    max_mocks_per_batch = 10
+    max_mocks_per_batch_others = 10
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
@@ -142,7 +142,7 @@ if __name__ == '__main__':
     # regions = ['N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
     # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
     # max_mocks_per_batch_qso = 10
-    # max_mocks_per_batch = 5 
+    # max_mocks_per_batch_others = 5 
 
     # run fiducial local_png
     # stats       = ['mesh2_spectrum']
@@ -151,8 +151,8 @@ if __name__ == '__main__':
     # project  = f'{analysis}/base'
     # weight   = 'default-fkp-oqe'
     # regions  = ['NGC','SGC']
-    tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    # max_mocks_per_batch = max_mocks_per_batch_qso = 50
+    # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
+    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 50
 
     onthefly = None
     
@@ -160,7 +160,7 @@ if __name__ == '__main__':
         if tracer == 'QSO':
              max_mocks_per_batch = max_mocks_per_batch_qso # allow mocks to be processed since QSOs only have one zbin
         else:
-             max_mocks_per_batch = max_mocks_per_batch
+             max_mocks_per_batch = max_mocks_per_batch_others
         if 'png' in analysis:
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
