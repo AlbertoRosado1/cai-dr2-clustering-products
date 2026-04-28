@@ -25,6 +25,8 @@ doc/_build/
 **/log
 **/tmp
 
+.vscode/
+
 # Unit test / coverage reports
 **/.coverage
 **/slurm*

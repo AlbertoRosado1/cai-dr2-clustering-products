@@ -384,9 +384,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         funcs = {"window_mesh2_spectrum_fm": compute_window_mesh2_spectrum_fm}
         for stat, func in funcs.items():
             if stat in stats:
-                # Forward model window only supports auto-correlations currently
-                if len(tracers) > 1:
-                    raise NotImplementedError("Forward model window function not yet implemented for cross-correlations")
+                # if autocorr set tracers = [tracer, tracer], else keep order for cross-corr
+                if len(tracers) == 1:
+                    tracers = [tracers[0], tracers[0]]
 
                 window_options = dict(options[stat])
                 selection_weights = window_options.pop("selection_weights", None)
@@ -419,9 +419,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
                 if theory_fn is None:
                     # Auto-compute fiducial theory from spectrum and window
-                    products_fn = {spectrum_region: {} for spectrum_region in window_options["spectrum_regions"]}
+                    products_fn = {spectrum_region: {} for spectrum_region in window_options["spectrum_regions_zranges"]}
                     # Collect power spectrum and window, for each region if relevant
-                    for spectrum_region in window_options["spectrum_regions"]:
+                    for _region, _zrange in window_options["spectrum_regions_zranges"]:
                         for name in ["spectrum", "window"]:
                             kind_stat = (
                                 stat.replace("window_", "").replace("_fm", "") if name == "spectrum" else stat.replace("window_", f"{name}_").replace("_fm", "")
@@ -432,20 +432,27 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 kw = options[kind_stat] | {"auw": False, "cut": False}
                                 fn = get_stats_fn(
                                     kind=kind_stat,
-                                    catalog=fn_catalog_options[tracers[0]],
-                                    **kw | {"region": spectrum_region},
+                                    catalog=fn_catalog_options[tracers[0]] if tracers[1] == tracers[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                                    **kw | {"region": _region, "zrange": _zrange},
                                 )
-                            products_fn[spectrum_region][name] = fn
+                            products_fn[(_region, _zrange)][name] = fn
 
                     # Load spectra and windows from disk
-                    spectra = [types.read(products_fn[spectrum_region]["spectrum"]) for spectrum_region in window_options["spectrum_regions"]]
-                    windows = [types.read(products_fn[spectrum_region]["window"]) for spectrum_region in window_options["spectrum_regions"]]
+                    spectra = [types.read(products_fn[(_region, _zrange)]["spectrum"]) for _region, _zrange in window_options["spectrum_regions_zranges"]]
+                    windows = [types.read(products_fn[(_region, _zrange)]["window"]) for _region, _zrange in window_options["spectrum_regions_zranges"]]
                     # Combine measurements from multiple regions and fit for theory
                     theory = types.sum(
-                        [run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window, theory='kaiser') for spectrum, window in zip(spectra, windows, strict=True)]
+                        [
+                            run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window, theory="kaiser")
+                            for spectrum, window in zip(spectra, windows, strict=True)
+                        ]
                     )
-                    spectrum = types.sum(spectra)
-                    theory_fn = get_stats_fn(kind=theory_stat, catalog=(fn_catalog_options[tracers[0]]))
+                    theory_fn = get_stats_fn(
+                        kind=theory_stat,
+                        catalog=fn_catalog_options[tracers[0]]
+                        if tracers[1] == tracers[0]
+                        else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                    )
                     tools.write_stats(theory_fn, theory)
 
                 # Synchronize before reading theory
@@ -485,26 +492,26 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     # Rebin theory to speed up window function computation
                     theory = theory.select(k=slice(0, None, theory_rebin))
 
-                # Load example of output measurement. If spectrum_fn provided, use it; otherwise use spectrum loaded for the preliminary fit in the theory block above
-                spectrum_fn = window_options.pop("spectrum", None)
+                # Load example of output measurements. If spectra_fn provided, use it; otherwise use spectra loaded for the preliminary fit in the theory block above
+                spectra_fn = window_options.pop("spectra", None)
                 fn_window_options = window_options | {"auw": False, "cut": False}
-                if spectrum_fn is None:
-                    spectrum_fn = {}
+                if spectra_fn is None:
+                    spectra_fn = []
                     spectrum_stat = stat.replace("window_", "").replace("_fm", "")
-                    for spectrum_region in window_options["spectrum_regions"]:
+                    for _region, _zrange in window_options["spectrum_regions_zranges"]:
                         fn_window_options = options[spectrum_stat] | fn_window_options
-                        spectrum_fn[spectrum_region] = get_stats_fn(
-                            kind=spectrum_stat, catalog=fn_catalog_options,
-                            **(options[spectrum_stat] | {"auw": False, "cut": False} | {"region": spectrum_region}))
-                    spectrum = types.sum([types.read(spectrum_fn[spectrum_region]) for spectrum_region in window_options["spectrum_regions"]])
-                else:
-                    spectrum = types.read(spectrum_fn)
+                        spectra_fn.append(
+                            get_stats_fn(
+                                kind=spectrum_stat, catalog=fn_catalog_options, **(options[spectrum_stat] | {"auw": False, "cut": False} | {"region": _region, "zrange": _zrange})
+                            )
+                        )
+                spectra = [types.read(spectrum_fn) for spectrum_fn in spectra_fn]
 
                 # Now compute window function using forward model with derivatives
-                window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, theory=theory, **window_options)
+                window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectra=spectra, theory=theory, **window_options)
                 # This is a dict of dict of lists of windows : {modeled_effect: {spectrum_region: [window, ...], ...}, ...}
                 for effect in window:  # geo, RIC or RIC+AMR
-                    for spectrum_region in window[effect]:  # eg NGC, SGC
+                    for _region, _zrange in window_options["spectrum_regions_zranges"]:  # window[effect]:  # eg NGC, SGC and a zrange
                         for i, seed in enumerate(window_options['seeds']):
                             # FIXME this overrides the extra option pre-defined in get_stats_fn through e.g. functools.partial. Not sure this is an actual issue.
                             if window_options['ellsout'] is None:
@@ -513,8 +520,11 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 listell = "".join(map(str, window_options['ellsout']))
                                 extra = f'{effect}_{listell}_seed={seed}'
 
-                            options = fn_window_options | {"extra": extra, "region": spectrum_region}
-                            tools.write_stats(get_stats_fn(kind=stat, catalog=fn_catalog_options, **options), window[effect][spectrum_region][i])
+                            options = fn_window_options | {"extra": extra, "region": _region, "zrange": _zrange}
+                            tools.write_stats(get_stats_fn(kind=stat, catalog=fn_catalog_options, **options), window[effect][(_region, _zrange)][i])
+
+                # synchronize here to avoid postprocess trying to load windows that haven't been written yet
+                jax.experimental.multihost_utils.sync_global_devices("window_fm_IO")  # wait for the writer
 
         # Covariance matrix computation
         funcs = {'covariance_mesh2_spectrum': compute_covariance_mesh2_spectrum}
@@ -619,6 +629,7 @@ def list_stats(stats, get_stats_fn=tools.get_stats_fn, **kwargs):
         stats = [stats]
 
     # Fill fiducial defaults
+    extra = kwargs.pop('extra', None)
     kwargs = fill_fiducial_options(kwargs)
     catalog_options = kwargs['catalog']
     tracers = list(catalog_options.keys())
@@ -634,7 +645,7 @@ def list_stats(stats, get_stats_fn=tools.get_stats_fn, **kwargs):
             # Generate option combinations (raw, cut, auw)
             for kw in _expand_cut_auw_options(stat, kwargs[stat]).values():
                 kw = dict(catalog=_catalog_options, **kw)
-                fn = get_stats_fn(kind=stat, **kw)
+                fn = get_stats_fn(kind=stat, **(kw | {"extra": extra}))
                 toret[stat].append((fn, kw))
     return toret
 
@@ -660,6 +671,8 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
         postprocess = [postprocess]
 
     imocks = kwargs.pop('imocks', None)
+    extra = kwargs.pop('extra', None)
+    
     # Fill fiducial defaults
     options = fill_fiducial_options(kwargs, analysis=analysis)
     catalog_options = options['catalog']
@@ -717,11 +730,11 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                 for stat in stats:
                     if 'window' in stat or 'covariance' in stat:
                         # Window and covariance don't need to loop over mocks
-                        _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **options)
+                        _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(options| {"extra": extra}))
                     else:
                         # Measurements need to loop over mocks
                         for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options)):
-                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **_options)
+                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(_options| {"extra": extra}))
 
         if 'combine_window_mesh2_spectrum' in postprocess:
             # Combine base window calculation with forward-modeled windows
@@ -732,9 +745,8 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
             window_options = options.get(stat, {})
             window_fm_options = options.get(f'{stat}_fm', {})
             window_fm = None
-            # Iterate on cut = False, True
-            for window_geometry_fn, kw in list_stats(
-                stat, get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **{stat: window_options, 'mesh2_spectrum': options.get('mesh2_spectrum', {})})[stat]:
+
+            for window_geometry_fn, kw in list_stats(stat, get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **{stat: window_options, 'mesh2_spectrum': options.get('mesh2_spectrum', {})})[stat]:
                 window_geometry = types.read(window_geometry_fn)
                 if window_fm is None:
                     window_realizations = []
@@ -754,7 +766,8 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                     downscale = np.kron(np.eye(len(window_geometry.theory.ells)), block)
                     # use it to "interpolate" the forward-modeled window to the geometry of the base window
                     window_fm = window_fm.clone(value=window_fm.value().dot(downscale))
-                fn = get_stats_fn(kind=stat, **kw)
+                
+                fn = get_stats_fn(kind=stat, **(kw | {"extra": effect}))
                 # Adding all effects
                 window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
                 tools.write_stats(fn, window)
