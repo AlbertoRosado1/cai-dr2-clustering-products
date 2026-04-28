@@ -259,7 +259,7 @@ if __name__ == '__main__':
 
     else:
         stats = ['window_mesh2_spectrum_fm']
-        postprocess = ['combine_window_mesh2_spectrum', 'combine_regions'] if args.geo and args.ric else []
+        postprocess = ['combine_window_mesh2_spectrum', 'combine_regions'] if args.ric else []
         logger.info(f'Running stats {stats} and postprocess {postprocess}')
 
         regions = ['ALL']    
