@@ -115,18 +115,24 @@ if __name__ == '__main__':
     
     # to run job
     mode = 'slurm'
-    imocks2run = 150 + np.arange(50)
+    imocks2run = np.arange(2000)
+    if True:
+        # bad_imocks = np.concatenate([300+np.arange(50),[202, 203, 205, 211, 1275]])
+        # bad_imocks = np.loadtxt(f'../helper_scripts/dubious_{version}.txt',dtype=int)
+        bad_imocks = [211, 1275]
+        imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
-    # postprocess = ['combine_regions']
-    # analysis = 'full_shape'
-    # project  = f'{analysis}/base'
-    # weight   = 'default-FKP'
-    # regions  = ['NGC','SGC']
-    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # max_mocks_per_batch = 10
+    stats       = ['mesh2_spectrum', 'mesh3_spectrum']#, 'particle2_correlation']
+    postprocess = ['combine_regions']
+    analysis = 'full_shape'
+    project  = f'{analysis}/base'
+    weight   = 'default-FKP'
+    regions  = ['NGC','SGC']
+    tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    max_mocks_per_batch_qso = 20
+    max_mocks_per_batch_others = 10
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
@@ -134,22 +140,27 @@ if __name__ == '__main__':
     # project = f'{analysis}/data_splits'
     # weight  = 'default-FKP'
     # regions = ['N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
-    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # max_mocks_per_batch = 5 
+    # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    # max_mocks_per_batch_qso = 10
+    # max_mocks_per_batch_others = 5 
 
     # run fiducial local_png
-    stats       = ['mesh2_spectrum']
-    postprocess = ['combine_regions']
-    analysis = 'local_png'
-    project  = f'{analysis}/base'
-    weight   = 'default-fkp-oqe'
-    regions  = ['NGC','SGC']
-    tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    max_mocks_per_batch = 10
+    # stats       = ['mesh2_spectrum']
+    # postprocess = ['combine_regions']
+    # analysis = 'local_png'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-fkp-oqe'
+    # regions  = ['NGC','SGC']
+    # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
+    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 50
 
     onthefly = None
     
     for tracer in tracers:
+        if tracer == 'QSO':
+             max_mocks_per_batch = max_mocks_per_batch_qso # allow mocks to be processed since QSOs only have one zbin
+        else:
+             max_mocks_per_batch = max_mocks_per_batch_others
         if 'png' in analysis:
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
@@ -160,7 +171,7 @@ if __name__ == '__main__':
                                                                                            region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
             imocks = exists[1]['imock']
             rerun = []
-            for zrange in zranges:
+            for zrange in zranges[-1:]: # only check last zrange to speed up this step.
                 for kind in stats:
                     stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')), 
                                      tracer=tracer, region=regions[-1], weight=weight, zrange=zrange, version=version, project=project,
