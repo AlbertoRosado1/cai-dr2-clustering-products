@@ -18,6 +18,13 @@ cd desi-clustering
 pip install -e .
 ```
 
+Importantly, if you are working at NERSC with the `cosmodesi` conda environment, you need to unload the `desi-clustering` loaded with `cosmodesi`:
+```` bash
+module unload desi-clustering
+# add packages locally installed to the PYTHONPATH (supposing you are working with python3.12 which is the python version in cosmodesi)
+export PYTHONPATH=$HOME/.local/lib/python3.12/site-packages/:$PYTHONPATH
+```
+
 ## Overview
 
 The package follows a simple structure:
@@ -30,18 +37,18 @@ common to Full Shape, BAO and PNG Key Projects
 
 ## Environment
 
-```
+```bash
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main  # source the environment
 # You may want to have it in the jupyter-kernel for plots
 ${COSMODESIMODULES}/install_jupyter_kernel.sh main  # this to be done once
 ```
 You may already have the above kernel (corresponding to the standard GQC environment) installed.
 In this case, you can delete it:
-```
+```bash
 rm -rf $HOME/.local/share/jupyter/kernels/cosmodesi-main
 ```
 and rerun:
-```
+```bash
 ${COSMODESIMODULES}/install_jupyter_kernel.sh main
 ```
 Note that you may need to restart (close and reopen) your notebooks for the changes to propagate.

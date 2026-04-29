@@ -544,14 +544,14 @@ def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale
     for tracer in order: 
         # We do not link the damping term from the cross-correlation and the auto-correlation
         # Because they are different effective redshifts and we do not know the a priori.
-        fix_likelihood_bias_and_damping(total_likelihood, tracer=tracer, zeffs=zeffs, derived_cross_bias=True, nickname=tracer)
+        fix_likelihood_bias_and_damping(total_likelihood, tracer=tracer, zeffs=zeffs, derived_cross_bias=True, nickname=tracer, available_tracers=order)
     total_likelihood()
 
     return total_likelihood
 
 
 def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, analytical_covariance=True, 
-                           force_profiling=False, base_dir=None, fiducial=None, return_profiler=False):
+                           force_profiling=False, base_dir=None, fiducial=None, extra_fn='', return_profiler=False):
     """Run the profiler on a single mock realisation and save the result to disk.
 
     Parameters
@@ -573,13 +573,13 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
     force_profiling : bool, optional
         If True, rerun even if output file already exists. Default is False.
     base_dir : str, optional
-        Base directory (stats_dir + project). Profile outputs are written under the corresponding profiles directory.
+        Base directory. Profile outputs are written under the corresponding profiles directory.
     """
     import os
 
     kwargs = {'LRG_LRGxQSO_ell0.b1': 2.15, 'LRG_LRGxELG_ell0.b1': 2.15, 'ELG_ELGxQSO_ell0.b1': 1.2, 'scale_covariance': 1}
 
-    fn_profile = base_dir.replace('summary_statistics', 'profiles') + f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}.npy"
+    fn_profile = base_dir + f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.npy"
     if (os.path.isfile(fn_profile) and force_profiling) or (not os.path.isfile(fn_profile)):
         os.makedirs(os.path.dirname(fn_profile), exist_ok=True)
         
@@ -611,7 +611,7 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
 
         if (kmin == 1e-3) and analytical_covariance and (len(tracers) == 1):
             ylims = [(2e3, 4e4), (2e3, 4e4)] if tracer in ['ELGxELG', 'ELGxQSO'] else None
-            fn_obs = base_dir.replace('summary_statistics', 'profiles') + f"mock{imock}/bestfit_{tracer}_analytical_cov.png"
+            fn_obs = base_dir + f"mock{imock}/bestfit_{tracer}_analytical_cov.png"
             plot_observables({tracer: obs}, ylims=ylims, fn_output=fn_obs, show=False)
 
         if return_profiler:
