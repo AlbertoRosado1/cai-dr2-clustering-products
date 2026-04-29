@@ -259,14 +259,17 @@ if __name__ == '__main__':
 
     else:
         stats = ['window_mesh2_spectrum_fm']
-        postprocess = ['combine_window_mesh2_spectrum', 'combine_regions'] if args.geo and args.ric else []
+        postprocess = ['combine_window_mesh2_spectrum', 'combine_regions'] if args.ric else []
         logger.info(f'Running stats {stats} and postprocess {postprocess}')
 
         regions = ['ALL']    
         spectrum_regions = ['NGC', 'SGC']
         logger.info(f'Input regions: {regions} and Output regions: {spectrum_regions}')
 
-        tracers = ['LRG', 'QSO'][:1]
+        #tracers = ['LRG', 'QSO'][:1]
+        #tracers = ['ELGnotqso', ('LRG', 'QSO'), ('LRG', 'ELGnotqso')]
+        tracers = [('ELGnotqso', 'QSO')]
+
         for tracer in tracers:
             from clustering_statistics import tools
             logger.info(tracer)
