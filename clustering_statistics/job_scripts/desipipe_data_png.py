@@ -266,7 +266,10 @@ if __name__ == '__main__':
         spectrum_regions = ['NGC', 'SGC']
         logger.info(f'Input regions: {regions} and Output regions: {spectrum_regions}')
 
-        tracers = ['LRG', 'QSO'][:1]
+        #tracers = ['LRG', 'QSO'][:1]
+        #tracers = ['ELGnotqso', ('LRG', 'QSO'), ('LRG', 'ELGnotqso')]
+        tracers = [('ELGnotqso', 'QSO')]
+
         for tracer in tracers:
             from clustering_statistics import tools
             logger.info(tracer)
