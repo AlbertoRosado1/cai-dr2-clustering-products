@@ -70,7 +70,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             
             for itracer in options['catalog']:
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
-                options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
+                options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
                     options['catalog'][itracer]['complete'] = {'downsample_nobj': 'downsample' in onthefly}
                 elif onthefly == 'reshuffle':
@@ -86,7 +86,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
         postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
-def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='glam-uchuu-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum', 'mesh3_spectrum'], weight='default-FKP', postprocess=['combine_regions'], zranges=None, **kwargs):
+def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum', 'mesh3_spectrum'], weight='default-FKP', postprocess=['combine_regions'], zranges=None, **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
@@ -119,7 +119,7 @@ if __name__ == '__main__':
     tracers = ['LRG', 'ELG_LOPnotqso']
 
     # run data_splits for lensing group with full_shape setup 
-    stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1]
+    stats = ['window_mesh2_spectrum', 'mesh3_spectrum'][:1]
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics'

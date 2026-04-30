@@ -11,6 +11,7 @@ _read_catalog, get_simple_tracer, _merge_options, _make_tuple, desi_dir, write_s
 
 logger = logging.getLogger('box_tools')
 
+
 def get_zrange_from_snap(tracer, zsnap=None, version='abacus-2ndgen'):
     """
     Return redshift range from snapshot for given tracer and version.

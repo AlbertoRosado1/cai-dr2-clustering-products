@@ -333,7 +333,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
                 # Load measured spectrum (or compute if not provided)
                 spectrum_fn = window_options.pop('spectrum', None)
-                fn_window_options = window_options | dict(auw=False, cut=False)
+                fn_window_options = window_options | dict(auw=False)
                 if spectrum_fn is None:
                     # Auto-detect spectrum filename from options
                     spectrum_stat = stat.replace("window_", "")
@@ -375,7 +375,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 # Write raw correlation functions (intermediate products) to disk
                 for key in window:
                     if 'correlation' in key:  # window functions
-                        fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(extra=extra)))
+                        fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(cut=False, extra=extra)))
                         tools.write_stats(fn, window[key])
         # Synchronize before window forward model computation
         jax.experimental.multihost_utils.sync_global_devices('window')  # wait for the writer
