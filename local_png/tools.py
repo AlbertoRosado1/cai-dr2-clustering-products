@@ -97,7 +97,7 @@ def rebin_data(pk, window, cov, mocks, tracer='LRG', kmin=1e-3, kmax=0.08, kpivo
     return pk, window, cov, mocks
 
 
-def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bias=True, nickname=None, **kwargs):
+def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bias=True, nickname=None, available_tracers=None, **kwargs):
     """Apply bias and damping parameter relations between the paramters of the likelihood both for ell=0/2 and auto/cross power spectrum.
 
     Parameters
@@ -110,28 +110,41 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
         Suffix inserted between the tracer shortname and '_ell{ell}' in the cross-correlation theory
         parameter names (e.g. nickname='LRGxELG' -> 'ELG_LRGxELG_ell0'). Must match the nickname used in
         get_obervable_and_likelihood. Default is None (no suffix, legacy behaviour).
+    available_tracers : list or set, optional
+        List of tracers for which complete data (including auto-correlations) is available.
+        Used to determine which cross-correlation biases can be derived. If None, assumes all
+        auto-correlations are available.
 
     Returns
     -------
     likelihood
         Same likelihood object, updated in place.
     """
-    from clustering_statistics import tools
 
     def _rescale_bias_params(likelihood, tracer, zeff):
         """ 
         Fix the bias parameters in the likelihood according to the redshift dependence of the bias.
+        Only modifies the parameter if both source and target exist in the likelihood.
 
         Args:
             likelihood: The likelihood object.
-            tracer: The tracer for which to fix the bias parameters.
+            tracer: The tracer for which to fix the bias parameters. tracer[0] is source, tracer[1] is target.
             zeff: The effective redshifts.
         """
         from clustering_statistics import tools        
+        source_param_name = f"{tracer[0]}.b1"
+        target_param_name = f"{tracer[1]}.b1"
+        
+        # Both parameters must exist to create a derived relationship
+        if source_param_name not in likelihood.all_params or target_param_name not in likelihood.all_params:
+            logger.debug(f"Skipping derived relationship: {source_param_name} -> {target_param_name} (missing parameter)")
+            return
+            
         # b(z) = alpha * (1 + z)**2 + beta
         alpha, beta = tools.bias(1, tracer=tracer[0][:3], return_params=True)  
         factor = (alpha * (1 + zeff[1])**2 + beta) / (alpha * (1 + zeff[0])**2 + beta)
-        likelihood.all_params[f"{tracer[1]}.b1"].update(derived='{' + f"{tracer[0]}.b1" + '}' + f' * {factor}')
+        likelihood.all_params[target_param_name].update(derived='{' + source_param_name + '}' + f' * {factor}')
+        logger.debug(f"Derived relationship: {target_param_name} = {source_param_name} * {factor}")
 
     tracers = tracer.split('x')
 
@@ -141,29 +154,47 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
             zeff = [zeffs[tracer][ell] for ell in [0, 2]]
             _rescale_bias_params(likelihood, tracer=[f"{tracers[0]}_ell0", f"{tracers[0]}_ell2"], zeff=zeff)
             # logger.warning('we neglect the redshift dependence of the damping term, for now') 
-            likelihood.all_params[f"{tracers[0]}_ell2.sigmas"].update(derived='{' + f"{tracers[0]}_ell0.sigmas" + '}')
+            param_name_ell0, param_name_ell2 = f"{tracers[0]}_ell0.sigmas",f"{tracers[0]}_ell2.sigmas"
+            likelihood.all_params[param_name_ell2].update(derived='{' + param_name_ell0 + '}')
+            logger.debug(f"Derived damping: {param_name_ell2} = {param_name_ell0}")
 
-    # Cross-correlation: derive cross biases from auto biases or let it free.
+    # Cross-correlation: 
+    # if derived_cross_bias is False: let free only one cross-correlation bias and fix the other one to break degeneracy.
+    # if derived_cross_bias is True: By default, link the bias of the cross-correlation to their auto-correlation counterparts. 
+    #                                If the auto-correlation is not available in available_tracers, use one of the cross-correlation bias as default to link #                                all the others one to him.
     if tracers[0] != tracers[1]:
         cross_suffix = f'_{nickname}' if nickname is not None else ''
         for i, tt in enumerate(tracers):
-            if derived_cross_bias:
-                # derived the bias from the auto-correlation bias, taking into account the different effective redshifts of the auto and cross correlation.
-                zeff = [zeffs['x'.join([tt, tt])][0], zeffs[tracer][0]]
-                _rescale_bias_params(likelihood, tracer=[f"{tt}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
+            if derived_cross_bias and (available_tracers is not None):
+                # if auto-tracer is available in available_tracers:
+                if 'x'.join([tt, tt]) in available_tracers:
+                    # derived the bias from the auto-correlation bias, taking into account the different effective redshifts of the auto and cross correlation.
+                    zeff = [zeffs['x'.join([tt, tt])][0], zeffs[tracer][0]]
+                    _rescale_bias_params(likelihood, tracer=[f"{tt}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
+                else:
+                    # determine default tracer to link the bias parameters, if auto-correlation data is not available.
+                    default_tracer = sorted([tracer for tracer in available_tracers if tt in tracer.split('x')])[0]
+                    if tracer == default_tracer:
+                        logger.debug(f'This parameter is free ({tt}, {tracer}), and it will be used as default to link the other cross-correlation bias parameters.')
+                    else:
+                        logger.debug(f'This parameter is free ({tt}, {tracer}), but it will be linked to {default_tracer} bias parameters to break degeneracy, since auto-tracer data for {tt} is not available.')
+                        zeff = [zeffs[default_tracer][0], zeffs[tracer][0]]
+                        _rescale_bias_params(likelihood, tracer=[f"{tt}_{default_tracer}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
+
             else:
                 # let free the cross-correlation bias, but fix one of the two biases to break degeneracy.
                 # the first linear bias parameter can be set with kwargs.          
                 if i == 0:      
                     default_b1 = kwargs.get(f"{tt}{cross_suffix}_ell0.b1", 1)
-                    likelihood.all_params[f"{tt}{cross_suffix}_ell0.b1"].update(value=default_b1, fixed=True)    
-
+                    likelihood.all_params[f"{tt}{cross_suffix}_ell0.b1"].update(value=default_b1, fixed=True) 
+    
             if len(zeffs[tracer]) > 1:
                 zeff = [zeffs[tracer][ell] for ell in [0, 2]]
                 _rescale_bias_params(likelihood, tracer=[f"{tt}{cross_suffix}_ell0", f"{tt}{cross_suffix}_ell2"], zeff=zeff)
                 # logger.warning('we neglect the redshift dependence of the damping term, for now')
                 # Note: the first damping term is fixed to 0:
                 if i == 1: likelihood.all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived='{' + f"{tt}{cross_suffix}_ell0.sigmas" + '}')
+
 
 
 def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, fix_fnl=False, engine='class', scale_covariance=1, nickname=None, **kwargs):
@@ -248,153 +279,6 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
     likelihood()
 
     return observables, likelihood
-
-
-def run_profiler(likelihood, fn_output=None, sigfigs=2):
-    """ 
-    Run the iminuit profiler on the likelihood, the results are saved in a text file if output_name is provided. fn_output should be a .txt file. 
-    """
-    from desilike.profilers import MinuitProfiler
-
-    profiler = MinuitProfiler(likelihood, seed=7)
-    profiler.maximize(niterations=10)
-    logger.info(f'\n{profiler.profiles.to_stats(tablefmt="pretty")}')
-
-    if fn_output is not None:
-        to_save = profiler.profiles.to_stats(tablefmt='list', sigfigs=sigfigs, params=profiler.profiles.choice().bestfit.params())[0]
-        np.save(fn_output, to_save)
-
-        # for latex table:
-        #_ = profiler.profiles.to_stats(fn=fn_output)
-        #np.savetxt(fn_output.replace('.txt', '_list.txt'), profiler.profiles.to_stats(tablefmt='list')[0], fmt='%s')
-
-    return profiler
-
-
-def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False, nchains=1, max_iterations=1e5, check_every=1000):
-    """Run the MCMC sampler on the likelihood, the results are saved in a text file if fn_output is provided. 
-
-    Args:
-        likelihood: Desilike Likelihood object to run the MCMC on.
-        fn_output (str, optional): Where the chains will be saved (need to have *). Defaults to 'tmp/mcmc_output_*.npy'.
-        extend_chains (bool, optional): If True, it will extend the existing chains (saved in fn_output) by running new iterations. Defaults to False.
-        nchains (int, optional): Number of chains to run. Defaults to 1.
-        max_iterations (int, optional): Maximum number of iterations to run. Defaults to 1e5.
-        check_every (int, optional): How often to check the convergence + save the current state of the chains. Defaults to 1000.
-
-    """
-    from desilike.samplers import EmceeSampler
-    chains = [fn_output.replace('*', f'{i}') for i in range(nchains)] if extend_chains else nchains
-
-    sampler = EmceeSampler(likelihood, seed=31, chains=chains, save_fn=fn_output)  
-    sampler.run(max_iterations=max_iterations, check_every=check_every)
-
-    return sampler
-
-
-def plot_observables(observables, ylims=None, show=True, fn_output=None):
-    """ 
-    Plot the observables (power spectrum multipoles) with their theory predictions and residuals.
-
-    Parameters
-    ----------
-    observables : dict
-        Mapping tracer -> observables.
-    ylims : sequence, optional
-        Y-axis limits for the monopole and quadrupole panels.
-    profile : object, optional
-        Profiler or profile-like object. If provided, an extra column is added to display
-        its summary table.
-    """
-    fig, axs = plt.subplots(2, 2, figsize=(6, 4), sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
-    fig.subplots_adjust(hspace=0.1)
-    table_ax = None
-
-    for tracer in observables.keys():
-        for obs in observables[tracer]:
-            j = 1 if 'ell2' in obs.name else 0
-
-            wtheory = obs.data.clone(value=obs.flattheory)
-           
-            data_pole = obs.data.get()
-            wtheory_pole = wtheory.get()
-            x = data_pole.coords('k')
-            std = obs.covariance.at.observable.get().std()
-
-            scale = 1.
-            axs[0, j].errorbar(x, scale * data_pole.value(), yerr=scale * std, linestyle='none', marker='o', markersize=4, label=rf'{tracer}')
-            axs[0, j].loglog(x, scale * wtheory_pole.value(), ls='-', c='k')
-
-            axs[1, j].plot(x, (data_pole.value() - wtheory_pole.value()) / std)
-            axs[1, j].set_ylim(-4, 4)
-            for offset in [-2., 2.]: axs[1, j].axhline(offset, color='k', linestyle='--')
-            for offset in [-1., 1.]: axs[1, j].axhline(offset, color='lightgray', linestyle=':')
-
-    if ylims is not None:
-        axs[0, 0].set_ylim(*ylims[0])
-        axs[0, 1].set_ylim(*ylims[1])
-    else:
-        axs[0, 0].set_ylim(1e4, 8e4)
-        axs[0, 1].set_ylim(2e3, 5e4)
-
-    axs[0, 0].legend()
-    axs[0, 1].legend()
-    axs[0, 0].set_title(r'$\ell = 0$', fontsize=10)
-    axs[0, 1].set_title(r'$\ell = 2$', fontsize=10)
-    axs[0, 0].set_ylabel(r'$P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{3}$]')
-    axs[1, 0].set_ylabel(r'$\Delta P_{\ell} / \sigma (P_{\ell})$')
-    axs[1, 0].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-    axs[1, 1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-
-    plt.tight_layout()
-    if fn_output is not None: plt.savefig(fn_output)
-    if show:
-        plt.show()
-    else:
-        plt.close()
-
-
-def get_getdist_plotter(fig_width_inch=5, fontsize=14, legend_fontsize=12, axes_labelsize=12, axes_fontsize=14, line_lables=True):
-    """Wrapper around getdist to get a plotter with the desired settings."""
-    from getdist import plots as gdplt
-
-    plotter = gdplt.get_subplot_plotter()
-    plotter.settings.fig_width_inch = fig_width_inch
-    plotter.settings.fontsize = fontsize
-    plotter.settings.legend_fontsize = legend_fontsize
-    plotter.settings.axes_labelsize = axes_labelsize
-    plotter.settings.axes_fontsize = axes_fontsize
-    plotter.settings.line_labels = line_lables
-    plotter.settings.alpha_filled_add = 0.8
-    plotter.settings.legend_loc = 'upper right'
-    plotter.settings.figure_legend_ncol = 1
-    plotter.settings.legend_colored_text = False
-
-    return plotter
-
-
-def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\rm loc}$', r'$b_1$', r'$s_{n,0}$', r'$\Sigma_s$'], 
-                  contour_colors=None, filled=True, contour_ls=None, g=None, fn_output=None, return_fig=False):
-    """ Wrapper around getdist's plot_triangle to plot the contours of the different chains."""
-    from desilike.samples import plotting
-    
-    if g is None: g = get_getdist_plotter()
-    plotting.plot_triangle(chains, params, legend_labels=legend_labels, 
-                           contour_colors=contour_colors, filled=filled, contour_ls=contour_ls, 
-                           g=g, show=False, fn=None)
-
-    if xlabels is not None:
-        for i in range(len(xlabels)):
-            g.subplots[len(xlabels)-1, i].set_xlabel(xlabels[i])
-            if i > 0:
-                g.subplots[i, 0].set_ylabel(xlabels[i])
-
-    if fn_output is not None: plt.savefig(fn_output)
-    
-    if return_fig:
-        return g.fig
-    else:
-        plt.show()
 
 
 def combine_analytical_covariances(pks, covs, order=['LRGxLRG', 'LRGxQSO', 'QSOxQSO'], fiducial=None):
@@ -548,6 +432,154 @@ def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale
     total_likelihood()
 
     return total_likelihood
+
+
+def run_profiler(likelihood, fn_output=None, sigfigs=2):
+    """ 
+    Run the iminuit profiler on the likelihood, the results are saved in a text file if output_name is provided. fn_output should be a .txt file. 
+    """
+    from desilike.profilers import MinuitProfiler
+
+    profiler = MinuitProfiler(likelihood, seed=7)
+    profiler.maximize(niterations=10)
+    logger.info(f'\n{profiler.profiles.to_stats(tablefmt="pretty")}')
+
+    if fn_output is not None:
+        to_save = profiler.profiles.to_stats(tablefmt='list', sigfigs=sigfigs, params=profiler.profiles.choice().bestfit.params())[0]
+        np.save(fn_output, to_save)
+
+        # for latex table:
+        #_ = profiler.profiles.to_stats(fn=fn_output)
+        #np.savetxt(fn_output.replace('.txt', '_list.txt'), profiler.profiles.to_stats(tablefmt='list')[0], fmt='%s')
+
+    return profiler
+
+
+def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False, nchains=1, max_iterations=1e5, check_every=1000):
+    """Run the MCMC sampler on the likelihood, the results are saved in a text file if fn_output is provided. 
+
+    Args:
+        likelihood: Desilike Likelihood object to run the MCMC on.
+        fn_output (str, optional): Where the chains will be saved (need to have *). Defaults to 'tmp/mcmc_output_*.npy'.
+        extend_chains (bool, optional): If True, it will extend the existing chains (saved in fn_output) by running new iterations. Defaults to False.
+        nchains (int, optional): Number of chains to run. Defaults to 1.
+        max_iterations (int, optional): Maximum number of iterations to run. Defaults to 1e5.
+        check_every (int, optional): How often to check the convergence + save the current state of the chains. Defaults to 1000.
+
+    """
+    from desilike.samplers import EmceeSampler
+    chains = [fn_output.replace('*', f'{i}') for i in range(nchains)] if extend_chains else nchains
+
+    sampler = EmceeSampler(likelihood, seed=31, chains=chains, save_fn=fn_output)  
+    sampler.run(max_iterations=max_iterations, check_every=check_every)
+
+    return sampler
+
+
+def plot_observables(observables, ylims=None, show=True, fn_output=None):
+    """ 
+    Plot the observables (power spectrum multipoles) with their theory predictions and residuals.
+
+    Parameters
+    ----------
+    observables : dict
+        Mapping tracer -> observables.
+    ylims : sequence, optional
+        Y-axis limits for the monopole and quadrupole panels.
+    profile : object, optional
+        Profiler or profile-like object. If provided, an extra column is added to display
+        its summary table.
+    """
+    fig, axs = plt.subplots(2, 2, figsize=(6, 4), sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
+    fig.subplots_adjust(hspace=0.1)
+
+    translator = {'LRGxLRG': 'L', 'ELGxELG': 'E', 'QSOxQSO': 'Q', 'LRGxELG': 'LxE', 'LRGxQSO': 'LxQ', 'ELGxQSO': 'ExQ'}
+
+    for tracer in observables.keys():
+        for obs in observables[tracer]:
+            j = 1 if 'ell2' in obs.name else 0
+
+            wtheory = obs.data.clone(value=obs.flattheory)
+           
+            data_pole = obs.data.get()
+            wtheory_pole = wtheory.get()
+            x = data_pole.coords('k')
+            std = obs.covariance.at.observable.get().std()
+
+            scale = 1.
+            axs[0, j].errorbar(x, scale * data_pole.value(), yerr=scale * std, linestyle='none', marker='o', markersize=4, label=rf'{translator.get(tracer)}')
+            axs[0, j].loglog(x, scale * wtheory_pole.value(), ls='-', c='k')
+
+            axs[1, j].plot(x, (data_pole.value() - wtheory_pole.value()) / std)
+            axs[1, j].set_ylim(-4, 4)
+            for offset in [-2., 2.]: axs[1, j].axhline(offset, color='k', linestyle='--')
+            for offset in [-1., 1.]: axs[1, j].axhline(offset, color='lightgray', linestyle=':')
+
+    if ylims is not None:
+        axs[0, 0].set_ylim(*ylims[0])
+        axs[0, 1].set_ylim(*ylims[1])
+    else:
+        axs[0, 0].set_ylim(1e4, 8e4)
+        axs[0, 1].set_ylim(2e3, 5e4)
+
+    axs[0, 0].legend()
+    axs[0, 1].legend()
+    axs[0, 0].set_title(r'$\ell = 0$', fontsize=10)
+    axs[0, 1].set_title(r'$\ell = 2$', fontsize=10)
+    axs[0, 0].set_ylabel(r'$P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{3}$]')
+    axs[1, 0].set_ylabel(r'$\Delta P_{\ell} / \sigma (P_{\ell})$')
+    axs[1, 0].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+    axs[1, 1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+
+    plt.tight_layout()
+    if fn_output is not None: plt.savefig(fn_output)
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+
+def get_getdist_plotter(fig_width_inch=5, fontsize=14, legend_fontsize=12, axes_labelsize=12, axes_fontsize=14, line_lables=True):
+    """Wrapper around getdist to get a plotter with the desired settings."""
+    from getdist import plots as gdplt
+
+    plotter = gdplt.get_subplot_plotter()
+    plotter.settings.fig_width_inch = fig_width_inch
+    plotter.settings.fontsize = fontsize
+    plotter.settings.legend_fontsize = legend_fontsize
+    plotter.settings.axes_labelsize = axes_labelsize
+    plotter.settings.axes_fontsize = axes_fontsize
+    plotter.settings.line_labels = line_lables
+    plotter.settings.alpha_filled_add = 0.8
+    plotter.settings.legend_loc = 'upper right'
+    plotter.settings.figure_legend_ncol = 1
+    plotter.settings.legend_colored_text = False
+
+    return plotter
+
+
+def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\rm loc}$', r'$b_1$', r'$s_{n,0}$', r'$\Sigma_s$'], 
+                  contour_colors=None, filled=True, contour_ls=None, g=None, fn_output=None, return_fig=False):
+    """ Wrapper around getdist's plot_triangle to plot the contours of the different chains."""
+    from desilike.samples import plotting
+    
+    if g is None: g = get_getdist_plotter()
+    plotting.plot_triangle(chains, params, legend_labels=legend_labels, 
+                           contour_colors=contour_colors, filled=filled, contour_ls=contour_ls, 
+                           g=g, show=False, fn=None)
+
+    if xlabels is not None:
+        for i in range(len(xlabels)):
+            g.subplots[len(xlabels)-1, i].set_xlabel(xlabels[i])
+            if i > 0:
+                g.subplots[i, 0].set_ylabel(xlabels[i])
+
+    if fn_output is not None: plt.savefig(fn_output)
+    
+    if return_fig:
+        return g.fig
+    else:
+        plt.show()
 
 
 def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, analytical_covariance=True, 
