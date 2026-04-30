@@ -854,7 +854,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
             if kind == 'parent_randoms':
                 program = 'bright' if 'BGS' in tracer else 'dark'
-                return [cat_dir / f'{program}_{iran}_full_noveto.ran.h5' for iran in nrans]
+                return [_find_extension(cat_dir / f'{program}_{iran}_full_noveto.ran', None) for iran in nrans]
             if 'bitwise' in weight:
                 data_dir = cat_dir / 'PIP'
             else:
