@@ -33,17 +33,46 @@ For additional measurements on mocks:
 
 
 ----
-## Download the measurements on your machine: 
+## Data Management: 
 
-To collect files on my local computer (`/Users/edmond/Work/data/desi/`): 
+I (Edmond) prefers to work locally for the inference as we are on an easy fit situation.
+
+### Download the measurements on my machine: 
+
+To collect files on my local computer (`/Users/edmond/Work/data/desi-clustering/`): 
 
  * Data:
-    * `cd /Users/edmond/Work/data/desi/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded`
-    * For CFS official measurements:
+    * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded`
+    * From CFS:
         * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/ . ` 
-    * For your local measurements (on your scratch): 
-        * `rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/DR2_local_png/measurements/loa-v1/v2/fNL/blinded/ . ` 
+    * From my local measurements (ie on my scratch): 
+        * `rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/loa-v1/v2/fNL/blinded/ . ` 
         
  * Holi Mocks:
-    * `cd /Users/edmond/Work/data/desi/dr2/summary_statistics/local_png/base/holi-v3-altmtl`
+    * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl`
     * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ . `
+
+### Upload data on NERSC:
+
+This is a bit trickier because as a simple user I don't have the "write authorization" on `/global/cfs/cdirs/desi/science/cai/`. The idea is to upload everything in my Scratch (that is a miror of the CFS): `/pscratch/sd/e/edmondc/desi-clustering/` and then copy them to the CFS directory once connected as a `desica` user (follow this: https://desi.lbl.gov/trac/wiki/CrossAnalysisInfrastructureWG/NERSC).
+
+First upload from my machine to SCRATCH:
+```bash
+rsync -av /Users/edmond/Work/data/desi-clustering/dr2/profiles/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/profiles
+```
+
+
+To connect as desica: 
+```bash
+sshproxy -u edmondc -c desica
+ssh -i $HOME/.ssh/desica desica@perlmutter.nersc.gov
+```
+
+Then rsync the Scratch to CFS:
+```bash
+rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
+
+rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/profiles/local_png/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/profiles/local_png/
+
+rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/chains/local_png/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/chains/local_png/
+```
