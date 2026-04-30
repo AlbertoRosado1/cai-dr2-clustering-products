@@ -886,7 +886,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif version == 'holi-v3-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v3/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
-            ext = 'h5' if 'full' in kind else 'h5'
+            ext = 'h5'
             if kind == 'data':
                 return cat_dir / f'{tracer}_complete_{region}_clustering.dat.{ext}'
             if kind == 'randoms':
@@ -895,7 +895,14 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         elif version == 'holi-v3-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v3'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
-            ext = 'h5' if 'full' in kind else 'h5'
+            ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
+
+        elif version == 'holi-bgs-altmtl':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_bgs'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
 
