@@ -343,7 +343,7 @@ def test_window_fm(tracer='QSO'):
         'imock': 451,
         'nran': 1,
         'keep_columns': True,
-        'weight': 'default-oqe',
+        'weight': 'default-FKP',
     }
     analysis = 'png_local'
     mattrs = {'cellsize': 80.0}
@@ -354,7 +354,8 @@ def test_window_fm(tracer='QSO'):
         'mesh2_spectrum': {'optimal_weights': functools.partial(tools.compute_fiducial_png_weights, tracer=tracer)},
         'window_mesh2_spectrum': {'method': 'exact'},
         'combine_window_mesh2_spectrum': {'effect': 'RIC+AMR'},
-        'window_mesh2_spectrum_fm': {'theory': None, 'n_realizations': 2, 'seeds': [42, 84], 'theory_rebin': 5},
+        'window_mesh2_spectrum_fm': {'theory': None,
+                                     'n_realizations': 2, 'seeds': [42, 84], 'theory_rebin': 5},
     }
 
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra)
