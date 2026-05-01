@@ -107,30 +107,33 @@ if __name__ == '__main__':
     stats, postprocess = [], []
     version  = 'glam-uchuu-v2-altmtl'
     check_for_existing_measurements = True
-    
+
     # run on interactive node
     # mode = 'interactive'
     # imocks2run = 150 + np.arange(1)
     # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
-    
+
     # to run job
+    # mode = 'interactive'
     mode = 'slurm'
     imocks2run = np.arange(2000)
     if True:
         # bad_imocks = np.concatenate([300+np.arange(50),[202, 203, 205, 211, 1275]])
         # bad_imocks = np.loadtxt(f'../helper_scripts/dubious_{version}.txt',dtype=int)
-        bad_imocks = [211, 1275]
+        bad_imocks = [211, 1275, 543]
         imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    stats       = ['mesh2_spectrum', 'mesh3_spectrum']#, 'particle2_correlation']
+    # stats       = ['mesh2_spectrum', 'mesh3_spectrum'] 
+    stats = ['particle2_correlation']
     postprocess = ['combine_regions']
     analysis = 'full_shape'
     project  = f'{analysis}/base'
     weight   = 'default-FKP'
     regions  = ['NGC','SGC']
     tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    # tracers = ['ELG_LOPnotqso']
     max_mocks_per_batch_qso = 20
     max_mocks_per_batch_others = 10
 
@@ -142,7 +145,7 @@ if __name__ == '__main__':
     # regions = ['N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
     # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
     # max_mocks_per_batch_qso = 10
-    # max_mocks_per_batch_others = 5 
+    # max_mocks_per_batch = 5 
 
     # run fiducial local_png
     # stats       = ['mesh2_spectrum']
@@ -152,10 +155,10 @@ if __name__ == '__main__':
     # weight   = 'default-fkp-oqe'
     # regions  = ['NGC','SGC']
     # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 50
+    # max_mocks_per_batch = max_mocks_per_batch_qso = 50
 
     onthefly = None
-    
+
     for tracer in tracers:
         if tracer == 'QSO':
              max_mocks_per_batch = max_mocks_per_batch_qso # allow mocks to be processed since QSOs only have one zbin
@@ -173,7 +176,7 @@ if __name__ == '__main__':
             rerun = []
             for zrange in zranges[-1:]: # only check last zrange to speed up this step.
                 for kind in stats:
-                    stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')), 
+                    stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
                                      tracer=tracer, region=regions[-1], weight=weight, zrange=zrange, version=version, project=project,
                                      extra=onthefly if onthefly else '')
                     rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
@@ -181,7 +184,7 @@ if __name__ == '__main__':
             imocks = sorted(set(rerun))
         else:
             imocks = imocks2run
-       
+
         def get_run_stats():
             _tm = tm80
             if tracer in ['LRG']:
@@ -209,4 +212,4 @@ if __name__ == '__main__':
                 for _imocks in batch_imocks:
                     get_run_stats()(imocks=_imocks, **run_stats_kws)
         # if postprocess:
-        #     postprocess_stats(imocks=imocks, **run_stats_kws)
+        #    postprocess_stats(imocks=imocks, **run_stats_kws)
