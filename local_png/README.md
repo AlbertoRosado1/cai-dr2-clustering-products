@@ -46,7 +46,7 @@ To collect files on my local computer (`/Users/edmond/Work/data/desi-clustering/
     * From CFS:
         * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/ . ` 
     * From my local measurements (ie on my scratch): 
-        * `rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/loa-v1/v2/fNL/blinded/ . ` 
+        * `rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/ . ` 
         
  * Holi Mocks:
     * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl`
