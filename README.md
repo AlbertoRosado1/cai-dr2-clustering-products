@@ -69,40 +69,55 @@ export PYTHONPATH=$HOME/.local/lib/python3.12/site-packages/:$PYTHONPATH
 
 ### How to install developement-mode jupyter kernel:
 
-`cosmodesi-main-dev` is the standard `cosmodesi-main` env but with a developement-mode use for the `desi-clustering` module.
+`cosmodesi-main-dev` is the standard `cosmodesi-main` env but with a developement-mode use for the `desilike` and `desi-clustering` modules.
 
-(1) Install `desi-clustering` with
+(1) Install `desi-clustering` in developer mode with
 ```bash
 git clone https://github.com/cosmodesi/desi-clustering.git
 cd desi-clustering
-pip install -e .
+git checkout edmond-dev
+pip install --user -e .
 ```
 
-(2) Create a file `$HOME/.local/share/jupyter/kernels/cosmodesi-main-dev/cosmodesi-dev-kernel.sh` with the contents
+(2) Install `desilike` in developer mode with 
+```bash
+git clone https://github.com/cosmodesi/desilike.git
+cd desilike
+git checkout dr2-dev
+pip install --user -e .
+```
+
+(3) Setup the jupyter kernel by running:
 ```sh
+KERNEL_DIR="$HOME/.local/share/jupyter/kernels/cosmodesi-main-dev"
+mkdir -p "$KERNEL_DIR"
+
+# Write the launcher script.
+cat > "$KERNEL_DIR/cosmodesi-dev-kernel.sh" <<'EOF'
 #!/bin/bash
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
+module unload desilike
 module unload desi-clustering
 export PYTHONPATH=$HOME/.local/lib/python3.12/site-packages:$PYTHONPATH
 exec python -m ipykernel_launcher -f "$1"
-```
-and make it executable:
-```bash
-chmod u+x $HOME/.local/share/jupyter/kernels/cosmodesi-main-dev/cosmodesi-dev-kernel.sh
-```
+EOF
 
-(3) Create a file `$HOME/.local/share/jupyter/kernels/cosmodesi-main-dev/kernel.json` with the contents
-```json
+chmod u+x "$KERNEL_DIR/cosmodesi-dev-kernel.sh"
+
+# Write kernel.json
+cat > "$KERNEL_DIR/kernel.json" <<'EOF'
 {
  "language": "python",
  "argv": [
-  "$HOME/.local/share/jupyter/kernels/cosmodesi-main-dev/cosmodesi-dev-kernel.sh",
+  "{resource_dir}/cosmodesi-dev-kernel.sh",
   "{connection_file}"
  ],
  "display_name": "cosmodesi-main-dev"
 }
+EOF
 ```
-Restart the notebook and you should see `cosmodesi-main-dev` appear in the kernel options. You can verify that the `desi-clustering` module is being loaded from the cloned repo with
+Restart the notebook and you should see `cosmodesi-main-dev` appear in the kernel options. You can verify that the `desilike` and `desi-clustering` modules are being loaded from the cloned repos with
 ```python
+import desilike; print(desilike.__file__)
 import clustering_statistics; print(clustering_statistics.__file__)
 ```
