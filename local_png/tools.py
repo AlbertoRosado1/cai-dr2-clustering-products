@@ -620,7 +620,9 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
         obs, lik, zeffs = {}, {}, {}
         pks = {}
         for tt in tracers:
-            pk = mocks[tt][imock].select(k=(kmin, 1))
+            mocks_tt = mocks[tt].copy()  # Avoid modifying the original mock observable.
+
+            pk = mocks_tt.pop(imock).select(k=(kmin, 1))  # remove the used mock from the covariance matrix.
             pks[tt] = pk
             
             window = windows[tt].at.observable.match(pk)
@@ -630,7 +632,8 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
             if analytical_covariance:
                 covariance = covs[tt].at.observable.at(observables='spectrum2', tracers=tuple(tt.split("x"))).match(pk)
             else:
-                covariance = [mm.match(pk) for mm in mocks[tt]]
+                # print(len(mocks_tt))
+                covariance = [mm.match(pk) for mm in mocks_tt]
 
             obs[tt], lik[tt] = get_observable_and_likelihood(pk, window, covariance, tt, zeffs, engine='camb', fix_fnl=False, nickname=tt, **kwargs)
 
