@@ -52,3 +52,42 @@ and rerun:
 ${COSMODESIMODULES}/install_jupyter_kernel.sh main
 ```
 Note that you may need to restart (close and reopen) your notebooks for the changes to propagate.
+
+
+----
+### How to install `cosmodesi-main-dev` jupyter enviornment
+
+(i.e. the standard `cosmodesi-main` env but with a developement-mode use for the `desi-clustering` module)
+
+(1) Install `desi-clustering` with
+```
+git clone https://github.com/cosmodesi/desi-clustering.git
+cd desi-clustering
+pip install -e .
+```
+
+(2) Create a file `$HOME/.local/share/jupyter/kernels/cosmodesi-main-dev/cosmodesi-dev-kernel.sh` with the contents
+```
+#!/bin/bash
+source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
+module unload desi-clustering
+export PYTHONPATH=$HOME/.local/lib/python3.12/site-packages:$PYTHONPATH
+exec python -m ipykernel_launcher -f "$1"
+```
+and make it executable.
+
+(3) Create a file `$HOME/.local/share/jupyter/kernels/cosmodesi-main-dev/kernel.json` with the contents
+```
+{
+ "language": "python",
+ "argv": [
+  "$HOME/.local/share/jupyter/kernels/cosmodesi-main-dev/cosmodesi-dev-kernel.sh",
+  "{connection_file}"
+ ],
+ "display_name": "cosmodesi-main-dev"
+}
+```
+Restart the notebook and you should see `cosmodesi-main-dev` appear in the kernel options. You can verify that the `desi-clustering` module is being loaded from the cloned repo with
+```
+import clustering_statistics; print(clustering_statistics.__file__)
+```
