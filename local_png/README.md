@@ -58,9 +58,11 @@ This is a bit trickier because as a simple user I don't have the "write authoriz
 
 First upload from my machine to SCRATCH:
 ```bash
+rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/profiles/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/profiles
 ```
 
+### Transfert data from $SCRATCH to desica CFS: 
 
 To connect as desica: 
 ```bash
