@@ -35,6 +35,13 @@ tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
 tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='00:10:00',
                 mpiprocs_per_worker=2250, nodes_per_worker=25, output=output, error=error, stop_after=1, constraint='cpu'))
 
+combine_region_sources = {
+    'GCcomb': ['NGC', 'SGC'],
+    'NS': ['N', 'S'],
+    'GCcomb_noN': ['NGCnoN', 'SGC'],
+    'GCcomb_noDES': ['NGC', 'SGCnoDES'],
+}
+
 def run_stats(tracer='LRG', project='', version='glam-uchuu-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', regions=['NGC','SGC'], ibatch=None, postprocess=None, zranges=None, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
@@ -107,6 +114,7 @@ if __name__ == '__main__':
     stats, postprocess = [], []
     version  = 'glam-uchuu-v2-altmtl'
     check_for_existing_measurements = True
+    postprocess_only = False # If True, no measurements are performed and only postprocessing of existing measurements is handled.
 
     # run on interactive node
     # mode = 'interactive'
@@ -136,16 +144,19 @@ if __name__ == '__main__':
     # tracers = ['ELG_LOPnotqso']
     max_mocks_per_batch_qso = 20
     max_mocks_per_batch_others = 10
+    postregions = ['GCcomb']
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
     # analysis = 'full_shape'
     # project = f'{analysis}/data_splits'
     # weight  = 'default-FKP'
-    # regions = ['N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
+    # regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'] #galactic and imaging regions
+    # # regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
     # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
-    # max_mocks_per_batch_qso = 10
-    # max_mocks_per_batch = 5 
+    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 5
+    # postprocess = ['combine_regions']
+    # postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:]
 
     # run fiducial local_png
     # stats       = ['mesh2_spectrum']
@@ -155,7 +166,8 @@ if __name__ == '__main__':
     # weight   = 'default-fkp-oqe'
     # regions  = ['NGC','SGC']
     # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    # max_mocks_per_batch = max_mocks_per_batch_qso = 50
+    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 50
+    # postregions = ['GCcomb']
 
     onthefly = None
 
@@ -172,18 +184,21 @@ if __name__ == '__main__':
         if check_for_existing_measurements:
             exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer[0] if isinstance(tracer, (list, tuple)) else tracer,
                                                                                            region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
-            imocks = exists[1]['imock']
-            rerun = []
+            catalog_imocks = exists[1]['imock']
+            rerun_by_region = {region: [] for region in regions}
             for zrange in zranges[-1:]: # only check last zrange to speed up this step.
                 for kind in stats:
-                    stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
-                                     tracer=tracer, region=regions[-1], weight=weight, zrange=zrange, version=version, project=project,
-                                     extra=onthefly if onthefly else '')
-                    rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
-                    rerun += [imock for imock in imocks if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
-            imocks = sorted(set(rerun))
+                    for region in regions:
+                        stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
+                                         tracer=tracer, region=region, weight=weight, zrange=zrange, version=version, project=project,
+                                         extra=onthefly if onthefly else '')
+                        rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
+                        rerun_by_region[region] += [imock for imock in catalog_imocks if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
+            rerun_by_region = {region: sorted(set(rerun)) for region, rerun in rerun_by_region.items()}
+            imocks = sorted(set(imock for rerun in rerun_by_region.values() for imock in rerun))
         else:
             imocks = imocks2run
+            rerun_by_region = {region: imocks for region in regions}
 
         def get_run_stats():
             _tm = tm80
@@ -194,7 +209,7 @@ if __name__ == '__main__':
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
 
         run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
-        if True:
+        if not postprocess_only:
             if any('window' in stat for stat in stats):
                 _imocks = [150]
                 nbatches = 1
@@ -208,8 +223,23 @@ if __name__ == '__main__':
             elif any('covariance' in stat for stat in stats):
                 get_run_stats()(imocks=[150], **run_stats_kws)
             elif stats:
-                batch_imocks = np.array_split(imocks, max(len(imocks) // max_mocks_per_batch, 1)) if len(imocks) else []
-                for _imocks in batch_imocks:
-                    get_run_stats()(imocks=_imocks, **run_stats_kws)
-        # if postprocess:
-        #    postprocess_stats(imocks=imocks, **run_stats_kws)
+                for region, region_imocks in rerun_by_region.items():
+                    batch_imocks = np.array_split(region_imocks, max(len(region_imocks) // max_mocks_per_batch, 1)) if len(region_imocks) else []
+                    for _imocks in batch_imocks:
+                        get_run_stats()(imocks=_imocks, **(run_stats_kws | dict(regions=[region])))
+        else:
+            # this handles the combination of measurements by region
+            if check_for_existing_measurements:
+                postprocess_rerun = []
+                for zrange in zranges:
+                    for kind in stats:
+                        for region in postregions:
+                            stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
+                                             tracer=tracer, region=region, weight=weight, zrange=zrange, version=version, project=project,
+                                             extra=onthefly if onthefly else '')
+                            rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
+                            postprocess_rerun += [imock for imock in imocks2run if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
+                imocks = sorted(set(postprocess_rerun))
+            else:
+                imocks = imocks2run
+            postprocess_stats(imocks=imocks, **(run_stats_kws | dict(regions=postregions)))
