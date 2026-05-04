@@ -40,15 +40,14 @@ def read_data(data_dir='.', mocks_dir=None,
     mocks = None
     if mocks_dir is not None: 
         weight_type_mocks = weight_type_mocks or weight_type
+        if 'nmocks' in kwargs:
+            nmocks = kwargs['nmocks']
+            logger.info(f"Reading {nmocks} mocks for tracer {tracer} with weight type {weight_type_mocks}.")
+        else:
+            nmocks = 1000 if weight_type_mocks == 'default-fkp-oqe' else 100
 
-        nmocks = 1000 if weight_type_mocks == 'default-fkp-oqe' else 100
         fns_mock = [get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=mocks_dir, project='holi-v3-altmtl', tracer=tracer, region=region, zrange=zrange, 
                                  weight=weight_type_mocks, imock=imock) for imock in range(nmocks)]    
-        # These mocks are not available yet with altmtl due to sysnet error -> should be ready soon.  
-        if nmocks == 1000:
-            for i, bad_mocks in enumerate([363, 565]):
-                _ = fns_mock.pop(bad_mocks - i)  # don't forget pop remove the object from the list, so the next bad_mocks index is shifted by -1.
-
         mocks = [lsstypes.read(fn) for fn in fns_mock]
 
     return pk, window, cov, mocks

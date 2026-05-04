@@ -5,9 +5,7 @@
 * Rosado-Marin+26: https://arxiv.org/abs/2604.05213
 
 ## TODO: 
-* add how the measurements on the mocks are perfomed (which script and how to do it)
 * same with the data 
-* Add Data path + Mocks paths
 * Add description of the tools in this repo and how it works.
 
 ----
@@ -51,14 +49,20 @@ To collect files on my local computer (`/Users/edmond/Work/data/desi-clustering/
  * Holi Mocks:
     * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl`
     * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ . `
+    * `rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ .`
+
+* Glam Mocks:
+    * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl`
+    * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl/ .`
 
 ### Upload data on NERSC:
 
-This is a bit trickier because as a simple user I don't have the "write authorization" on `/global/cfs/cdirs/desi/science/cai/`. The idea is to upload everything in my Scratch (that is a miror of the CFS): `/pscratch/sd/e/edmondc/desi-clustering/` and then copy them to the CFS directory once connected as a `desica` user (follow this: https://desi.lbl.gov/trac/wiki/CrossAnalysisInfrastructureWG/NERSC).
+This is a bit trickier because as a simple user I don't have the "write authorization" on `/global/cfs/cdirs/desi/science/cai/`. The idea is to upload everything in my Scratch (that is a mirror of the CFS): `/pscratch/sd/e/edmondc/desi-clustering/` and then copy them to the CFS directory once connected as a `desica` user (follow this: https://desi.lbl.gov/trac/wiki/CrossAnalysisInfrastructureWG/NERSC).
 
 First upload from my machine to SCRATCH:
 ```bash
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
+rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/profiles/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/profiles
 ```
 
