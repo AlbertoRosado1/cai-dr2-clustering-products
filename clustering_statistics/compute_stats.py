@@ -452,34 +452,6 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 jax.experimental.multihost_utils.sync_global_devices("theory")  # such that theory ready for window
                 theory = types.read(theory_fn)
 
-                # Check that theory respects the conditions to be able to generate gaussian mocks in the window
-                c0v = theory.get(0).value() - 7 / 18 * theory.get(4).value()
-                if (c0v <= 0).any():
-                    raise ValueError('Theory (P_0 - 7/18 * P_4) has negative values and cannot be used to generate gaussian mocks for the window function.')
-                c2v = 35 * theory.get(4).value() / 18
-                rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
-                if (c0v * c2v - rec0vc2v**2 <= 0).any():
-                    # Rescale c2
-                    logger.warning(
-                        'Theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Rescaling P_2 by a global factor to enforce this condition.'
-                    )
-                    # Assume P_2 is positive
-                    rescale = np.min((5 * theory.get(4).value() / 9 + 2 * np.sqrt(c0v * c2v)) / theory.get(2).value()) - 1e-6
-                    if np.abs(rescale - 1) > 0.1:
-                        logger.warning(
-                            'Rescaling factor for P_2 is %f, which is quite far from 1. Check that the input theory is reasonable.',
-                            rescale,
-                        )
-                    else:
-                        logger.info('Rescaling factor for P_2 is %f.', rescale)
-                    theory = types.Mesh2SpectrumPoles([theory.get(ell).clone(value=theory.get(ell).value() * rescale) if ell == 2 else theory.get(ell) for ell in theory.ells])
-                    # Check that rescaled theory satisfies the condition
-                    rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
-                    if (c0v * c2v - rec0vc2v**2 <= 0).any():
-                        raise ValueError(
-                            'Even after rescaling P_2, theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Some P_2 values may be negative. Check input theory.'
-                        )
-
                 theory_rebin = window_options.pop('theory_rebin', None)
                 if theory_rebin is not None:
                     # Rebin theory to speed up window function computation

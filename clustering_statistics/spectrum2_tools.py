@@ -705,6 +705,7 @@ def compute_window_mesh2_spectrum_fm(
     n_realizations: int,
     seeds: list[int] | None,
     batch_size: int = 4,
+    rescale_quadrupole: bool = True,
 ) -> dict[str, dict[str, list[types.WindowMatrix]]]:
     """
     Compute the 2-point spectrum window with :mod:`desiwinds`.
@@ -757,6 +758,8 @@ def compute_window_mesh2_spectrum_fm(
         Whether to use unitary amplitude for the mock survey mesh generation, by default True.
     batch_size : int, optional
         Number of window computations to run in parallel, by default 4. Depends on the available memory, number of randoms catalogs, size of the mesh... Lower if needed.
+    rescale_P2 : bool, optional
+        Whether to allow rescaling of the input theory quadrupole if conditions for Gaussian mock survey generation are not met, by default True. If False, the function will raise an error if the input theory does not satisfy the conditions for Gaussian mock survey generation.
 
     Returns
     -------
@@ -772,10 +775,42 @@ def compute_window_mesh2_spectrum_fm(
     # Notes to self:
     # * RIC not optional
     # * n_randoms is effectively set by the length of get_data_randoms
+
+    # Before anything, check that the input theory satisfies the conditions for Gaussian mock survey generation (positive definite covariance matrix). If not, either raise an error or rescale the quadrupole if rescaling is allowed.
+    c0v = theory.get(0).value() - 7 / 18 * theory.get(4).value()
+    if (c0v <= 0).any():
+        raise ValueError("Theory (P_0 - 7/18 * P_4) has negative values and cannot be used to generate gaussian mocks for the window function.")
+    c2v = 35 * theory.get(4).value() / 18
+    rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
+    if (c0v * c2v - rec0vc2v**2 <= 0).any():
+        if not rescale_quadrupole:
+            raise ValueError(
+                "Theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Some P_2 values may be negative. Check input theory or set rescale_quadrupole=True to allow rescaling of P_2."
+            )
+        else:
+            # Rescale c2
+            logger.warning("Theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Rescaling P_2 by a global factor to enforce this condition.")
+            # Assume P_2 is positive
+            rescale = np.min((5 * theory.get(4).value() / 9 + 2 * np.sqrt(c0v * c2v)) / theory.get(2).value()) - 1e-6
+            if np.abs(rescale - 1) > 0.1:
+                logger.warning(
+                    "Rescaling factor for P_2 is %f, which is quite far from 1. Check that the input theory is reasonable.",
+                    rescale,
+                )
+            else:
+                logger.info("Rescaling factor for P_2 is %f.", rescale)
+            theory = types.Mesh2SpectrumPoles([theory.get(ell).clone(value=theory.get(ell).value() * rescale) if ell == 2 else theory.get(ell) for ell in theory.ells])
+            # Check that rescaled theory satisfies the condition
+            rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
+            if (c0v * c2v - rec0vc2v**2 <= 0).any():
+                # Rescaling did not fix the issue, raise an error
+                # Rescaling should work well for Kaiser theories, but maybe not for velocileptors...
+                raise ValueError("Even after rescaling P_2, theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Some P_2 values may be negative. Check input theory.")
+
     import mpytools as mpy
     from desiwinds.forward import mock_survey_catalog, prepare_AMR, prepare_RIC
     from desiwinds.window import get_window_spikes
-    from jaxpower import BinMesh2SpectrumPoles, FKPField, create_sharding_mesh, ParticleField
+    from jaxpower import BinMesh2SpectrumPoles, FKPField, ParticleField, create_sharding_mesh
 
     from .tools import add_photometric_template_values, select_region
 
