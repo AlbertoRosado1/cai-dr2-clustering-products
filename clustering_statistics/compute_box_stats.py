@@ -38,7 +38,7 @@ logger = logging.getLogger('summary-statistics')
 def compute_box_stats_from_options(stats, cache=None,
                                     get_box_stats_fn=box_tools.get_box_stats_fn,
                                     get_box_catalog_fn=None,
-                                    read_clustering_box_catalog=box_tools.read_clustering_box_catalog,
+                                    read_box_catalog=box_tools.read_box_catalog,
                                     **kwargs):
     """
     Compute summary statistics based on the provided options.
@@ -51,14 +51,14 @@ def compute_box_stats_from_options(stats, cache=None,
     cache : dict, optional
         Cache to store intermediate results (binning class and parent/reference random catalog).
         See :func:`spectrum2_tools.compute_mesh2_spectrum`, :func:`spectrum3_tools.compute_mesh3_spectrum`,
-        and func:`tools.read_clustering_box_catalog` for details.
+        and func:`tools.read_box_catalog` for details.
     get_box_stats_fn : callable, optional
         Function to get the filename for storing the measurement.
     get_box_catalog_fn : callable, optional
         Function to get the filename for reading the catalog.
-        If provided, it is given to ``read_clustering_box_catalog`` and ``read_full_catalog``.
-    read_clustering_box_catalog : callable, optional
-        Function to read the clustering catalog.
+        If provided, it is given to ``read_box_catalog`` and ``read_full_catalog``.
+    read_box_catalog : callable, optional
+        Function to read the box catalog.
     **kwargs : dict
         Options for catalog, reconstruction, and summary statistics.
     """
@@ -71,7 +71,7 @@ def compute_box_stats_from_options(stats, cache=None,
     tracers = list(catalog_options.keys())
 
     if get_box_catalog_fn is not None:
-        read_clustering_box_catalog = functools.partial(read_clustering_box_catalog, get_box_catalog_fn=get_box_catalog_fn)
+        read_box_catalog = functools.partial(read_box_catalog, get_box_catalog_fn=get_box_catalog_fn)
 
     with_recon = any('recon' in stat for stat in stats)
     with_catalogs = True
@@ -79,7 +79,7 @@ def compute_box_stats_from_options(stats, cache=None,
     if with_catalogs:
         for tracer in tracers:
             _catalog_options = dict(catalog_options[tracer])
-            data[tracer] = read_clustering_box_catalog(kind='data', **_catalog_options, concatenate=True)
+            data[tracer] = read_box_catalog(kind='data', **_catalog_options, concatenate=True)
             zsnap = data[tracer].attrs['zsnap']
             cmattrs = dict(boxsize=data[tracer].attrs['boxsize'], boxcenter=data[tracer].attrs['boxcenter'])
 
@@ -106,12 +106,12 @@ def compute_box_stats_from_options(stats, cache=None,
             if stat in stats:
                 correlation_options = dict(options[stat])
                 correlation_options['mattrs'] = cmattrs | correlation_options.get('mattrs', {})
-    
+
                 def get_data(tracer):
                     if recon:
                         return {'data': get_catalog_recon(data[tracer]), 'shifted': [get_catalog_recon(random) for random in shifted[tracer]]}
                     return {'data': data[tracer]}
-    
+
                 correlation = func(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
                 fn = get_box_stats_fn(kind=stat, catalog=fn_catalog_options, **correlation_options)
                 box_tools.write_stats(fn, correlation)

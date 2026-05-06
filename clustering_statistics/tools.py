@@ -406,7 +406,7 @@ def compute_fiducial_png_weights(ell, catalog, tracer='LRG', p=1.):
     if jax.process_index() == 0:
         logger.info(f'PNG OQE weights -- tracers: {tracers}, p: {ps}')
 
-    def _get_weights(catalogs, tracers, ps):
+    def _set_clustering_catalog_weights(catalogs, tracers, ps):
         if ell not in [0, 2]:
             return catalogs[0]["INDWEIGHT"], catalogs[1]["INDWEIGHT"]
         else:
@@ -415,9 +415,9 @@ def compute_fiducial_png_weights(ell, catalog, tracer='LRG', p=1.):
             w2 = 2 / 3 * growth_factor(catalogs[1]['Z']) * growth_rate(catalogs[1]['Z'])
             return catalogs[0]['INDWEIGHT'] * wtilde, catalogs[1]['INDWEIGHT'] * {0: w0, 2: w2}[ell]
 
-    yield _get_weights(catalogs, tracers, ps)
+    yield _set_clustering_catalog_weights(catalogs, tracers, ps)
     if tracers[1] != tracers[0]:
-        yield _get_weights(catalogs[::-1], tracers[::-1], ps[::-1])[::-1]
+        yield _set_clustering_catalog_weights(catalogs[::-1], tracers[::-1], ps[::-1])[::-1]
 
 
 def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
@@ -951,9 +951,6 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
-            if kind == 'full_randoms':
-                cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
-                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.fits' for iran in nrans]
 
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
@@ -1289,7 +1286,7 @@ def get_binned_weight(catalog, binned_weight):
     return toret
 
 
-def get_positions_from_rdz(catalog):
+def set_positions_from_rdz(catalog):
     """Return Cartesian positions from R.A., Dec., and redshift."""
     from cosmoprimo.fiducial import TabulatedDESI, DESI
     fiducial = TabulatedDESI()  # faster than DESI/class (which takes ~30 s for 10 random catalogs)
@@ -1369,51 +1366,79 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
 
 
 @default_mpicomm
-def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn, get_positions_from_rdz=get_positions_from_rdz,
-                            expand=None, reshuffle=None, complete=None, FKP_P0=None, binned_weight=None, keep_columns=None, mpicomm=None, **kwargs):
+def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
+                 expand=None, reshuffle=None, complete=None, mpicomm=None, read=_read_catalog,
+                 keep_columns=None, **kwargs):
     """
-    Read clustering catalog (data or randoms) with given parameters.
+    Read one or more catalogs (data or randoms) with preprocessing.
+
+    This routine locates, reads and optionally post-processes catalogs
+    using the helper `get_catalog_fn` to obtain filenames. It supports reading
+    multiple files (e.g. NGC/SGC or several random realizations), expanding randoms
+    by matching to parent randoms and data, reshuffling random redshifts to match
+    a merged data NZ, and creating an on-the-fly "complete" data catalog from
+    full/forFA inputs.
 
     Parameters
     ----------
-    kind : str
-        Catalog kind. Options are 'data' or 'randoms'.
-    concatenate : bool
-        Whether to concatenate catalogs from different regions or multiple randoms.
-    get_catalog_fn : callable
-        Function to get catalog filenames.
-    get_positions_from_rdz : callable
-        Function to compute Cartesian positions from R.A., Dec., and redshift.
-    expand : callable, dict, optional
-        If callable, function to expand randoms catalog.
-        If dict, parameters to expand randoms catalog via :func:`expand_randoms`.
-        In this case, modified in-place to add the parent randoms catalog with key its file name.
-    reshuffle : callable, dict, optional
-        If callable, function to reshuffle randoms catalog.
-        If dict, parameters to reshuffle randoms catalog via :func:`reshuffle_randoms`.
-        In this case, modified in-place to add the merged data catalogs with key its file name.
-    binned_weight : dict, optional
-        Binned weights to apply. Keys are column names, values are weight arrays.
-    keep_columns : list, optional
-        If True, keep all columns.
-        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID'].
-        Else, a list of column names to keep in the output catalog.
-        Note: INDWEIGHT is always included.
+    kind : {'data', 'randoms', 'full_data', 'full_randoms', 'fibered_data', 'fibered_randoms', 'parent_data', 'parent_randoms'}
+        Catalog kind to read. Aliases 'fibered_*' and 'parent_*' map to 'full_*'.
+    concatenate : bool, default True
+        If True, concatenate multiple region/files into a single Catalog. If False,
+        return a list of Catalog objects in the same order as filenames.
+    get_catalog_fn : callable, optional
+        Callable used to obtain filenames for the requested catalogs. Signature must
+        be compatible with the kwargs passed through this function.
+    expand : callable or dict, optional
+        If callable, a function applied to each read randoms Catalog to expand it
+        (e.g. add columns by matching to a parent randoms file). If dict, interpreted
+        as parameters for `expand_randoms`; the dict is updated in-place to include
+        loaded parent randoms keyed by filename to avoid repeated reads.
+    reshuffle : callable or dict, optional
+        If callable, a function applied to each read randoms Catalog to reshuffle redshifts.
+        If dict, interpreted as parameters for `reshuffle_randoms`. When a dict is
+        provided, this function may read/attach merged data catalogs to the dict under
+        keys such as 'merged_data_fn' to avoid recomputation.
+    complete : dict or None, optional
+        If a dict, instructs the code to build a "complete" data catalog on-the-fly
+        from `full_data` and `forfa_data` inputs (see `complete_from_full_data`). Keys
+        control options like downsampling and completeness handling. When used for
+        random reshuffling, `complete` will be computed once and reused.
     mpicomm : MPI.Comm, optional
-        MPI communicator.
-    kwargs : dict
-        Additional keyword arguments to pass to :func:`get_catalog_fn`.
+        MPI communicator. When omitted, the `default_mpicomm` decorator supplies MPI.COMM_WORLD.
+    read : callable, optional
+        Low-level function to read a file into a Catalog (defaults to internal _read_catalog).
+    keep_columns : list, tuple, bool or None, optional
+        If True, keep all columns. If None (default), keep the minimal columns
+        ['RA', 'DEC', 'Z', 'NX', 'TARGETID'] plus any columns with 'WEIGHT' in their name.
+        If a list/tuple, keep exactly those columns (INDWEIGHT is always included later).
+    **kwargs : dict
+        Additional keyword arguments forwarded to `get_catalog_fn` (e.g. tracer, region, version, imock).
 
     Returns
     -------
-    catalog : Catalog, list
-        Catalog object or list of Catalog objects (if ``concatenate`` is False).
-        Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
-        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+    Catalog or list[Catalog]
+        A single Catalog (when concatenate is True and only one catalog is requested
+        or multiple files are concatenated) or a list of Catalog objects when
+        concatenate is False. Returned Catalog(s) include computed/ensured columns:
+        'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' and optionally 'BITWEIGHT'.
     """
-    assert kind in ['data', 'randoms'], 'provide kind (data or randoms)'
-    zrange, region, weight_type, imock, tracer = (kwargs.get(key) for key in ['zrange', 'region', 'weight', 'imock', 'tracer'])
-    assert weight_type is not None, 'provide weight'
+    keep_all_columns = False
+    if isinstance(keep_columns, bool) and keep_columns:
+        keep_all_columns = True
+    elif keep_columns is None:
+        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+    else:
+        assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
+        keep_columns = list(keep_columns)
+
+    if kind in ['fibered_data', 'parent_data']:
+        kind = 'full_data'
+    if kind in ['fibered_randoms', 'parent_randoms']:
+        kind = 'full_randoms'
+    assert kind in ['data', 'randoms', 'full_data', 'full_randoms'], 'provide kind'
+
+    imock, tracer = (kwargs.get(key) for key in ['imock', 'tracer'])
     reshuffle_condition = (kind == 'randoms') and (reshuffle is not None)
     if reshuffle_condition:
         # if randoms are going to be reshuffled, all regions are needed so we force it.
@@ -1425,23 +1450,16 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
     if not all(exists.values()):
         raise IOError(f'Catalogs {[fn for fn, ex in exists.items() if not ex]} do not exist!')
 
-    keep_all_columns = False
-    if isinstance(keep_columns, bool) and keep_columns:
-        keep_all_columns = True
-    elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
-    else:
-        assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
-
     complete_data = None
+
     if isinstance(complete, dict):
 
         def get_complete_data():
             full_data_fn = get_catalog_fn(kind='full_data', **(kwargs | dict(region='ALL')))
             forfa_data_fn = get_catalog_fn(kind='forfa_data', **(kwargs | dict(region='ALL')))
             nz = {region: np.loadtxt(get_catalog_fn(kind='nz', **(kwargs | dict(region=region))), unpack=True) for region in ['NGC', 'SGC']}
-            full_data = _read_catalog(full_data_fn, mpicomm=MPI.COMM_SELF)
-            forfa_data = _read_catalog(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
+            full_data = read(full_data_fn, mpicomm=MPI.COMM_SELF)
+            forfa_data = read(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
             return complete_from_full_data(forfa_data, full_data, nz=nz, tracer=tracer,
                                     with_completeness=complete.get('with_completeness', True),
                                     downsample_nobj=complete.get('downsample_nobj', False),
@@ -1482,7 +1500,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         for ifn, fn in enumerate(parent_randoms_fn):
             if fn not in expand:
                 irank = ifn % mpicomm.size
-                expand[fn] = _read_catalog(fn, mpicomm=MPI.COMM_SELF) if mpicomm.rank == irank else None
+                expand[fn] = read(fn, mpicomm=MPI.COMM_SELF) if mpicomm.rank == irank else None
             parent_randoms.append(expand[fn])
         data_fn = expand.get('data_fn', None)
         if isinstance(data_fn, Catalog):
@@ -1490,7 +1508,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         else:
             if data_fn is None:
                 data_fn = get_catalog_fn(kind='data', **(kwargs | dict(region='ALL')))
-            data = _read_catalog(data_fn, mpicomm=MPI.COMM_SELF)
+            data = read(data_fn, mpicomm=MPI.COMM_SELF)
 
         def expand(catalog, ifn):
             return expand_randoms(catalog, parent_randoms=parent_randoms[ifn], data=data, from_randoms=from_randoms, from_data=from_data)
@@ -1504,7 +1522,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         else:
             if data_fn is None:
                 data_fn = [get_catalog_fn(kind='data', **(kwargs | dict(region=region))) for region in ['NGC', 'SGC']]
-            data = _read_catalog(data_fn, mpicomm=MPI.COMM_SELF)
+            data = read(data_fn, mpicomm=MPI.COMM_SELF)
         merged_data_fn = reshuffle['merged_data_fn']
         if isinstance(merged_data_fn, Catalog):
             merged_data = merged_data_fn
@@ -1513,7 +1531,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 raise ValueError(f"Merged data filenames must be a tuple or list containing the filenames for NGC and SGC")
             if mpicomm.rank == 0:
                 logger.info('Reshuffling randoms')
-            merged_data = _read_catalog(merged_data_fn, mpicomm=MPI.COMM_SELF)
+            merged_data = read(merged_data_fn, mpicomm=MPI.COMM_SELF)
         seed = reshuffle.get('seed', 100 * imock)
         def reshuffle(catalog, ifn, seed=seed):
             return reshuffle_randoms(catalog, merged_data=merged_data, data=data, tracer=tracer, seed=seed + ifn)
@@ -1529,7 +1547,7 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             if kind == 'data' and complete_data is not None:
                 catalog = complete_data
             else:
-                catalog = _read_catalog(fn, mpicomm=MPI.COMM_SELF)
+                catalog = read(fn, mpicomm=MPI.COMM_SELF)
             if expand is not None:
                 catalog = expand(catalog, ifn)
 
@@ -1540,81 +1558,21 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
                 catalog = reshuffle(catalog, ifn)
                 if mpicomm.rank == 0:
                     logger.info(f'Reshuffling randoms completed in {time.time() - t0:2.1f} s')
-
-            columns = ['RA', 'DEC', 'Z', 'WEIGHT', 'WEIGHT_COMP', 'WEIGHT_FKP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'BITWEIGHTS', 'FRAC_TLOBS_TILES', 'NTILE', 'NX', 'TARGETID']
-            if 'wsys' in weight_type and not 'noimsys' in weight_type:
-                columns.append(f"WEIGHT_{weight_type.split('wsys-')[-1].upper()}")
-            columns = [column for column in columns if column in catalog.columns()]
-            catalog = catalog[columns]
-
-            if zrange is not None:
-                catalog = catalog[(catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])]
-                if 'NX' in catalog and np.any(catalog['NX'] == 0):
-                    # remove entries with NX=0
-                    if mpicomm.rank == 0:
-                        logger.info(f"Found and removed {(catalog['NX'] == 0).sum()} objects with NX=0 from {fn}")
-                    catalog = catalog[catalog['NX'] != 0]
-            if 'bitwise' in weight_type:
-                # ADM: I guess this is because we want to restrict to TILE-intersections where we have observed something?
-                catalog = catalog[(catalog['FRAC_TLOBS_TILES'] != 0)]
-            if region is not None:
-                catalog = catalog[select_region(catalog['RA'], catalog['DEC'], region)]
-
+            if 'full' in kind:
+                if 'BITWEIGHTS' in catalog:
+                    catalog.attrs['missing_power'] = {column: _compute_missing_power(catalog[column], catalog['BITWEIGHTS'], catalog['LOCATION_ASSIGNED']) for column in ['NTILE']}
+                if 'data' in kind:
+                    catalog.attrs['completeness'] = {column: _compute_binned_weight(catalog[column], catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES']) for column in ['NTILE']}
+            elif kind == 'data':
+                catalog.attrs['weight_ntile'] = _compute_binned_weight(catalog['NTILE'], catalog['WEIGHT'] / catalog['WEIGHT_COMP'])
+            if not keep_all_columns:
+                catalog = catalog[keep_columns + [column for column in catalog if 'WEIGHT' in column.upper()]]
             catalogs[ifn] = (irank, catalog)
 
     rdzw = []
     for i, (irank, catalog) in enumerate(catalogs):
         if mpicomm.size > 1:
             catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=irank)
-        if 'default' in weight_type:
-            individual_weight = catalog['WEIGHT'].copy()
-        else:
-            if i == 0: logger.info('Not using WEIGHT column as individual weight')
-            individual_weight = np.ones(len(catalog), dtype='f8')
-        bitwise_weights = None
-
-        if 'bitwise' in weight_type:
-            if kind == 'data':
-                individual_weight = catalog['WEIGHT'] / catalog['WEIGHT_COMP']
-                bitwise_weights = catalog['BITWEIGHTS']
-            elif kind == 'randoms':
-                individual_weight = catalog['WEIGHT'] * get_binned_weight(catalog, binned_weight['missing_power'])
-
-        if 'FKP' in weight_type.upper():
-            if i == 0 and mpicomm.rank == 0:
-                logger.info('Multiplying individual weights by WEIGHT_FKP') if FKP_P0 is None else logger.info(f'Multiplying individual weights by FKP weight computed with FKP_P0 = {FKP_P0}')
-            if FKP_P0 is not None:
-                catalog['WEIGHT_FKP'] = 1. / (1. + catalog['NX'] * FKP_P0)
-            elif 'WEIGHT_FKP' not in catalog.columns():
-                raise ValueError('WEIGHT_FKP column does not exist! Provide a value for FKP_P0.')         
-            individual_weight *= catalog['WEIGHT_FKP']
-
-        if 'noimsys' in weight_type:
-            # this assumes that the WEIGHT column contains WEIGHT_SYS
-            if i == 0 and mpicomm.rank == 0:
-                logger.info('Dividing individual weights by WEIGHT_SYS')
-            individual_weight /= catalog['WEIGHT_SYS']
-
-        if 'comp' in weight_type:
-            individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
-
-        if 'wsys' in weight_type and not 'noimsys' in weight_type:
-            new_wsys = weight_type.split('wsys-')[-1]
-            if i == 0 and mpicomm.rank == 0:
-                logger.info(f'Use a different wsys weight: WEIGHT_{new_wsys.upper()}')
-            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog['WEIGHT_SYS']
-
-        if not keep_all_columns:
-            catalog = catalog[[column for column in keep_columns if column in catalog]]
-
-        catalog['INDWEIGHT'] = individual_weight
-        for column in catalog:
-            if not np.issubdtype(catalog[column].dtype, np.integer):
-                catalog[column] = catalog[column].astype('f8')
-        if bitwise_weights is not None:
-            catalog['BITWEIGHT'] = bitwise_weights
-
-        catalog = get_positions_from_rdz(catalog)
         rdzw.append(catalog)
 
     if concatenate:
@@ -1624,89 +1582,124 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
         return rdzw
 
 
-@default_mpicomm
-def read_full_catalog(kind, wntile=None, concatenate=True,
-                     get_catalog_fn=get_catalog_fn, mpicomm=None, attrs_only=False, **kwargs):
+def mask_catalog(catalog, kind, zrange=None, region=None):
     """
-    Read full data or randoms catalog with given parameters.
+    Apply selection masks to a clustering catalog.
+
+    This function returns a view of `catalog` filtered according to `kind`,
+    optional redshift range `zrange` and sky `region`.
 
     Parameters
     ----------
+    catalog : Catalog
+        Input catalog to be masked.
     kind : str
-        Catalog kind. Options are 'parent_data', 'fibered_data', 'parent_randoms', 'fibered_randoms'.
-    wntile : Path, str, default=None
-        Filename of precomputed wntile weights. If None, compute from data clustering catalog (using :func:`get_catalog_fn`).
-    concatenate : bool
-        Whether to concatenate catalogs from different regions or multiple randoms.
-    get_catalog_fn : callable
-        Function to get catalog filenames.
-    mpicomm : MPI.Comm, optional
-        MPI communicator.
-    kwargs : dict
-        Additional keyword arguments to pass to :func:`get_catalog_fn`.
+        Catalog kind. Typical values include 'data', 'randoms', 'full_data',
+        'fibered_data', etc.
+    zrange : tuple (zmin, zmax), optional
+        Redshift interval to keep: Z in [zmin, zmax). If None, no redshift cut
+        is applied.
+    region : str, optional
+        Sky region name passed to :func:`select_region` (e.g. 'NGC', 'SGC', 'N',
+        'S', 'ALL', 'DES', 'SnoDES', 'ACT_DR6', 'PLANCK_PR4', 'GAL040', ...).
+        If provided, objects outside the region are removed.
 
     Returns
     -------
-    catalog : Catalog, list
-        Catalog object or list of Catalog objects (if ``concatenate`` is False).
-        Contains 'RA', 'DEC', 'TARGETID', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
+    Catalog
+        A filtered Catalog containing only the objects that satisfy the mask.
     """
-    assert kind in ['parent_data', 'fibered_data', 'parent_randoms', 'fibered_randoms'], 'provide kind'
-    region, weight_type = (kwargs.get(key) for key in ['region', 'weight'])
-    fns = get_catalog_fn(kind='full_data' if 'data' in kind else 'full_randoms', **kwargs)
-    if not isinstance(fns, (tuple, list)): fns = [fns]
+    mpicomm = catalog.mpicomm
+    mask = catalog.trues()
+    if 'fibered' in kind and 'data' in kind:
+        mask = catalog['LOCATION_ASSIGNED']
+    if kind in ['data', 'randoms']:
+        if zrange is not None:
+            mask_z = (catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])
+            mask_nx = mask_z & (catalog['NX'] == 0)
+            if 'NX' in catalog and np.any(mask_nx):
+                if mpicomm.rank == 0:
+                    logger.info(f"Found and removed {mask_nx.sum()} objects with NX=0")
+            mask &= mask_z & ~mask_nx
+    if region is not None:
+        mask &= select_region(catalog['RA'], catalog['DEC'], region)
+    return catalog[mask]
 
-    exists = {os.path.exists(fn): fn for fn in fns}
-    if not all(exists):
-        raise IOError(f'Catalogs {[fn for ex, fn in exists.items() if not ex]} do not exist!')
 
-    def get_wntile(wntile):
-        if wntile is None:
-            clustering_data_fn = get_catalog_fn(kind='data', **kwargs)
-        else:
-            clustering_data_fn = wntile
-        toret = None
-        if mpicomm.rank == 0:
-            catalog = _read_catalog(clustering_data_fn, mpicomm=MPI.COMM_SELF)
-            toret = _compute_binned_weight(catalog['NTILE'], catalog['WEIGHT'] / catalog['WEIGHT_COMP'])
-        return mpicomm.bcast(toret, root=0)
+def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=None, log=False):
+    """
+    Compute and attach per-object individual weights to a clustering Catalog.
 
-    catalogs = [None] * len(fns)
-    for ifn, fn in enumerate(fns):
-        irank = ifn % mpicomm.size
-        catalogs[ifn] = (irank, None)
-        if mpicomm.rank == irank:  # Faster to read catalogs from one rank
-            catalog = _read_catalog(fn, mpicomm=MPI.COMM_SELF)
-            columns = ['RA', 'DEC', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'WEIGHT_NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES']
-            columns = [column for column in columns if column in catalog.columns()]
-            catalog = catalog[columns]
-            if 'BITWEIGHTS' in catalog:
-                catalog.attrs['missing_power'] = {column: _compute_missing_power(catalog[column], catalog['BITWEIGHTS'], catalog['LOCATION_ASSIGNED']) for column in ['NTILE']}
-            if 'data' in kind:
-                catalog.attrs['completeness'] = {column: _compute_binned_weight(catalog[column], catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES']) for column in ['NTILE']}
-            if 'fibered' in kind and 'data' in kind:
-                mask = catalog['LOCATION_ASSIGNED']
-                catalog = catalog[mask]
-            if region is not None:
-                mask = select_region(catalog['RA'], catalog['DEC'], region)
-                catalog = catalog[mask]
-            catalogs[ifn] = (irank, catalog)
+    It handles:
 
-    if attrs_only:
-        for irank, catalog in catalogs:
-            attrs = catalog.attrs if mpicomm.rank == irank else None
-            if mpicomm.size > 1:
-                attrs = mpicomm.bcast(catalog.attrs if mpicomm.rank == irank else None, root=irank)
-            return attrs
+    - "full" catalogs (e.g. full_data / full_randoms / fibered_*): per-ntile
+      binned weights are read from catalog.attrs (weight_ntile) and optional
+      BITWEIGHTS / missing_power handling is applied for fiber-assigned inputs.
+    - "clustering" catalogs (data / randoms): per-object INDWEIGHT is built from the
+      catalog WEIGHT column (or set to unity) and then modified according to the
+      requested weight specification (FKP, noimsys, comp, wsys-*, bitwise, ...).
 
-    rdw = []
-    for irank, catalog in catalogs:
-        if mpicomm.size > 1:
-            catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=irank)
-        if False: #'WEIGHT_NTILE' in catalog:
-            individual_weight = catalog['WEIGHT_NTILE']
-        else:
-            individual_weight = get_binned_weight(catalog, {'NTILE': get_wntile(wntile)})
+    Sets and 'INDWEIGHT' column (individual weight). When bitwise weights
+    are requested, a 'BITWEIGHT' column containing the raw bitwise arrays is
+    attached.
+
+    Parameters
+    ----------
+    catalog : Catalog
+        Input catalog (Catalog) to update.
+    kind : str
+        Catalog kind. Expected values include 'data', 'randoms', 'full_data',
+        'full_randoms', 'fibered_data', 'fibered_randoms'.
+    weight : str or None
+        Weight specification string. Typical tokens include:
+        - 'default' : use catalog['WEIGHT'] as INDWEIGHT
+        - 'bitwise'  : apply bitwise weighting logic (may drop FRAC_TLOBS_TILES==0)
+        - 'FKP' or '...FKP' : include FKP weight multiplication (requires FKP_P0 or existing WEIGHT_FKP)
+        - 'noimsys'  : divide INDWEIGHT by WEIGHT_SYS (assumes WEIGHT contains WEIGHT_SYS)
+        - 'comp'     : multiply INDWEIGHT by binned completeness weights provided in binned_weight['completeness']
+        - 'wsys-<NAME>': replace WEIGHT_SYS by WEIGHT_<NAME> factor (divide by WEIGHT_SYS then multiply by WEIGHT_<NAME>)
+        Multiple tokens may be combined using '-' separators (e.g. 'bitwise-default-FKP').
+    FKP_P0 : float or None
+        P0 value used to compute WEIGHT_FKP when needed. If None the function
+        expects a precomputed 'WEIGHT_FKP' column in the catalog.
+    binned_weight : dict or None
+        Dictionary of precomputed binned weights (e.g. {'completeness': arr, 'missing_power': arr})
+        used to apply ntile-based corrections for randoms or completeness.
+    log : bool, default False
+        If True, some informative messages are logged on MPI rank 0.
+
+    Returns
+    -------
+    catalog : Catalog
+        The input Catalog augmented with:
+        - 'INDWEIGHT' : per-object individual weight (float64)
+        - optionally 'BITWEIGHT' : bitwise arrays when requested
+        Columns are cast to float64 where appropriate.
+
+    Notes
+    -----
+    - For 'full' catalogs the function uses catalog.attrs['weight_ntile'] to set
+      INDWEIGHT. For fibered data it applies either bitwise-based missing_power
+      correction (if 'bitwise' requested) or the FRACZ_TILELOCID * FRAC_TLOBS_TILES
+      correction otherwise.
+    - For clustering catalogs, the behaviour depends on the tokens in `weight`.
+      When 'bitwise' is present and kind == 'data' INDWEIGHT is set to WEIGHT/WEIGHT_COMP
+      and BITWEIGHT is attached; for randoms INDWEIGHT uses WEIGHT * binned_weight['missing_power'].
+    - When 'bitwise' appears in the weight string the function filters out objects
+      where FRAC_TLOBS_TILES == 0 to avoid degenerate tile intersections.
+    - The function computes WEIGHT_FKP on-the-fly when FKP_P0 is provided, using:
+          WEIGHT_FKP = 1 / (1 + NX * FKP_P0)
+      and multiplies INDWEIGHT by WEIGHT_FKP.
+    """
+    catalog = catalog.copy()  # avoid modifying input catalog in-place
+
+    mpicomm = catalog.mpicomm
+
+    weight_type = weight
+    assert weight_type is not None, 'provide weight'
+
+    if 'full' in kind or 'fibered' in kind:
+        individual_weight = get_binned_weight(catalog, catalog.attrs['weight_ntile'])
         bitwise_weights = None
         if 'fibered' in kind and 'data' in kind:
             if 'bitwise' in weight_type:
@@ -1721,18 +1714,201 @@ def read_full_catalog(kind, wntile=None, concatenate=True,
         for column in catalog:
             catalog[column] = catalog[column].astype('f8')
         if bitwise_weights is not None: catalog['BITWEIGHT'] = bitwise_weights
-        rdw.append(catalog)
-    if concatenate:
-        if len(rdw) == 1: return rdw[0]
-        return Catalog.concatenate(rdw)
+
     else:
-        return rdw
+        if 'bitwise' in weight_type:
+            # ADM: I guess this is because we want to restrict to TILE-intersections where we have observed something?
+            catalog = catalog[(catalog['FRAC_TLOBS_TILES'] != 0)]
+
+        if 'default' in weight_type:
+            individual_weight = catalog['WEIGHT'].copy()
+        else:
+            logger.info('Not using WEIGHT column as individual weight')
+            individual_weight = np.ones(len(catalog), dtype='f8')
+        bitwise_weights = None
+
+        if 'bitwise' in weight_type:
+            if kind == 'data':
+                individual_weight = catalog['WEIGHT'] / catalog['WEIGHT_COMP']
+                bitwise_weights = catalog['BITWEIGHTS']
+            elif kind == 'randoms':
+                individual_weight = catalog['WEIGHT'] * get_binned_weight(catalog, binned_weight['missing_power'])
+
+        if 'FKP' in weight_type.upper():
+            if log and mpicomm.rank == 0:
+                if FKP_P0 is None:
+                    logger.info('Multiplying individual weights by WEIGHT_FKP')
+                else:
+                    logger.info(f'Multiplying individual weights by FKP weight computed with FKP_P0 = {FKP_P0}')
+            if FKP_P0 is not None:
+                catalog['WEIGHT_FKP'] = 1. / (1. + catalog['NX'] * FKP_P0)
+            elif 'WEIGHT_FKP' not in catalog.columns():
+                raise ValueError('WEIGHT_FKP column does not exist! Provide a value for FKP_P0.')
+            individual_weight *= catalog['WEIGHT_FKP']
+
+        if 'noimsys' in weight_type:
+            # this assumes that the WEIGHT column contains WEIGHT_SYS
+            if log and mpicomm.rank == 0:
+                logger.info('Dividing individual weights by WEIGHT_SYS')
+            individual_weight /= catalog['WEIGHT_SYS']
+
+        if 'comp' in weight_type:
+            individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
+
+        if 'wsys' in weight_type and not 'noimsys' in weight_type:
+            new_wsys = weight_type.split('wsys-')[-1]
+            if log and mpicomm.rank == 0:
+                logger.info(f'Use a different wsys weight: WEIGHT_{new_wsys.upper()}')
+            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog['WEIGHT_SYS']
+
+        catalog['INDWEIGHT'] = individual_weight
+        for column in catalog:
+            if not np.issubdtype(catalog[column].dtype, np.integer):
+                catalog[column] = catalog[column].astype('f8')
+        if bitwise_weights is not None:
+            catalog['BITWEIGHT'] = bitwise_weights
+
+    return catalog
+
+
+def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, keep_columns=None, set_positions_from_rdz=set_positions_from_rdz,
+                    mask_catalog=mask_catalog, set_catalog_weights=set_catalog_weights, **kwargs):
+    """
+    Prepare catalog (data or randoms) with given parameters.
+
+    Parameters
+    ----------
+    catalogs : Catalog, list
+        Catalog object or list of Catalog objects.
+    kind : str
+        Catalog kind. Options are 'data' or 'randoms'.
+    concatenate : bool
+        Whether to concatenate catalogs from different regions or multiple randoms.
+        If ``None``, return list if input is list.
+    binned_weight : dict, optional
+        Binned weights to apply. Keys are column names, values are weight arrays.
+    keep_columns : list, optional
+        If True, keep all columns.
+        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID'].
+        Else, a list of column names to keep in the output catalog.
+        Note: INDWEIGHT is always included.
+    region : str, optional
+        Region to select. Options are 'NGC', 'SGC', or 'ALL'.
+    zrange : tuple, optional
+        Redshift range to select, e.g. (0.8, 1.1).
+    weight : str, optional
+        Weight type to apply. Options are 'default', 'bitwise', 'FKP', 'noimsys', 'comp', 'wsys-XXX', or combinations of these separated by '-'.
+        'default' corresponds to the WEIGHT column in the catalog.
+    FKP_P0 : float, optional
+        P0 parameter to compute FKP weights. If not provided, WEIGHT_FKP column must be present in the catalog.
+    kwargs : dict
+        Additional keyword arguments to pass to :func:`get_catalog_fn`.
+
+    Returns
+    -------
+    catalog : Catalog, list
+        Catalog object or list of Catalog objects (if ``concatenate`` is False).
+        Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+    """
+    FKP_P0, zrange, region, weight = (kwargs.get(key, None) for key in ['FKP_P0', 'zrange', 'region', 'weight'])
+
+    keep_all_columns = False
+    if isinstance(keep_columns, bool) and keep_columns:
+        keep_all_columns = True
+    elif keep_columns is None:
+        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+    else:
+        assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
+
+    if not isinstance(catalogs, (tuple, list)):
+        catalogs = [catalogs]
+        if concatenate is None:
+            concatenate = True
+    catalogs = list(catalogs)
+
+    rdzw = []
+    for i, catalog in enumerate(catalogs):
+        catalog = mask_catalog(catalog, kind, zrange=zrange, region=region)
+        catalog = set_catalog_weights(catalog, kind, weight=weight, FKP_P0=FKP_P0, binned_weight=binned_weight, log=i == 0)
+        catalog = set_positions_from_rdz(catalog)
+        rdzw.append(catalog)
+        if not keep_all_columns:
+            catalog = catalog[[column for column in keep_columns if column in catalog]]
+
+    if concatenate:
+        if len(rdzw) == 1: return rdzw[0]
+        return Catalog.concatenate(rdzw)
+    else:
+        return rdzw
+
+
+@default_mpicomm
+def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=None, complete=None, binned_weight=None, keep_columns=None,
+                            get_catalog_fn=get_catalog_fn, set_positions_from_rdz=set_positions_from_rdz, mpicomm=None, **kwargs):
+    """
+    Read clustering catalog (data or randoms) with given parameters.
+
+    Parameters
+    ----------
+    kind : str
+        Catalog kind. Options are 'data' or 'randoms'.
+    concatenate : bool
+        Whether to concatenate catalogs from different regions or multiple randoms.
+    get_catalog_fn : callable
+        Function to get catalog filenames.
+    set_positions_from_rdz : callable
+        Function to compute Cartesian positions from R.A., Dec., and redshift.
+    expand : callable, dict, optional
+        If callable, function to expand randoms catalog.
+        If dict, parameters to expand randoms catalog via :func:`expand_randoms`.
+        In this case, modified in-place to add the parent randoms catalog with key its file name.
+    reshuffle : callable, dict, optional
+        If callable, function to reshuffle randoms catalog.
+        If dict, parameters to reshuffle randoms catalog via :func:`reshuffle_randoms`.
+        In this case, modified in-place to add the merged data catalogs with key its file name.
+    complete : dict, optional
+        If dict, parameters to create complete data catalog on-the-fly via :func:`complete_from_full_data`.
+    binned_weight : dict, optional
+        Binned weights to apply. Keys are column names, values are weight arrays.
+    keep_columns : list, optional
+        If True, keep all columns.
+        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID'].
+        Else, a list of column names to keep in the output catalog.
+        Note: INDWEIGHT is always included.
+    mpicomm : MPI.Comm, optional
+        MPI communicator.
+    region : str, optional
+        Region to select. Options are 'NGC', 'SGC', or 'ALL'.
+    zrange : tuple, optional
+        Redshift range to select, e.g. (0.8, 1.1).
+    weight : str, optional
+        Weight type to apply. Options are 'default', 'bitwise', 'FKP', 'noimsys', 'comp', 'wsys-XXX', or combinations of these separated by '-'.
+        'default' corresponds to the WEIGHT column in the catalog.
+    FKP_P0 : float, optional
+        P0 parameter to compute FKP weights. If not provided, WEIGHT_FKP column must be present in the catalog.
+    kwargs : dict
+        Additional keyword arguments to pass to :func:`get_catalog_fn`.
+
+    Returns
+    -------
+    catalog : Catalog, list
+        Catalog object or list of Catalog objects (if ``concatenate`` is False).
+        Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+    """
+    catalogs = read_catalog(kind=kind, concatenate=concatenate, get_catalog_fn=get_catalog_fn,
+                            expand=expand, reshuffle=reshuffle, complete=complete, mpicomm=mpicomm, read=_read_catalog,
+                            **kwargs)
+    catalogs = prepare_catalog(catalogs, kind=kind, set_positions_from_rdz=set_positions_from_rdz,
+                               mask_catalog=mask_catalog, set_catalog_weights=set_catalog_weights,
+                               binned_weight=binned_weight, keep_columns=keep_columns, **kwargs)
+    return catalogs
 
 
 @default_mpicomm
 def write_stats(filename, stats, mpicomm=None):
     """Write summary statistics to file from process 0 only."""
-    import jax
     filename = Path(filename)
     tmp_filename = filename.with_name(filename.stem + '.tmp' + filename.suffix)
     if mpicomm.rank == 0:

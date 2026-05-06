@@ -83,8 +83,9 @@ def _make_list_zrange(zranges):
 def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                get_stats_fn=tools.get_stats_fn,
                                get_catalog_fn=None,
-                               read_clustering_catalog=tools.read_clustering_catalog,
-                               read_full_catalog=tools.read_full_catalog,
+                               read_catalog=tools.read_catalog,
+                               prepare_catalog=tools.prepare_catalog,
+                               mask_catalog=tools.mask_catalog,
                                **kwargs):
     """
     Compute summary statistics based on the provided options.
@@ -105,10 +106,10 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     get_catalog_fn : callable, optional
         Function to get the filename for reading the catalog.
         If provided, it is given to ``read_clustering_catalog`` and ``read_full_catalog``.
-    read_clustering_catalog : callable, optional
-        Function to read the clustering catalog.
-    read_full_catalog : callable, optional
-        Function to read the full catalog.
+    read_catalog : callable, optional
+        Function to read the catalog.
+    prepare_catalog : callable, optional
+        Function to prepare the clustering ('data', 'randoms') or 'full' ('fibered_data', 'parent_data', 'fibered_randoms', 'parent_randoms') catalogs.
     **kwargs : dict
         Options for catalog, reconstruction, and summary statistics.
     """
@@ -124,37 +125,40 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     tracers = list(catalog_options.keys())
 
     # Create redshift range lists for each tracer (support multiple z-bins)
-    zranges = {tracer: _make_list_zrange(catalog_options[tracer]['zrange']) for tracer in tracers}
+    zranges = {tracer: _make_list_zrange(catalog_options[tracer].pop('zrange')) for tracer in tracers}
+    region = {tracer: catalog_options[tracer].get('region') for tracer in tracers}
 
     # Wrap catalog readers with catalog filename lookup function
     if get_catalog_fn is not None:
-        read_clustering_catalog = functools.partial(read_clustering_catalog, get_catalog_fn=get_catalog_fn)
-        read_full_catalog = functools.partial(read_full_catalog, get_catalog_fn=get_catalog_fn)
+        read_catalog = functools.partial(read_catalog, get_catalog_fn=get_catalog_fn)
+        prepare_catalog = functools.partial(prepare_catalog, mask_catalog=mask_catalog)
 
     # Check if any statistic requires reconstruction
     with_recon = any('recon' in stat for stat in stats)
     with_catalogs = True
 
     # Initialize catalogs and randoms dictionaries
-    data, randoms = {}, {}
+    data, randoms, raw_randoms, raw_full_data = {}, {}, {}, {}
     with_stats_blinding = False
     if with_catalogs:
         # Load data and random catalogs for each tracer
         for tracer in tracers:
             _catalog_options = dict(catalog_options[tracer])
             # Expand redshift range to cover all requested z-bins
-            _catalog_options['zrange'] = (min(zrange[0] for zrange in zranges[tracer]), max(zrange[1] for zrange in zranges[tracer]))
 
             # Add bitwise weight information (PIP, completeness) if needed
+            binned_weight = {}
             if any(name in _catalog_options.get('weight', '') for name in ['bitwise', 'compntile']):
                 # sets NTILE-MISSING-POWER (missing_power) and per-tile completeness (completeness)
-                _catalog_options['binned_weight'] = read_full_catalog(kind='parent_data', **_catalog_options, attrs_only=True)
+                raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options)
+                binned_weight.update(raw_full_data[tracer].attrs)
+            _catalog_options['binned_weight'] = binned_weight
 
             # Add reconstruction options if needed
             if with_recon:
                 recon_options = options['recon'][tracer]
                 # pop as we don't need it anymore
-                _catalog_options |= {key: recon_options.pop(key) for key in list(recon_options) if key in ['nran', 'zrange']}
+                _catalog_options |= {key: recon_options.pop(key) for key in list(recon_options) if key in ['nran']}
 
             # Check if analysis requires blinding (e.g., protected samples)
             with_stats_blinding |= tools.check_if_stats_requires_blinding(analysis=analysis, **_catalog_options)
@@ -163,10 +167,13 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 _catalog_options.setdefault('reshuffle', {})  # to pass on complete data
 
             # Read data and random catalogs
-            data[tracer] = read_clustering_catalog(kind='data', **_catalog_options, concatenate=True)
+            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=False), kind='data', binned_weight=binned_weight)
+            binned_weight.update(data[tracer].attrs)  # update with any additional info from prepared data catalog
             #_catalog_options.pop('complete', None)
             #_catalog_options.pop('reshuffle', None)
-            randoms[tracer] = read_clustering_catalog(kind='randoms', **_catalog_options, cache=cache, concatenate=False)
+            raw_randoms[tracer] = read_catalog(kind='randoms', **_catalog_options, concatenate=False)
+            randoms[tracer] = prepare_catalog(raw_randoms[tracer], kind='randoms', **_catalog_options)
+            catalog_options[tracer]['binned_weight'] = binned_weight  # store binned weight info in catalog options for later use in stats computation
 
     # Warn user if blinding will be applied
     if with_stats_blinding:
@@ -180,8 +187,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         for tracer in tracers:
             recon_options = dict(options['recon'][tracer])
             # Store reconstruction mode and radius for each tracer
-            for name in stat_recon_attrs: stat_recon_attrs[name].append(recon_options[name[len('recon_'):]])
-
+            for name in stat_recon_attrs:
+                stat_recon_attrs[name].append(recon_options[name[len('recon_'):]])
             # Run reconstruction to get shifted positions
             data[tracer]['POSITION_REC'], randoms_rec_positions = compute_reconstruction(lambda: {'data': data[tracer], 'randoms': Catalog.concatenate(randoms[tracer])}, **recon_options)
 
@@ -198,17 +205,23 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     if with_catalogs:
 
         funcs = {2: compute_particle2_angular_upweights, 3: compute_particle3_angular_upweights}
+        _cache_full = {}
 
         for npt, func in funcs.items():
 
             def get_data(tracer):
                 # Load full parent catalogs (before any selection) for AUW computation
-                _catalog_options = catalog_options[tracer] | dict(zrange=None)
-                toret = {kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_data', 'parent_data']}
-                if npt > 2:
-                    toret.update({kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_randoms', 'parent_randoms']})
+                _catalog_options = dict(catalog_options[tracer])
+                toret = {}
+                for kind in ['fibered_data', 'parent_data'] + (['fibered_randoms', 'parent_randoms'] if npt > 2 else []):
+                    if kind not in _cache_full:
+                        if tracer not in raw_full_data:
+                            raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=False)
+                            _catalog_options['binned_weight'].update(raw_full_data[tracer].attrs)  # update binned weight info for AUW computation
+                        _cache_full[name] = prepare_catalog(raw_randoms[tracer] if 'randoms' in kind else raw_full_data[tracer], kind=kind, **_catalog_options)
+                    toret[name] = _cache_full[name]
                 return toret
-            
+
             stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}'])]
             if any(options[stat].get('auw', False) for stat in stats_npt):
                 # Compute angular upweights from fibered vs parent catalogs
@@ -222,21 +235,17 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 for stat in stats_npt:
                     if options[stat].get('auw', False): options[stat]['auw'] = auw  # update with angular upweights
 
+        del _cache_full, raw_randoms, raw_full_data
+
     # Loop over all requested redshift bins
     for zvals in zip(*(zranges[tracer] for tracer in tracers)):
         zrange = dict(zip(tracers, zvals))
-
-        def get_zcatalog(catalog, zrange):
-            # Extract redshift slice from catalog
-            mask = (catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])
-            return catalog[mask]
-
         zdata, zrandoms = {}, {}
         if with_catalogs:
             # Slice catalogs to current redshift bin
             for tracer in tracers:
-                zdata[tracer] = get_zcatalog(data[tracer], zrange[tracer])
-                zrandoms[tracer] = [get_zcatalog(random, zrange[tracer]) for random in randoms[tracer]]
+                zdata[tracer] = mask_catalog(data[tracer], 'data', region=region[tracer], zrange=zrange[tracer])
+                zrandoms[tracer] = [mask_catalog(random, 'randoms', region=region[tracer], zrange=zrange[tracer]) for random in randoms[tracer]]
         fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=zrange[tracer]) for tracer in tracers}
 
         def get_catalog_recon(catalog):
@@ -249,17 +258,16 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             for stat, func in funcs.items():
                 if stat in stats:
                     correlation_options = dict(options[stat])
-    
+
                     def get_data(tracer):
                         # Prepare data structure for correlation function measurement
                         if recon:
                             # Use reconstructed positions as primary, randoms for random catalogs
-                            return {'data': get_catalog_recon(zdata[tracer]),
-                                    'randoms': zrandoms[tracer],
+                            return {'data': get_catalog_recon(zdata[tracer]), 'randoms': zrandoms[tracer],
                                     'shifted': [get_catalog_recon(zrandom) for zrandom in zrandoms[tracer]]}
                         # Default: use original positions
                         return {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
-    
+
                     # Compute 2 or 3-point correlation function
                     correlation = func(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
                     # Apply blinding if requested (only for raw measurements, not reconstruction)
@@ -287,8 +295,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         czrandoms = Catalog.concatenate(zrandoms[tracer])
                         if recon:
                             # Use reconstructed positions, with same shifts applied to randoms
-                            toret = {'data': get_catalog_recon(zdata[tracer]),
-                                     'randoms': czrandoms,
+                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': czrandoms,
                                      'shifted': get_catalog_recon(czrandoms)}
                         else:
                             # Default: use original positions
@@ -677,7 +684,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
 
     imocks = kwargs.pop('imocks', None)
     extra = kwargs.pop('extra', None)
-    
+
     # Fill fiducial defaults
     options = fill_fiducial_options(kwargs, analysis=analysis)
     catalog_options = options['catalog']
@@ -771,7 +778,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                     downscale = np.kron(np.eye(len(window_geometry.theory.ells)), block)
                     # use it to "interpolate" the forward-modeled window to the geometry of the base window
                     window_fm = window_fm.clone(value=window_fm.value().dot(downscale))
-                
+
                 fn = get_stats_fn(kind=stat, **(kw | {"extra": effect}))
                 # Adding all effects
                 window = window_geometry.clone(value=window_geometry.value() + window_fm.value())

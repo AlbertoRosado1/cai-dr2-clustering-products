@@ -214,7 +214,7 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
     if version == 'ezmock':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/EZmock/CubicBox_6Gpc/{stracer}/z{zsnap:.3f}/'
-        return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]   
+        return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]
     if version == 'abacus-2ndgen':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/CubicBox/{stracer}/z{zsnap:.3f}/AbacusSummit_base_c000_ph{imock:03d}/'
@@ -239,7 +239,7 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
 
 
 @default_mpicomm
-def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_catalog_fn=get_box_catalog_fn, **kwargs):
+def read_box_catalog(kind='data', los='z', mpicomm=None, get_box_catalog_fn=get_box_catalog_fn, **kwargs):
     """
     Read data clustering catalog with given parameters.
 
