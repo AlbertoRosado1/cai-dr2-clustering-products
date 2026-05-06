@@ -41,7 +41,7 @@ from .spectrum2_tools import (
     compute_rotation_mesh2_spectrum,
     compute_window_mesh2_spectrum_fm,
 )
-from .correlation3_tools import compute_particle3_angular_upweights
+from .correlation3_tools import compute_particle3_angular_upweights, compute_particle3_correlation
 from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum
 from .recon_tools import compute_reconstruction
 
@@ -197,14 +197,18 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     # Compute angular upweights for fiber collision corrections if requested
     if with_catalogs:
 
-        def get_data(tracer):
-            # Load full parent catalogs (before any selection) for AUW computation
-            _catalog_options = catalog_options[tracer] | dict(zrange=None)
-            return {kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_data', 'parent_data']}
-
         funcs = {2: compute_particle2_angular_upweights, 3: compute_particle3_angular_upweights}
 
         for npt, func in funcs.items():
+
+            def get_data(tracer):
+                # Load full parent catalogs (before any selection) for AUW computation
+                _catalog_options = catalog_options[tracer] | dict(zrange=None)
+                toret = {kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_data', 'parent_data']}
+                if npt > 2:
+                    toret.update({kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_randoms', 'parent_randoms']})
+                return toret
+            
             stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}'])]
             if any(options[stat].get('auw', False) for stat in stats_npt):
                 # Compute angular upweights from fibered vs parent catalogs
@@ -241,31 +245,32 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
         # Summary statistics computation loop
         for recon in ['', 'recon_']:
-            stat = f'{recon}particle2_correlation'
-            if stat in stats:
-                correlation_options = dict(options[stat])
-
-                def get_data(tracer):
-                    # Prepare data structure for correlation function measurement
+            funcs = {f'{recon}particle2_correlation': compute_particle2_correlation, f'{recon}particle3_correlation': compute_particle3_correlation}
+            for stat, func in funcs.items():
+                if stat in stats:
+                    correlation_options = dict(options[stat])
+    
+                    def get_data(tracer):
+                        # Prepare data structure for correlation function measurement
+                        if recon:
+                            # Use reconstructed positions as primary, randoms for random catalogs
+                            return {'data': get_catalog_recon(zdata[tracer]),
+                                    'randoms': zrandoms[tracer],
+                                    'shifted': [get_catalog_recon(zrandom) for zrandom in zrandoms[tracer]]}
+                        # Default: use original positions
+                        return {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
+    
+                    # Compute 2 or 3-point correlation function
+                    correlation = func(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
+                    # Apply blinding if requested (only for raw measurements, not reconstruction)
+                    if with_stats_blinding and not recon:  # FIXME
+                        correlation = tools.apply_blinding(correlation, tracers, zrange=sum(zrange.values(), start=tuple()))
+                    # Store reconstruction metadata
                     if recon:
-                        # Use reconstructed positions as primary, randoms for random catalogs
-                        return {'data': get_catalog_recon(zdata[tracer]),
-                                'randoms': zrandoms[tracer],
-                                'shifted': [get_catalog_recon(zrandom) for zrandom in zrandoms[tracer]]}
-                    # Default: use original positions
-                    return {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
-
-                # Compute 2-point correlation function
-                correlation = compute_particle2_correlation(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
-                # Apply blinding if requested (only for raw measurements, not reconstruction)
-                if with_stats_blinding and not recon:  # FIXME
-                    correlation = tools.apply_blinding(correlation, tracers, zrange=sum(zrange.values(), start=tuple()))
-                # Store reconstruction metadata
-                if recon:
-                    correlation.attrs.update(stat_recon_attrs)
-                # Write correlation to disk
-                fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **correlation_options)
-                tools.write_stats(fn, correlation)
+                        correlation.attrs.update(stat_recon_attrs)
+                    # Write correlation to disk
+                    fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **correlation_options)
+                    tools.write_stats(fn, correlation)
 
             # Map of spectrum statistics to computation functions
             funcs = {f'{recon}mesh2_spectrum': compute_mesh2_spectrum, f'{recon}mesh3_spectrum': compute_mesh3_spectrum}
@@ -877,7 +882,7 @@ def main(**kwargs):
     """
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
+    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
     parser.add_argument('--version', help='catalog version; e.g. holi-v1-altmtl', type=str, default=None)
     parser.add_argument('--cat_dir', help='where to find catalogs', type=str, default=None)
     parser.add_argument('--tracer', help='tracer(s) to be selected - e.g. LRG ELG for cross-correlation', nargs='*', type=str, default='LRG')

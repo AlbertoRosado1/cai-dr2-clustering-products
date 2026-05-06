@@ -10,6 +10,7 @@ Main functions
 
 import time
 import logging
+import itertools
 
 import numpy as np
 import jax
@@ -21,6 +22,64 @@ from .spectrum2_tools import prepare_jaxpower_particles, _get_jaxpower_attrs
 
 
 logger = logging.getLogger('spectrum3')
+
+
+def compute_spectrum3_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None):
+    """Compute and apply close-pair corrections."""
+
+    from cucount.jax import create_sharding_mesh, BinAttrs, triposh_to_poles
+
+    with create_sharding_mesh() as sharding_mesh:
+        if callable(get_data_randoms[0]):
+            all_particles = prepare_cucount_particles(*get_data_randoms)
+            if jax.process_index() == 0: logger.info('All particles on the device')
+
+    results = {}
+    results['raw'] = spectrum
+    corrections = {'auw': auw, 'cut': cut}
+    for name in corrections:
+        if corrections[name] is not None:
+            correction = _compute_spectrum3_close_pair_correction(all_particles, ells=spectrum.ells, **{name: corrections[name]})
+            results[name] = _apply_spectrum3_close_pair_correction(spectrum, correction)
+    return results
+
+
+def _compute_spectrum3_close_pair_correction(all_particles, edges=None, ells: list=None, auw=None, cut=None):
+    """Compute and apply close-pair corrections."""
+
+    from cucount.jax import BinAttrs, triposh_to_poles
+
+    if edges is None:
+        edges = np.linspace(1e-3, 5000., 3001)
+    if ells is None:
+        ells = [(0, 0, 0), (2, 0, 2)]
+    ells = triposh_to_poles(ells)
+    battrs = [BinAttrs(s=edges, pole=(ell, 'firstpoint')) for ell in ells]
+    from .correlation3_tools import _compute_particle3_close_pair_correction
+    return _compute_particle3_close_pair_correction(all_particles, battrs, auw=auw, cut=cut, veto23=True)
+
+
+def _apply_spectrum3_close_pair_correction(spectrum, correction):
+    """Apply additive corrections to a :class:`Mesh3SpectrumPoles`."""
+    from cucount.jax import triposh_transform_matrix
+    from jaxpower.particle3 import Particle3CorrelationPole, Particle3CorrelationPoles
+    out = spectrum
+    value = 0.
+    matrix = None
+    for count_name in correction:
+        sign = (-1)**(3 - count_name.count('D'))  # randoms can be R or S
+        poles = correction[count_name].ravel()
+        if matrix is None:
+            ells = getattr(poles, 'ells', [])
+            ells = [list(dict.fromkeys([ell[idim] for ell in ells])) for idim in [0, 1]]
+            _, matrix = triposh_transform_matrix(*ells, spectrum.ells)
+        value += sign * jnp.dot(matrix, jnp.array([pole.values('counts') for pole in poles]))
+    correlation = []
+    for ill, ell in enumerate(spectrum.ells):
+        correlation.append(Particle3CorrelationPole(s=poles.coords('s'), s_edges=poles.edges('s'), num_raw=value[ill], norm=jnp.ones_like(value[ill]) * spectrum.get(ell).values('norm').mean(), ell=ell))
+    correlation = Particle3CorrelationPoles(correlation)
+    value = correlation.to_spectrum(spectrum).value()
+    return spectrum.clone(value=spectrum.value() + value)
 
 
 def compute_mesh3_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
@@ -111,134 +170,16 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
         if jax.process_index() == 0:
             logger.info('Normalization and shotnoise computation finished')
 
+        # Galaxy pairs at small angular separation
         results = {}
-        if cut is not None or auw is not None:
-            from cucount.jax import SelectionAttrs
-            from jaxpower.particle3 import BinParticle3CorrelationPoles, convert_particles, compute_particle3
-            # First compute the theta-cut (close-pair) contribution for contamination correction
-
-            _identity_fn = lambda x: x
-
-            def digitize(particles, wattrs, cellsize=40.):
-                from jax.sharding import PartitionSpec as P
-                if sharding_mesh.axis_names:
-                    particles = jax.jit(_identity_fn, out_shardings=jax.sharding.NamedSharding(sharding_mesh, spec=P(None)))(particles)
-                positions = particles.get('positions')
-                weights = wattrs(particles)
-                extent = positions.min(axis=0), positions.max(axis=0)
-                boxsize = extent[1] - extent[0]
-                meshsize = jnp.ceil(boxsize / cellsize).astype('i4')
-                boxsize = meshsize * cellsize
-                index = (positions - extent[0]) / boxsize * meshsize
-                index = jnp.rint(index).astype('i4')
-                index_weights = jnp.zeros(tuple(meshsize))
-                index_weights = index_weights.at[tuple(jnp.unstack(index, axis=-1))].add(weights).ravel()
-                index = jnp.meshgrid(*(jnp.arange(size) for size in meshsize), indexing='ij')
-                index = jnp.column_stack([idx.ravel() for idx in index])
-                index_positions = index * cellsize + extent[0]
-                mask = index_weights != 0.
-                return particles.clone(positions=index_positions[mask], weights=index_weights[mask], index_value=None, exchange=False)
-
-            def compute_particle3_resol(*all_particles, sattrs, wattrs, **kw):
-                # Exclude 0 to avoid estimating the shot noise
-                #edges12 = np.geomspace(10**(-2), np.sqrt(np.sum(mattrs.boxsize**2)), 1001)
-                edges12 = np.linspace(1e-3, np.sqrt(np.sum(mattrs.boxsize**2)), 1001)
-                #edges12 = np.linspace(1e-3, 2000., 10000)
-                #s_limits = [(0., 200.), (200., edges12[-1])]
-                #cellsizes = [None, 40.]
-                s_limits = [(0., 150.), (150., 500.), (500., edges12[-1])]
-                cellsizes = [None, 30., 100.]
-
-                #edges12 = np.linspace(0., 100, 21)
-                #wattrs = WeightAttrs()
-                pbin = BinParticle3CorrelationPoles(mattrs, edges=edges12, sattrs=sattrs, wattrs=wattrs, **kw)
-                all_particles = list(all_particles) + [all_particles[-1]] * (3 - len(all_particles))
-                results = []
-                for s_limit, cellsize in zip(s_limits, cellsizes):
-                    t0 = time.time()
-                    sattrs_limit = SelectionAttrs(s=s_limit)
-                    veto_third = SelectionAttrs(s=(0., edges12.min()))
-                    # 1) close-pair (1, 2)
-                    all_particles_resol = list(all_particles)
-                    if cellsize is not None:
-                        all_particles_resol[2] = digitize(all_particles_resol[2], wattrs=wattrs, cellsize=cellsize)
-                    result12 = compute_particle3(*all_particles_resol, bin=pbin, sattrs13=sattrs_limit, veto23=veto_third, close_pair=(1, 2))
-                    # 2) close-pair (1, 3), excluding (1, 2) close pairs
-                    all_particles_resol = list(all_particles)
-                    if cellsize is not None:
-                        all_particles_resol[1] = digitize(all_particles_resol[1], wattrs=wattrs, cellsize=cellsize)
-                    result13 = compute_particle3(*all_particles_resol, bin=pbin, sattrs12=sattrs_limit, veto23=veto_third, close_pair=(1, 3))
-                    # 3) close-pair (2, 3), excluding (1, 2), (1, 3) close pairs
-                    all_particles_resol = list(all_particles)
-                    if cellsize is not None:
-                        all_particles_resol[0] = digitize(all_particles_resol[0], wattrs=wattrs, cellsize=cellsize)
-                    result23 = compute_particle3(*all_particles_resol, bin=pbin, sattrs12=sattrs_limit, veto23=veto_third, close_pair=(2, 3), shard_particle=2)
-                    results += [result12, result13, result23]
-                    #results += [result12]
-                    #print(s_limit, cellsize, time.time() - t0, flush=True)
-                result = results[0].clone(value=sum(result.value() for result in results))
-                return result
-
-            from cucount.jax import WeightAttrs
-            if cut is not None:
-                if 'sugiyama' not in bin.basis:
-                    raise NotImplementedError('theta-cut only supported for the sugiyama basis')
-                # Define angular selection: only pairs separated by < 0.05 degrees
-                sattrs = {'theta': (0., 0.05)}
-                # Convert FKP fields to particle pairs for direct pair counting
-                all_particles = [convert_particles(fkp.particles) for fkp in all_fkp]
-                wattrs = WeightAttrs()
-                close = compute_particle3_resol(*all_particles, sattrs=sattrs, wattrs=wattrs, ells=ells)
-                # Attach normalization, then convert to power spectrum
-                close = close.clone(norm=norm)
-                # Convert correlation poles to power spectrum (multiply by bin centers)
-                close = close.to_spectrum(bin.xavg)
-                # Store negative contribution (contamination to subtract)
-                results['cut'] = -close.value()
-
-            # Then compute the AUW-weighted (angular upweight) pairs and bitwise-weighted pairs
-            with_bitweights = 'BITWEIGHT' in all_fkp[0].data.extra
-            if with_bitweights:
-                raise NotImplementedError('bitweights not supported')
-            if auw is not None or with_bitweights:
-                if 'sugiyama' not in bin.basis:
-                    raise NotImplementedError('AUW only supported for the sugiyama basis')
-                # Define angular selection for close pairs (< 0.1 degrees for bitwise weights)
-                sattrs = {'theta': (0., 0.05)}
-                bitwise = angular = None
-                if with_bitweights:
-                    # Weights for fiber collision corrections
-                    # 1) systematic weights --- without completeness
-                    # 2) bitweights
-                    # 3) weights to subtract off (already in the mesh-based P(k) estimation)
-                    all_data = [convert_particles(fkp.data, weights=[fkp.data.extra['INDWEIGHT_NO_COMP']] + list(jnp.unpack(fkp.data.extra['BITWEIGHT'], axis=-1)) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
-                    # Extract bitwise weight structure (sets nrealizations based on BITWEIGHT size, fine to use the first)
-                    bitwise = dict(weights=all_data[0].get('bitwise_weight'))
-                    if jax.process_index() == 0:
-                        logger.info(f'Applying PIP weights {bitwise}.')
-                else:
-                    # No bitwise weights, remove individual weights from AUW * individual_weight
-                    #all_data = [convert_particles(fkp.data, weights=[fkp.data.weights] * 2, exchange_weights=False, index_value=dict(individual_weight=1, negative_weight=1)) for fkp in all_fkp]
-                    all_data = [convert_particles(fkp.data, weights=fkp.data.weights, exchange_weights=False, index_value=dict(individual_weight=1)) for fkp in all_fkp]
-                # Apply angular upweights if provided (fiber collision corrections)
-                if auw is not None:
-                    # Extract angular separation and weight values from pre-computed AUW
-                    #sep=list(auw.get('DDD').coords().values()),
-                    angular = dict(edges=[np.append(edge[:, 0], edge[-1, 1]) for edge in auw.get('DDD').edges().values()],
-                                   weight=auw.get('DDD').value())
-                    if not with_bitweights:
-                        angular['weight'] = angular['weight'] - 1.
-                        #angular['weight'] = np.where(angular['weight'] != 1., 1., 0.)
-                    if jax.process_index() == 0:
-                        logger.info(f'Applying AUW {angular}.')
-                # Set up weight attributes for pair counting
-                wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
-                DDD = compute_particle3_resol(*all_data, sattrs=sattrs, wattrs=wattrs, ells=ells)
-                # Attach normalization
-                #DDD.write('test.h5')
-                DDD = DDD.clone(norm=norm)
-                DDD = DDD.to_spectrum(bin.xavg)
-                results['auw'] = DDD.value()
+        corrections = {'auw': auw, 'cut': cut}
+        if any(corrections.values()):
+            from jaxpower.particle3 import convert_particles
+            all_particles = [{'data': convert_particles(fkp.data, weights=fkp.data.weights, exchange_weights=False),
+                             'randoms': convert_particles(fkp.randoms, weights=fkp.randoms.weights, exchange_weights=False)} for fkp in all_fkp]
+            for name in corrections:
+                if corrections[name] is not None:
+                    results[name] = _compute_spectrum3_close_pair_correction(all_particles, ells=bin.ells, **{name: corrections[name]})
 
         # Paint FKP fields onto mesh grids (stored as real-valued arrays to save memory)
         meshes = [fkp.paint(**kw, out='real') for fkp in all_fkp]
@@ -262,12 +203,8 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
         if jax.process_index() == 0:
             logger.info('Mesh-based computation finished')
 
-        # Add theta-cut and AUW contributions to the base spectrum
-        for name, value in results.items():
-            # Combine contamination corrections with raw spectrum
-            #print(value)
-            results[name] = spectrum.clone(value=spectrum.value() + value)
-        # Store raw spectrum without contamination corrections
+        for name in results:
+            results[name] = _apply_spectrum3_close_pair_correction(spectrum, results[name])
         results['raw'] = spectrum
 
     return results

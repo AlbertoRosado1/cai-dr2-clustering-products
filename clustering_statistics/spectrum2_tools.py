@@ -139,6 +139,136 @@ def _get_jaxpower_attrs(*all_particles):
     return attrs
 
 
+def compute_spectrum2_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None):
+    """Compute and apply close-pair corrections."""
+
+    from cucount.jax import create_sharding_mesh, BinAttrs
+
+    with create_sharding_mesh() as sharding_mesh:
+        if callable(get_data_randoms[0]):
+            all_particles = prepare_cucount_particles(*get_data_randoms)
+            if jax.process_index() == 0: logger.info('All particles on the device')
+
+    results = {}
+    results['raw'] = spectrum
+    corrections = {'auw': auw, 'cut': cut}
+    for name in corrections:
+        if corrections[name] is not None:
+            correction = _compute_spectrum2_close_pair_correction(all_particles, k=next(iter(spectrum)).coords('k'), ells=spectrum.ells, **{name: corrections[name]})
+            results[name] = _apply_spectrum2_close_pair_correction(spectrum, correction)
+    return results
+
+
+def _compute_spectrum2_close_pair_correction(all_particles, bin=None, auw=None, cut=None, los=None, fields=None):
+    """Compute and apply close-pair corrections."""
+    from jaxpower import BinMesh2SpectrumPoles, BinParticle2CorrelationPoles, BinParticle2SpectrumPoles, compute_particle2, compute_particle2_shotnoise
+
+    mattrs, edges, k, ells = bin.mattrs, bin.edges, bin.xavg, bin.ells
+    results = {}
+    # First compute the theta-cut (close-pair) contribution for contamination correction
+    if cut is not None:
+        # Define angular selection: only pairs separated by < 0.05 degrees
+        sattrs = {'theta': (0., 0.05)}
+        #pbin = BinParticle2SpectrumPoles(mattrs, edges=bin.edges, xavg=bin.xavg, sattrs=sattrs, ells=ells)
+        # Use correlation binning for close pairs (finer radial bins for accuracy)
+        pbin = BinParticle2CorrelationPoles(mattrs, edges={'step': 0.1}, sattrs=sattrs, ells=ells)
+        # Count close pairs directly (no mesh needed, exact calculation)
+        close = compute_particle2(*all_particles, bin=pbin, los=los)
+        # Attach normalization and shot noise, then convert to power spectrum
+        close = close.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields))
+        # Convert correlation poles to power spectrum (multiply by bin centers)
+        close = close.to_spectrum(k)
+        # Store negative contribution (contamination to subtract)
+        return close.clone(value=-close.value())
+
+    # Then compute the AUW-weighted (angular upweight) pairs and bitwise-weighted pairs
+    with_bitweights = bool(all_particles[0].get('bitwise_weight'))
+    if auw is not None or with_bitweights:
+        from cucount.jax import WeightAttrs
+        # Define angular selection for close pairs (< 0.1 degrees for bitwise weights)
+        sattrs = {'theta': (0., 0.1)}
+        bitwise = angular = None
+        if with_bitweights:
+            # Weights for fiber collision corrections
+            # 1) systematic weights --- without completeness
+            # 2) bitweights
+            # 3) weights to subtract off (already in the mesh-based P(k) estimation)
+            # Extract bitwise weight structure (sets nrealizations based on BITWEIGHT size, fine to use the first)
+            bitwise = dict(weights=all_particles[0].get('bitwise_weight'))
+            if jax.process_index() == 0:
+                logger.info(f'Applying PIP weights {bitwise}.')
+            # No bitwise weights, remove individual weights from AUW * individual_weight
+        # Apply angular upweights if provided (fiber collision corrections)
+        if auw is not None:
+            # Extract angular separation and weight values from pre-computed AUW
+            angular = dict(sep=auw.get('DD').coords('theta'), weight=auw.get('DD').value())
+            if jax.process_index() == 0:
+                logger.info(f'Applying AUW {angular}.')
+        # Set up weight attributes for pair counting
+        wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
+        # Create binning for close-pair data-data counts with weights
+        pbin = BinParticle2SpectrumPoles(mattrs, edges=edges, xavg=k, sattrs=sattrs, wattrs=wattrs, ells=ells)
+        # Count weighted pairs directly
+        DD = compute_particle2(*all_particles, bin=pbin, los=los)
+        # Attach normalization and shot noise
+        DD = DD.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields))
+        return DD
+
+
+def _apply_spectrum2_close_pair_correction(spectrum, correction):
+    """Apply additive corrections to a :class:`Mesh2SpectrumPoles`."""
+    # norm
+    def sum_counts(leaves):
+        return leaves[0].clone(value=leaves[0].value() + leaves[1].value() / leaves[0].values('norm'))
+
+    return types.tree_map(sum_counts, [spectrum, correction])
+
+
+
+def get_optimal_weight_columns(optimal_weights):
+    # No optimal weights requested, so no extra particle columns are needed.
+    if optimal_weights is None:
+        return []
+
+    # By convention, optimal weights need redshift unless explicitly specified.
+    return list(getattr(optimal_weights, 'columns', ['Z']))
+
+
+def iter_optimal_weighted_particles(ell, all_particles, optimal_weights, columns):
+    # Handle optional catalogues such as shifted=None.
+    # This keeps zip(...) loops alive while preserving the None entry.
+    if all_particles[0] is None:
+        while True:
+            yield tuple(None for _ in all_particles)
+
+    # Build the lightweight catalog dictionaries passed to optimal_weights.
+    catalogs = [{'INDWEIGHT': p.weights} | {column: p.extra[column] for column in columns} for p in all_particles]
+
+    # optimal_weights may yield one or several weight combinations.
+    for all_weights in optimal_weights(ell, catalogs):
+        yield tuple(p.clone(weights=w) for p, w in zip(all_particles, all_weights))
+
+
+def loop_over_optimal_weights(ells, compute, join):
+    results = {}
+
+    # Optimal weights depend on ell, so each multipole is computed separately.
+    for ell in ells:
+        if jax.process_index() == 0:
+            logger.info(f'Applying optimal weights for ell = {ell:d}')
+
+        # Caller owns the actual optimal-weight loop, since the particle structure can differ by function.
+        result_ell = compute(ell)
+
+        # Accumulate one combined result per ell.
+        for key, value in result_ell.items():
+            results.setdefault(key, [])
+            results[key].append(value)
+
+    # Caller decides how to join multipoles for its output type.
+    return join(results)
+
+
 def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                            ells=(0, 2, 4), edges=None, los='firstpoint', optimal_weights=None,
                            norm: dict=None, cache=None):
@@ -190,10 +320,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                           BinParticle2SpectrumPoles, BinParticle2CorrelationPoles, compute_particle2, compute_particle2_shotnoise)
 
     # Collect column names needed for optimal weight computation
-    columns_optimal_weights = []
-    if optimal_weights is not None:
-        # Get required columns (default: Z for redshift-dependent weights)
-        columns_optimal_weights += getattr(optimal_weights, 'columns', ['Z'])   # to compute optimal weights, e.g. for fnl
+    columns_optimal_weights = get_optimal_weight_columns(optimal_weights)
     mattrs = mattrs or {}
     # Set up distributed mesh computation across JAX devices (multi-GPU/CPU)
     with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
@@ -242,62 +369,23 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
             if jax.process_index() == 0:
                 logger.info('Normalization and shotnoise computation finished')
 
-            results = {}
-            # First compute the theta-cut (close-pair) contribution for contamination correction
-            if cut is not None:
-                # Define angular selection: only pairs separated by < 0.05 degrees
-                sattrs = {'theta': (0., 0.05)}
-                #pbin = BinParticle2SpectrumPoles(mattrs, edges=bin.edges, xavg=bin.xavg, sattrs=sattrs, ells=ells)
-                # Use correlation binning for close pairs (finer radial bins for accuracy)
-                pbin = BinParticle2CorrelationPoles(mattrs, edges={'step': 0.1}, sattrs=sattrs, ells=ells)
-                from jaxpower.particle2 import convert_particles
-                # Convert FKP fields to particle pairs for direct pair counting
-                all_particles = [convert_particles(fkp.particles) for fkp in all_fkp]
-                # Count close pairs directly (no mesh needed, exact calculation)
-                close = compute_particle2(*all_particles, bin=pbin, los=los)
-                # Attach normalization and shot noise, then convert to power spectrum
-                close = close.clone(num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields), norm=norm)
-                # Convert correlation poles to power spectrum (multiply by bin centers)
-                close = close.to_spectrum(bin.xavg)
-                # Store negative contribution (contamination to subtract)
-                results['cut'] = -close.value()
-
-            # Then compute the AUW-weighted (angular upweight) pairs and bitwise-weighted pairs
             with_bitweights = 'BITWEIGHT' in all_fkp[0].data.extra
-            if auw is not None or with_bitweights:
-                from cucount.jax import WeightAttrs
+
+            # Galaxy pairs at small angular separation
+            results = {}
+            corrections = {'auw': auw, 'cut': cut}
+            if any(corrections.values()):
                 from jaxpower.particle2 import convert_particles
-                # Define angular selection for close pairs (< 0.1 degrees for bitwise weights)
-                sattrs = {'theta': (0., 0.1)}
-                bitwise = angular = None
-                if with_bitweights:
-                    # Weights for fiber collision corrections
-                    # 1) systematic weights --- without completeness
-                    # 2) bitweights
-                    # 3) weights to subtract off (already in the mesh-based P(k) estimation)
-                    all_data = [convert_particles(fkp.data, weights=[fkp.data.extra['INDWEIGHT_NO_COMP']] + list(jnp.unstack(fkp.data.extra['BITWEIGHT'], axis=-1)) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
-                    # Extract bitwise weight structure (sets nrealizations based on BITWEIGHT size, fine to use the first)
-                    bitwise = dict(weights=all_data[0].get('bitwise_weight'))
-                    if jax.process_index() == 0:
-                        logger.info(f'Applying PIP weights {bitwise}.')
-                else:
-                    # No bitwise weights, remove individual weights from AUW * individual_weight
-                    all_data = [convert_particles(fkp.data, weights=[fkp.data.weights] * 2, exchange_weights=False, index_value=dict(individual_weight=1, negative_weight=1)) for fkp in all_fkp]
-                # Apply angular upweights if provided (fiber collision corrections)
-                if auw is not None:
-                    # Extract angular separation and weight values from pre-computed AUW
-                    angular = dict(sep=auw.get('DD').coords('theta'), weight=auw.get('DD').value())
-                    if jax.process_index() == 0:
-                        logger.info(f'Applying AUW {angular}.')
-                # Set up weight attributes for pair counting
-                wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
-                # Create binning for close-pair data-data counts with weights
-                pbin = BinParticle2SpectrumPoles(mattrs, edges=bin.edges, xavg=bin.xavg, sattrs=sattrs, wattrs=wattrs, ells=ells)
-                # Count weighted pairs directly
-                DD = compute_particle2(*all_data, bin=pbin, los=los)
-                # Attach normalization and shot noise
-                DD = DD.clone(num_shotnoise=compute_particle2_shotnoise(*all_data, bin=pbin, fields=fields), norm=norm)
-                results['auw'] = DD.value()
+                for name in corrections:
+                    if corrections[name] is not None:
+                        if name == 'cut':
+                            all_particles = [convert_particles(fkp.particles) for fkp in all_fkp]
+                        else:
+                            if with_bitweights:
+                                all_particles = [convert_particles(fkp.data, weights=[fkp.data.extra['INDWEIGHT_NO_COMP']] + list(jnp.unstack(fkp.data.extra['BITWEIGHT'], axis=-1)) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
+                            else:
+                                all_particles = [convert_particles(fkp.data, weights=[fkp.data.weights] * 2, exchange_weights=False, index_value=dict(individual_weight=1, negative_weight=1)) for fkp in all_fkp]
+                        results[name] = _compute_spectrum2_close_pair_correction(all_particles, bin=bin, **{name: corrections[name]}, los=los, fields=fields)
 
             # Wait for particle-based calculations to complete
             jax.block_until_ready(results)
@@ -327,71 +415,71 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
             if jax.process_index() == 0:
                 logger.info('Mesh-based computation finished')
 
-            # Add theta-cut and AUW contributions to the base spectrum
-            for name, value in results.items():
-                # Combine contamination corrections with raw spectrum
-                results[name] = spectrum.clone(value=spectrum.value() + value)
-            # Store raw spectrum without contamination corrections
+            for name in results:
+                results[name] = _apply_spectrum2_close_pair_correction(spectrum, results[name])
             results['raw'] = spectrum
 
             return results
 
-        # Compute power spectrum either without or with optimal weights
         if optimal_weights is None:
-            # Standard case: use FKP weights, compute all ells at once
+            # Standard case: no optimal weights → compute all multipoles in one shot
             results = _compute_spectrum_ell(all_particles, ells=ells)
+        
         else:
-            # Optimal weights case: compute ell-by-ell due to dependence of optimal weight on multipole
-            # Prepare fields tuple for multi-tracer support (pad to length 2)
+            # Names of particle types, e.g. ['data', 'randoms', 'shifted']
+            # Each catalog dict has these keys
+            names = list(all_particles[0].keys())
+            # Field labels used by jaxpower multi-tracer logic.
             fields = tuple(range(len(all_particles)))
-            # Pad to length 2 if we have fewer catalogs (for cross-correlation compatibility)
-            fields = fields + (fields[-1],) * (2 - len(fields))
-            # Pad particle list similarly for processing
-            all_particles = tuple(all_particles) + (all_particles[-1],) * (2 - len(all_particles))
-            results = {}
-            # Loop over each multipole moment
-            for ell in ells:
-                if jax.process_index() == 0:
-                    logger.info(f'Applying optimal weights for ell = {ell:d}')
-
-                def _get_optimal_weights(all_particles):
-                    # Generator that yields particles with optimal weights applied for this ell
-                    # all_particles is [data1, data2] or [randoms1, randoms2] or [shifted1, shifted2]
-                    if all_particles[0] is None:  # shifted is None, yield None
-                        while True:
-                            yield tuple(None for particles in all_particles)
-                    # Get optimal weights from the weight function for all particles
-                    for all_weights in optimal_weights(ell, [{'INDWEIGHT': particles.weights} | {column: particles.extra[column] for column in columns_optimal_weights} for particles in all_particles]):
-                        # Yield particles with weights replaced by optimal weights
-                        yield tuple(particles.clone(weights=weights) for particles, weights in zip(all_particles, all_weights))
-
+            # Pad fields to at least nfields, e.g. 1 catalogue -> (0, 0).
+            fields = fields + (fields[-1],) * max(0, 2 - len(fields))
+            # Pad particle inputs similarly for auto/cross compatibility.
+            all_particles = tuple(all_particles)
+            all_particles = all_particles + (all_particles[-1],) * max(0, len(fields) - len(all_particles))
+        
+            def compute(ell):
+                # Collect results for this ell across all weight realizations
                 result_ell = {}
-                # Get names of particle types (data, randoms, shifted)
-                names = list(all_particles[0].keys())
-                # Loop over all weight combinations for this ell
-                for _all_particles in zip(*[_get_optimal_weights([particles[name] for particles in all_particles]) for name in names]):
-                    # _all_particles is a list [(data1, data2), (randoms1, randoms2), [(shifted1, shifted2)]] of tuples of ParticleField with optimal weights applied
-                    # Reorder to group by catalog index rather than particle type
-                    _all_particles = list(zip(*_all_particles))
-                    # _all_particles is now a list of tuples [(data1, randoms1, shifted1), (data2, randoms2, shifted2)] with optimal weights applied
-                    # Convert tuples back to dictionaries for _compute_spectrum_ell
-                    _all_particles = [dict(zip(names, _particles)) for _particles in _all_particles]
-                    # _all_particles is now a list of dictionaries [{'data': data1, 'randoms': randoms1, 'shifted': shifted1}, {'data': data2, 'randoms': randoms2, 'shifted': shifted2}] with optimal weights applied
-                    # Compute spectrum for this ell and weight combination
-                    _result = _compute_spectrum_ell(_all_particles, ells=[ell], fields=fields)
-                    # Collect results for all variants (raw, cut, auw)
-                    for key in _result:  # raw, cut, auw
+                # Build one iterator per particle type (data/randoms/shifted)
+                # Each iterator yields weighted versions of that particle type
+                iterators = [iter_optimal_weighted_particles(ell,
+                        [particles[name] for particles in all_particles],  # same type across catalogs
+                        optimal_weights,
+                        columns_optimal_weights,
+                    ) for name in names]
+        
+                # Zip the iterators → one "weight realization"
+                # weighted_by_name looks like:
+                #   [(data1, data2), (randoms1, randoms2), (shifted1, shifted2)]
+                for weighted_by_name in zip(*iterators):
+
+                    # Reorganize from grouping by particle type → grouping by catalog
+                    # Before: [(data1, data2), (randoms1, randoms2), (shifted1, shifted2)]
+                    # After:  [(data1, randoms1, shifted1), (data2, randoms2, shifted2)]
+                    weighted_by_catalog = list(zip(*weighted_by_name))
+        
+                    # Convert tuples → dicts expected by _compute_spectrum_ell
+                    weighted_by_catalog = [dict(zip(names, particles)) for particles in weighted_by_catalog]
+        
+                    # Compute spectrum for this weight realization (single ell)
+                    _result = _compute_spectrum_ell(weighted_by_catalog, ells=[ell], fields=fields)
+        
+                    # Accumulate results (raw / cut / auw)
+                    for key, value in _result.items():
                         result_ell.setdefault(key, [])
-                        result_ell[key].append(_result[key])
-                # Average over weight combinations (if multiple tracers: sum over 1<->2 cross-weights)
-                for key, value in result_ell.items():
-                    results.setdefault(key, [])
-                    # Combine_stats sums over different weights
-                    results[key].append(combine_stats(value))  # sum 1<->2
-            # Combine all ells into single observable tree structure
-            for key in results:
-                # types.join concatenates along multipole axis
-                results[key] = types.join(results[key])  # join multipoles
+                        result_ell[key].append(value)
+        
+                # Combine all weight realizations for this ell (e.g. symmetric tracer permutations)
+                return {key: combine_stats(value) for key, value in result_ell.items()}
+        
+            def join(results):
+                # Join results across multipoles: results[key] = [ell0, ell2, ell4, ...] → concatenate
+                for key in results:
+                    results[key] = types.join(results[key])
+                return results
+        
+            # Main driver: loops over ell and calls compute(...)
+            results = loop_over_optimal_weights(ells, compute, join)
 
     # Return single result or dictionary of variants
     if len(results) == 1:
@@ -623,70 +711,59 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                     observable = observable.map(lambda pole: pole.clone(attrs=pole.attrs | dict(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)))
                     results[key] = results[key].clone(observable=observable)
         else:
-            # Optimal weights case: compute ell-by-ell due to weight dependence on multipole
-            results = {}
-            # Prepare fields tuple for multi-tracer support (pad to length 2)
+            # Optimal weights depend on ell, so compute each multipole separately.
             fields = tuple(range(len(all_randoms)))
-            fields = fields + (fields[-1],) * (2 - len(fields))
-            # Pad random particle list similarly
-            all_randoms = tuple(all_randoms) + (all_randoms[-1],) * (2 - len(all_randoms))
-            # Loop over multipoles
-            for ell in ells:
-                if jax.process_index() == 0:
-                    logger.info(f'Applying optimal weights for ell = {ell:d}')
+            fields = fields + (fields[-1],) * max(0, 2 - len(fields))
 
-                def _get_optimal_weights(all_particles):
-                    # Generator for optimal weights applied to particles
-                    # all_particles is [data1, data2] or [randoms1, randoms2] or [shifted1, shifted2]
-                    if all_particles[0] is None:  # shifted is None, yield None
-                        while True:
-                            yield tuple(None for particles in all_particles)
-                    def clone(particles, weights):
-                        # Clone particle with new weights
-                        toret = particles.clone(weights=weights)
-                        return toret
+            # Pad random catalogues for auto/cross compatibility, e.g. one tracer -> two identical fields.
+            all_randoms = tuple(all_randoms)
+            all_randoms = all_randoms + (all_randoms[-1],) * max(0, len(fields) - len(all_randoms))
 
-                    # Get optimal weights for this ell from the weight function
-                    for all_weights in optimal_weights(ell, [{"INDWEIGHT": particles.weights} | {column: particles.extra[column] for column in columns_optimal_weights} for particles in all_particles]):
-                        yield tuple(clone(particles, weights=weights) for particles, weights in zip(all_particles, all_weights))
-
+            def compute(ell):
                 result_ell = {}
-                # Loop over weight combinations for this ell
-                for isum, _all_randoms in enumerate(_get_optimal_weights(all_randoms)):
-                    # Loop over weight combinations for the same multipole
-                    fields = None
-                    seed = [(42, randoms.extra["IDS"]) for randoms in _all_randoms]
-                    # Compute zeff for this weight combination
-                    zeff, norm_zeff = compute_fkp_effective_redshift(*_all_randoms, order=2, split=seed, fields=fields, return_fraction=True, **kw_zeff)
-                    _result = _compute_window_ell(_all_randoms, ells=[ell], isum=isum, fields=fields)
-                    # Attach zeff to output for each weight combination
-                    for key in _result:  # raw, cut, auw
+
+                # Loop over all optimal-weight realizations for this ell
+                for isum, _all_randoms in enumerate(iter_optimal_weighted_particles(ell, all_randoms, optimal_weights, columns_optimal_weights)):
+                    seed = [(42, randoms.extra['IDS']) for randoms in _all_randoms]
+
+                    # Compute effective redshift for this weighted realization
+                    zeff, norm_zeff = compute_fkp_effective_redshift(*_all_randoms, order=2, split=seed, fields=None, return_fraction=True, **kw_zeff)
+
+                    # Compute window for this ell and this weighted realization
+                    _result = _compute_window_ell(_all_randoms, ells=[ell], isum=isum, fields=None)
+
+                    # Attach zeff to matrix outputs; leave correlation debug outputs untouched.
+                    for key in _result:
                         if 'correlation' not in key:
                             observable = _result[key].observable
                             observable = observable.map(lambda pole: pole.clone(attrs=pole.attrs | dict(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)))
                             _result[key] = _result[key].clone(observable=observable)
+
                         result_ell.setdefault(key, [])
                         result_ell[key].append(_result[key])
-                # Average over weight combinations
+
+                # Combine symmetric optimal-weight realizations, then preserve the summed window value.
+                combined = {}
                 for key, windows in result_ell.items():
-                    results.setdefault(key, [])
-                    # windows can be WindowMatrix and ObservableTree (window correlation)
-                    window = combine_stats(windows)  # sum 1<->2
-                    # Used power spectrum norm is for the sum of the two;
-                    # just sum the two components
+                    window = combine_stats(windows)
                     window = window.clone(value=sum(window.value() for window in windows))
-                    results[key].append(window)
-            # Combine results into final observable structure
-            for key in results:
-                if 'correlation' in key:
-                    # Join correlations along multipole axis
-                    results[key] = types.join(results[key])
-                else:
-                    # Join windows along multipole axis
-                    observables = [window.observable for window in results[key]]
-                    observable = types.join(observables)
-                    value = np.concatenate([window.value() for window in results[key]], axis=0)
-                    results[key] = results[key][0].clone(value=value, observable=observable)  # join multipoles
+                    combined[key] = window
+                return combined
+
+            def join(results):
+                for key in results:
+                    if 'correlation' in key:
+                        # Join debug correlation outputs along multipoles
+                        results[key] = types.join(results[key])
+                    else:
+                        # Join window matrices along the output multipole axis
+                        observables = [window.observable for window in results[key]]
+                        observable = types.join(observables)
+                        value = np.concatenate([window.value() for window in results[key]], axis=0)
+                        results[key] = results[key][0].clone(value=value, observable=observable)
+                return results
+
+            results = loop_over_optimal_weights(ells, compute, join)
 
     return results
 

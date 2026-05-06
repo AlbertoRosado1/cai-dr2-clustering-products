@@ -21,7 +21,8 @@ doc/_build/
 **/_plots/*
 **/desipipe_data_splits_unblinded.py
 **/auw3.ipynb
-
+**/check_complete.ipynb
+**/auw3.ipynb
 **/log
 **/tmp
 

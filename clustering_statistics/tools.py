@@ -132,6 +132,10 @@ def get_simple_stats(stats):
         return 'correlation2'
     elif stats == 'recon_particle2_correlation':
         return 'correlation2recon'
+    elif stats == 'particle3_correlation':
+        return 'correlation3'
+    elif stats == 'recon_particle3_correlation':
+        return 'correlation3recon'
     else:
         raise NotImplementedError(f'stats {stats} is unknown')
 
@@ -423,7 +427,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     Parameters
     ----------
     kind : str
-        Statistic kind. Options are 'zranges', 'nran', 'particle2_correlation', 'mesh2_spectrum', 'mesh3_spectrum', 'recon'.
+        Statistic kind. Options are 'zranges', 'nran', 'particle2_correlation', 'mesh2_spectrum', 'particle3_correlation', 'mesh3_spectrum', 'recon'.
     tracer : str
         Tracer name. Options are 'BGS', 'LRG', 'ELG', 'LRG+ELG', 'QSO'.
     zrange : tuple, optional
@@ -434,7 +438,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     params : dict
         Dictionary of proposed fiducial parameters for the specified statistic kind and tracer.
     """
-    base = {"catalog": {}, "particle2_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
+    base = {"catalog": {}, "particle2_correlation": {},  "particle3_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
     propose_fiducial = {
         'BGS': {'nran': 3, 'recon': {'mode': 'recsym', 'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
         'LRG+ELG': {'nran': 13, 'recon': {'mode': 'recsym', 'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
@@ -627,6 +631,7 @@ def apply_blinding(data, tracer, zrange):
     else:
         raise NotImplementedError
 
+
 def _unzip_catalog_options(catalog):
     """From a catalog dictionary with nran, zrange, ..., tracer, return {tracer: {nran:..., zrange: ...}}"""
     if 'tracer' in catalog:
@@ -710,7 +715,7 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
         options['recon'][tracer]['nran'] = options['recon'][tracer].get('nran', options['catalog'][tracer]['nran'])
         assert options['recon'][tracer]['nran'] >= options['catalog'][tracer]['nran'], 'must use more randoms for reconstruction than clustering measurements'
     for recon in ['', 'recon_']:
-        for stat in ['particle2_correlation', 'mesh2_spectrum', 'mesh3_spectrum']:
+        for stat in ['particle2_correlation', 'particle3_correlation', 'mesh2_spectrum', 'mesh3_spectrum']:
             stat = f'{recon}{stat}'
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | options.get(stat, {})
@@ -946,6 +951,9 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
+            if kind == 'full_randoms':
+                cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
+                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.fits' for iran in nrans]
 
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
@@ -1193,10 +1201,14 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
     one_fn = str(fn[0] if isinstance(fn, (tuple, list)) else fn)
     if one_fn.endswith('.h5'):
         kwargs.setdefault('locking', False)  # fix -> Unable to synchronously open file (unable to lock file, errno = 524, error message = 'Unknown error 524')
-        try:
-            catalog = Catalog.read(fn, group='LSS', mpicomm=mpicomm, **kwargs)
-        except KeyError:
-            catalog = Catalog.read(fn, mpicomm=mpicomm, **kwargs)
+        if mpicomm.rank == 0:
+            try:
+                kwargs.setdefault('group', 'LSS')
+                Catalog.read(fn, mpicomm=MPI.COMM_SELF, **kwargs)
+            except KeyError:
+                kwargs['group'] = ''
+        kwargs = mpicomm.bcast(kwargs, root=0)
+        catalog = Catalog.read(fn, mpicomm=mpicomm, **kwargs)
     elif one_fn.endswith('.fits') or one_fn.endswith('.fits.gz'):
         catalog = Catalog.read(fn, mpicomm=mpicomm, backend=kwargs.get('backend', 'fitsio'))
         catalog.get(catalog.columns())  # Faster to read all columns at once
@@ -1670,8 +1682,9 @@ def read_full_catalog(kind, wntile=None, concatenate=True,
             catalog = catalog[columns]
             if 'BITWEIGHTS' in catalog:
                 catalog.attrs['missing_power'] = {column: _compute_missing_power(catalog[column], catalog['BITWEIGHTS'], catalog['LOCATION_ASSIGNED']) for column in ['NTILE']}
-            catalog.attrs['completeness'] = {column: _compute_binned_weight(catalog[column], catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES']) for column in ['NTILE']}
-            if 'fibered' in kind:
+            if 'data' in kind:
+                catalog.attrs['completeness'] = {column: _compute_binned_weight(catalog[column], catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES']) for column in ['NTILE']}
+            if 'fibered' in kind and 'data' in kind:
                 mask = catalog['LOCATION_ASSIGNED']
                 catalog = catalog[mask]
             if region is not None:
@@ -1690,7 +1703,7 @@ def read_full_catalog(kind, wntile=None, concatenate=True,
     for irank, catalog in catalogs:
         if mpicomm.size > 1:
             catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=irank)
-        if 'WEIGHT_NTILE' in catalog:
+        if False: #'WEIGHT_NTILE' in catalog:
             individual_weight = catalog['WEIGHT_NTILE']
         else:
             individual_weight = get_binned_weight(catalog, {'NTILE': get_wntile(wntile)})
@@ -2089,7 +2102,8 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     #merged_data_wcomp_ntile = merged_data_wtotp / merged_data['WEIGHT']
 
     data_wcomp_ntile, data_ftile_ntile = {}, {}
-    merged_data_nz = -merged_data.ones()
+    merged_data_nz = {}
+    zedges = _get_zedges_for_nbar(tracer)
     # It looks like this operation was done for NGC, SGC separately
     for region in ['NGC', 'SGC']:
         mask_data = select_region(data['RA'], data['DEC'], region=region)
@@ -2100,17 +2114,23 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         data_ftile_ntile[region] = _compute_binned_weight(data_ntile, data['FRAC_TLOBS_TILES'][mask_data])
         # Reconstruct n(z) from Eq. 7.4 of https://arxiv.org/pdf/2405.16593
         if merged_data is data:
-            merged_data_nz[mask_data] = data['NX'][mask_data] / (data_ftile_ntile[region][data_ntile] / data_wcomp_ntile[region][data_ntile])
-            #print(merged_data_nz[mask_data] / data['NZ'][mask_data])
-            #print(data_wcomp_ntile[region][data_ntile], 1. / data['WEIGHT'][mask_data])
+            tmp_z = data['Z'][mask_data]
+            tmp_nz = data['NX'][mask_data] / (data_ftile_ntile[region][data_ntile] / data_wcomp_ntile[region][data_ntile])
         elif 'NZ' in merged_data:
-            merged_data_nz = merged_data['NZ']
+            tmp_z = merged_data['Z'][mask_data]
+            tmp_nz = merged_data['NZ'][mask_data]
         else:
             mask_merged_data = select_region(merged_data['RA'], merged_data['DEC'], region=region)
             merged_data_ntile = merged_data['NTILE'][mask_merged_data]
             merged_data_wcomp_ntile = _compute_binned_weight(merged_data_ntile, merged_data_wtotp[mask_merged_data] / merged_data['WEIGHT'][mask_merged_data])
             merged_data_ftile_ntile = _compute_binned_weight(merged_data_ntile, merged_data['FRAC_TLOBS_TILES'][mask_merged_data])
-            merged_data_nz[mask_merged_data] = merged_data['NX'][mask_merged_data] / (merged_data_ftile_ntile[merged_data_ntile] / merged_data_wcomp_ntile[merged_data_ntile])
+            tmp_z = merged_data['Z'][mask_merged_data]
+            tmp_nz = merged_data['NX'][mask_merged_data] / (merged_data_ftile_ntile[merged_data_ntile] / merged_data_wcomp_ntile[merged_data_ntile])
+        zidx = np.digitize(tmp_z, zedges, right=False)
+        nz = np.bincount(zidx, weights=tmp_nz, minlength=len(zedges) + 1)
+        nz_now = np.bincount(zidx, minlength=len(zedges) + 1)
+        nz = np.where(nz_now > 0, nz / nz_now, 0.)
+        merged_data_nz[region] = (zedges, nz)
 
     # P0 = np.rint(np.mean((1. / merged_data['WEIGHT_FKP'] - 1.) / merged_data['NX']))
     randoms['Z'] = -randoms.ones() # place holder, since will be filled with 'Z' from merged_data anyway
@@ -2145,9 +2165,13 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         randoms['Z'][mask_randoms] = merged_data['Z'][mask_merged_data][index]
         randoms['WEIGHT'][mask_randoms] *= merged_data_wtotp[mask_merged_data][index]
         randoms['WEIGHT_SYS'][mask_randoms] = merged_data['WEIGHT_SYS'][mask_merged_data][index]  # needed for when 'noimsys' is in weight option
-        randoms['NZ'][mask_randoms] = merged_data_nz[mask_merged_data][index]
+        #randoms['NZ'][mask_randoms] = merged_data_nz[mask_merged_data][index]
         sum_data_weights.append(data_wtotp[mask_data].sum())
         sum_randoms_weights.append(randoms['WEIGHT'][mask_randoms].sum())
+    for region in merged_data_nz:
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        idx = np.digitize(randoms['Z'][mask_randoms], merged_data_nz[region][0], right=False)
+        randoms['NZ'][mask_randoms] = merged_data_nz[region][1][idx]
 
     if np.any(randoms['Z'] == -1.):
         raise ValueError('Something went wrong! Placeholder of z = -1. remain after reshuffling.')
@@ -2175,18 +2199,31 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     del randoms['NZ']
 
     # below just double checks per region renormalization
-    alphas = []
     sum_data_weights, sum_randoms_weights = [], []
     for region in regions:
         mask_data = select_region(data['RA'], data['DEC'], region=region)
         mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
-        sum_data_weights.append(data['WEIGHT'][mask_data].sum())
-        sum_randoms_weights.append(randoms['WEIGHT'][mask_randoms].sum())
+        sum_data_weights.append((data['WEIGHT'][mask_data] * data['WEIGHT_FKP'][mask_data]).sum())
+        sum_randoms_weights.append((randoms['WEIGHT'][mask_randoms] * randoms['WEIGHT_FKP'][mask_randoms]).sum())
 
     sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
     alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
+
+    #for region, alpha in zip(regions, alphas):
+    #    mask_region = select_region(randoms['RA'], randoms['DEC'], region=region)
+    #    randoms['WEIGHT'][mask_region] = alpha * randoms['WEIGHT'][mask_region]
+
     logger.info('alpha after renormalization & reweighting: {}'.format(alphas))
     return randoms
+
+
+def _get_zedges_for_nbar(tracer):
+    tracer = get_simple_tracer(tracer)
+    zmin, zmax = {'BGS': (0.1, 0.4), 'LRG': (0.4, 1.1), 'ELG': (0.8, 1.6), 'QSO': (0.8, 3.5)}[tracer]
+    # See https://github.com/desihub/LSS/blob/a5f5b813341a0f768644a7fa68ed7cfef9452df9/py/LSS/common_tools.py#L696
+    bs = 0.01
+    nbin = int((zmax - zmin) * (1 + bs / 10) / bs)
+    return np.linspace(zmin, zmax, nbin + 1)
 
 
 def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, downsample_nobj=False, seed=42):
@@ -2218,7 +2255,7 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
     tracer = get_simple_tracer(tracer)
     P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
     full_data = full_data[['TARGETID', 'RA', 'DEC', 'NTILE', 'ZWARN']]
-    mask_contaminants = full_data['TARGETID'] < 419430400000000 #remove contaminants
+    mask_contaminants = full_data['TARGETID'] < 419430400000000  # remove contaminants
     full_data = full_data[mask_contaminants]
     _, full_index, forfa_index = np.intersect1d(full_data['TARGETID'], forfa_data['TARGETID'], return_indices=True)
     data = full_data[full_index]
@@ -2248,11 +2285,12 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
         mask_region = select_region(data['RA'], data['DEC'], region)
         data_ntile = data['NTILE'][mask_region]
         weight_ntile = _compute_binned_weight(data_ntile, mask_assigned[mask_region])
-        zedges = np.insert(nz[region][2], 0, nz[region][1][0])
+        nzregion = nz[region]
+        zedges = np.insert(nzregion[2], 0, nzregion[1][0])
         idx = np.digitize(data['Z'][mask_region], zedges, right=False) - 1
-        mask = (idx >= 0) & (idx < nz[region][3].size)
+        mask = (idx >= 0) & (idx < nzregion[3].size)
         tmpnz = np.zeros_like(idx, dtype=data['WEIGHT_COMP'].dtype)
-        tmpnz[mask] = nz[region][3][idx[mask]]
+        tmpnz[mask] = nzregion[3][idx[mask]]
         data['NZ'][mask_region] = tmpnz
         data['NX'][mask_region] = weight_ntile[data_ntile] * tmpnz
         data['WEIGHT'][mask_region] = weight_ntile[data_ntile]  # just completeness-weighting

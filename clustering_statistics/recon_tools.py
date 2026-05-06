@@ -172,7 +172,7 @@ def compute_box_reconstruction(get_data, mattrs=None, mode='recsym', zsnap=None,
             growth_rate=growth_rate,  # Growth rate at snapshot epoch
             bias=bias,                # Linear bias to relate density perturbation to displacement
             los=los,                  # Line-of-sight direction: 'x', 'y', or 'z' (fixed axis for periodic box)
-            halo_add=0                # Halo size in cells (0 = no halos needed for periodic box)
+            halo_add=0                # Halo size in cells (0 = no halos needed)
         )
 
         # Extract reconstructed positions for data particles

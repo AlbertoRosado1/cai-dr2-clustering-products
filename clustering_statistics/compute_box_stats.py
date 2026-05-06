@@ -26,6 +26,7 @@ import lsstypes as types
 from . import box_tools
 from .box_tools import fill_box_fiducial_options, _merge_options, Catalog, setup_logging
 from .correlation2_tools import compute_box_particle2_correlation
+from .correlation3_tools import compute_box_particle3_correlation
 from .spectrum2_tools import compute_box_mesh2_spectrum, compute_window_box_mesh2_spectrum, compute_covariance_box_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum
 from .spectrum3_tools import compute_box_mesh3_spectrum
 from .recon_tools import compute_box_reconstruction
@@ -100,19 +101,20 @@ def compute_box_stats_from_options(stats, cache=None,
 
     # Summary statistics
     for recon in ['', 'recon_']:
-        stat = f'{recon}particle2_correlation'
-        if stat in stats:
-            correlation_options = dict(options[stat])
-            correlation_options['mattrs'] = cmattrs | correlation_options.get('mattrs', {})
-
-            def get_data(tracer):
-                if recon:
-                    return {'data': get_catalog_recon(data[tracer]), 'shifted': [get_catalog_recon(random) for random in shifted[tracer]]}
-                return {'data': data[tracer]}
-
-            correlation = compute_box_particle2_correlation(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
-            fn = get_box_stats_fn(kind=stat, catalog=fn_catalog_options, **correlation_options)
-            box_tools.write_stats(fn, correlation)
+        funcs = {f'{recon}particle2_correlation': compute_box_particle2_correlation, f'{recon}particle3_correlation': compute_box_particle3_correlation}
+        for stat, func in funcs.items():
+            if stat in stats:
+                correlation_options = dict(options[stat])
+                correlation_options['mattrs'] = cmattrs | correlation_options.get('mattrs', {})
+    
+                def get_data(tracer):
+                    if recon:
+                        return {'data': get_catalog_recon(data[tracer]), 'shifted': [get_catalog_recon(random) for random in shifted[tracer]]}
+                    return {'data': data[tracer]}
+    
+                correlation = func(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
+                fn = get_box_stats_fn(kind=stat, catalog=fn_catalog_options, **correlation_options)
+                box_tools.write_stats(fn, correlation)
 
         funcs = {f'{recon}mesh2_spectrum': compute_box_mesh2_spectrum, f'{recon}mesh3_spectrum': compute_box_mesh3_spectrum}
 

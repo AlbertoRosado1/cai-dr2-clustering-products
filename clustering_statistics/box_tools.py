@@ -323,6 +323,7 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
 
     fn = get_box_catalog_fn(kind=kind, los=los, **kwargs)
     catalog = read_catalog(fn)
+
     if boxsize is None:
         boxsize = catalog.attrs.get('BOXSIZE', None)
     scalev = catalog.attrs.get('VELZ2KMS', None)
@@ -361,6 +362,7 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
     catalog = Catalog({'POSITION': positions, 'INDWEIGHT': np.ones_like(positions[..., 0])},
                       attrs=attrs, mpicomm=mpicomm)
     return catalog
+
 
 def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
                      kind='mesh2_spectrum', project='', extra='', ext='h5', **kwargs):
