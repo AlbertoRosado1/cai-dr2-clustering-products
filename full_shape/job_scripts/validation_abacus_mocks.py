@@ -23,15 +23,17 @@ THEORY_MODELS = ['folpsD', 'folpsEFT', 'reptvelocileptors']
 COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed']
 PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'mcmc']
+DEFAULT_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics/full_shape/base')
+DEFAULT_CACHE_DIR = Path(__file__).resolve().parent / '_cache'
 KRANGES = {
     'mesh2_spectrum': [
-        {'ells': 0, 'k': [0.02, 0.20, 0.005]},
-        {'ells': 2, 'k': [0.02, 0.20, 0.005]},
-        {'ells': 4, 'k': [0.02, 0.20, 0.005]},
+        {'ells': 0, 'k': [0.02, 0.40, 0.005]},
+        {'ells': 2, 'k': [0.02, 0.40, 0.005]},
+        {'ells': 4, 'k': [0.02, 0.40, 0.005]},
     ],
     'mesh3_spectrum': [
-        {'ells': (0, 0, 0), 'k': [0.02, 0.12, 0.005]},
-        {'ells': (2, 0, 2), 'k': [0.02, 0.08, 0.005]},
+        {'ells': (0, 0, 0), 'k': [0.02, 0.20, 0.005]},
+        {'ells': (2, 0, 2), 'k': [0.02, 0.20, 0.005]},
     ],
 }
 
@@ -97,8 +99,9 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, theory_mo
 
 def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-complete',
             covariance='holi-v1-altmtl',
-            stats_dir=Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics/full_shape/base'),
+            stats_dir=DEFAULT_STATS_DIR,
             fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',
+            cache_dir=DEFAULT_CACHE_DIR,
             stats=['mesh2_spectrum'], tracers=None, theory_model='folpsD',
             cosmo_model='base', sampler='emcee', nchains=1, thin_by=1, resume=False,
             prior_basis='physical_aap'):
@@ -134,11 +137,12 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
         prior_basis=prior_basis,
     )
     get_fits_fn = functools.partial(tools.get_fits_fn, fits_dir=fits_dir)
-    run_fit_from_options(actions, **options, get_fits_fn=get_fits_fn, cache_dir='./_cache')
+    cache_dir = Path(cache_dir)
+    run_fit_from_options(actions, **options, get_fits_fn=get_fits_fn, cache_dir=cache_dir)
     if 'profile' in actions:
         likelihood = get_likelihood(likelihoods_options=options['likelihoods'],
                                     cosmology_options=options['cosmology'],
-                                    cache_dir='./_cache')
+                                    cache_dir=cache_dir)
         profiles = Profiles.load(get_fits_fn(kind='profiles', **options))
         likelihood(**profiles.bestfit.choice(input=True, index='argmax'))
         if mpicomm.rank == 0:
@@ -180,6 +184,10 @@ def _get_parser():
                         help='Tracer(s) to fit. Pass one or more values after --tracers. Defaults to LRG1.')
     parser.add_argument('--fits_dir', type=str, default=None,
                         help='Base directory for fits. Defaults to $SCRATCH/fits_abacus_mocks or ./fits_abacus_mocks.')
+    parser.add_argument('--stats_dir', type=str, default=None,
+                        help=f'Base directory for clustering statistics. Defaults to {DEFAULT_STATS_DIR}.')
+    parser.add_argument('--cache_dir', type=str, default=None,
+                        help=f'Base directory for cached prepared stats and emulators. Defaults to {DEFAULT_CACHE_DIR}.')
     parser.add_argument('--nchains', type=int, default=1,
                         help='Number of MCMC chains to run with desilike. Defaults to 1.')
     parser.add_argument('--thin_by', type=int, default=1,
@@ -197,11 +205,12 @@ if __name__ == '__main__':
     fits_dir = base_fits_dir / args.dataset
     version = args.dataset
     covariance = 'holi-v3-altmtl'
-    stats_dir = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics/full_shape/base')
+    stats_dir = Path(args.stats_dir) if args.stats_dir is not None else DEFAULT_STATS_DIR
+    cache_dir = Path(args.cache_dir) if args.cache_dir is not None else DEFAULT_CACHE_DIR
     stats = args.stats
     tracers = args.tracers or ['LRG1']
     _validate_theory_model(stats, args.theory_model)
     run_fit(actions=args.todo, version=version, covariance=covariance, stats_dir=stats_dir,
-            fits_dir=fits_dir, stats=stats, tracers=tracers, theory_model=args.theory_model,
+            fits_dir=fits_dir, cache_dir=cache_dir, stats=stats, tracers=tracers, theory_model=args.theory_model,
             cosmo_model=args.cosmo_params, sampler=args.sampler, nchains=args.nchains,
             thin_by=args.thin_by, resume=args.resume, prior_basis=args.prior_basis)

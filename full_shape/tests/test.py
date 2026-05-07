@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import types
 
 import numpy as np
@@ -384,6 +385,13 @@ def test_validation_abacus_mocks_parser_accepts_prior_basis():
     assert args.prior_basis == 'standard'
 
 
+def test_validation_abacus_mocks_parser_accepts_stats_and_cache_dirs():
+    parser = _get_parser()
+    args = parser.parse_args(['--stats_dir', '/tmp/stats', '--cache_dir', '/tmp/cache'])
+    assert args.stats_dir == '/tmp/stats'
+    assert args.cache_dir == '/tmp/cache'
+
+
 def test_validation_abacus_mocks_parser_defaults_prior_basis_to_physical_aap():
     parser = _get_parser()
     args = parser.parse_args([])
@@ -518,6 +526,21 @@ def _make_prepared_cache_fn(cache_dir, kind, observables_options, covariance_opt
     return Path(cache_dir) / 'prepared_stats' / f'{kind}_{str_from_options}-{hash_options}.h5'
 
 
+def _write_covariance_manifest(cache_dir, observables_options, covariance_options, covariance_cache_fn, imocks):
+    prepared_cache_dir = Path(cache_dir) / 'prepared_stats'
+    manifest_fn = prepared_cache_dir / 'covariance_manifest.json'
+    full_options = tools._get_prepared_cache_options(observables_options, covariance_options, kind='covariance')
+    key = tools._hash_options(full_options, length=32)
+    manifest = {
+        key: {
+            'filename': covariance_cache_fn.name,
+            'imocks': list(imocks),
+        },
+    }
+    manifest_fn.write_text(json.dumps(manifest))
+    return manifest_fn
+
+
 def test_get_stats_ignores_stale_covariance_cache_prefix(monkeypatch, tmp_path):
     cache_dir = tmp_path / 'cache'
     prepared_cache_dir = cache_dir / 'prepared_stats'
@@ -562,6 +585,87 @@ def test_get_stats_ignores_stale_covariance_cache_prefix(monkeypatch, tmp_path):
     )
 
     assert covariance.source == 'built-covariance'
+
+
+def test_get_stats_reuses_manifest_covariance_cache_without_raw_mocks(monkeypatch, tmp_path):
+    cache_dir = tmp_path / 'cache'
+    prepared_cache_dir = cache_dir / 'prepared_stats'
+    prepared_cache_dir.mkdir(parents=True)
+    observables_options = _make_cache_test_observables(tmp_path, 0.30)
+    covariance_options = _make_cache_test_covariance_options(tmp_path)
+
+    data_cache_fn = _make_prepared_cache_fn(cache_dir, 'data', observables_options, covariance_options, {'imocks': [None]})
+    window_cache_fn = _make_prepared_cache_fn(cache_dir, 'window', observables_options, covariance_options, {'imocks': [None]})
+    covariance_cache_fn = _make_prepared_cache_fn(cache_dir, 'covariance', observables_options, covariance_options, {'imocks': [0, 1]})
+    for fn in [data_cache_fn, window_cache_fn, covariance_cache_fn]:
+        fn.touch()
+    _write_covariance_manifest(cache_dir, observables_options, covariance_options, covariance_cache_fn, [0, 1])
+
+    def fake_read(path):
+        path = Path(path)
+        if path == data_cache_fn:
+            return _FakeStatsObject('data-cache')
+        if path == window_cache_fn:
+            return _FakeStatsObject('window-cache')
+        if path == covariance_cache_fn:
+            return _FakeStatsObject('manifest-covariance-cache')
+        raise AssertionError(f'raw mock path should not be read: {path}')
+
+    monkeypatch.setattr(tools.types, 'read', fake_read)
+    monkeypatch.setattr(tools.types, 'GaussianLikelihood', _FakeGaussianLikelihood)
+    monkeypatch.setattr(tools, 'unpack_stats', lambda likelihood: likelihood.payload)
+    monkeypatch.setattr(tools, '_get_covariance_correction_factor', lambda covariance, observables, options: (1., {'corrections': []}))
+
+    data, window, covariance = tools.get_stats(
+        observables_options,
+        covariance_options=covariance_options,
+        unpack=True,
+        get_stats_fn=lambda kind, stats_dir, imock=None, **kwargs: Path(stats_dir) / f'missing_{kind}_{imock}.h5',
+        cache_dir=cache_dir,
+        cache_mode='r',
+        mpicomm=_FakeMPICOMM(),
+    )
+
+    assert data.source == 'data-cache'
+    assert window.source == 'window-cache'
+    assert covariance.source == 'manifest-covariance-cache'
+
+
+def test_get_stats_missing_covariance_manifest_requires_raw_mocks(monkeypatch, tmp_path):
+    cache_dir = tmp_path / 'cache'
+    prepared_cache_dir = cache_dir / 'prepared_stats'
+    prepared_cache_dir.mkdir(parents=True)
+    observables_options = _make_cache_test_observables(tmp_path, 0.30)
+    covariance_options = _make_cache_test_covariance_options(tmp_path)
+
+    data_cache_fn = _make_prepared_cache_fn(cache_dir, 'data', observables_options, covariance_options, {'imocks': [None]})
+    window_cache_fn = _make_prepared_cache_fn(cache_dir, 'window', observables_options, covariance_options, {'imocks': [None]})
+    covariance_cache_fn = _make_prepared_cache_fn(cache_dir, 'covariance', observables_options, covariance_options, {'imocks': [0, 1]})
+    for fn in [data_cache_fn, window_cache_fn, covariance_cache_fn]:
+        fn.touch()
+
+    def fake_read(path):
+        path = Path(path)
+        if path == data_cache_fn:
+            return _FakeStatsObject('data-cache')
+        if path == window_cache_fn:
+            return _FakeStatsObject('window-cache')
+        if path == covariance_cache_fn:
+            raise AssertionError('covariance cache should require a manifest or raw mock discovery')
+        return _FakeStatsObject(f'mock-{path.name}')
+
+    monkeypatch.setattr(tools.types, 'read', fake_read)
+
+    with pytest.raises(FileNotFoundError, match='No covariance mock realizations found'):
+        tools.get_stats(
+            observables_options,
+            covariance_options=covariance_options,
+            unpack=True,
+            get_stats_fn=lambda kind, stats_dir, imock=None, **kwargs: Path(stats_dir) / f'missing_{kind}_{imock}.h5',
+            cache_dir=cache_dir,
+            cache_mode='r',
+            mpicomm=_FakeMPICOMM(),
+        )
 
 
 def test_get_stats_reuses_exact_covariance_cache(monkeypatch, tmp_path):
