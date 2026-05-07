@@ -8,7 +8,10 @@ import pytest
 from full_shape import tools
 from full_shape.run_fit import run_fit_from_options
 from full_shape.tools import generate_likelihood_options_helper, str_from_likelihood_options, str_from_options, get_likelihood, fill_fiducial_options, setup_logging
-from full_shape.job_scripts.validation_abacus_mocks import KRANGES, _build_likelihoods_options, _build_run_options, _get_parser
+from full_shape.job_scripts.validation_abacus_mocks import (
+    KRANGES, LOCAL_SAFE_THREAD_ENV, _apply_local_safe_threads,
+    _build_likelihoods_options, _build_run_options, _get_parser,
+)
 
 
 def test_str():
@@ -355,6 +358,12 @@ def test_validation_abacus_mocks_parser_accepts_resume():
     assert args.resume is True
 
 
+def test_validation_abacus_mocks_parser_accepts_local_safe_threads():
+    parser = _get_parser()
+    args = parser.parse_args(['--local_safe_threads'])
+    assert args.local_safe_threads is True
+
+
 def test_validation_abacus_mocks_parser_defaults_thin_by_to_one():
     parser = _get_parser()
     args = parser.parse_args([])
@@ -365,6 +374,20 @@ def test_validation_abacus_mocks_parser_defaults_resume_to_false():
     parser = _get_parser()
     args = parser.parse_args([])
     assert args.resume is False
+
+
+def test_validation_abacus_mocks_parser_defaults_local_safe_threads_to_false():
+    parser = _get_parser()
+    args = parser.parse_args([])
+    assert args.local_safe_threads is False
+
+
+def test_apply_local_safe_threads_sets_missing_values_only():
+    environ = {'OMP_NUM_THREADS': '4'}
+    _apply_local_safe_threads(environ)
+    assert environ['OMP_NUM_THREADS'] == '4'
+    for name, value in LOCAL_SAFE_THREAD_ENV.items():
+        assert environ[name] == ('4' if name == 'OMP_NUM_THREADS' else value)
 
 
 def test_validation_abacus_mocks_parser_accepts_cosmo_params():

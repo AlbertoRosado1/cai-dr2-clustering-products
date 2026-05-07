@@ -25,6 +25,11 @@ PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'mcmc']
 DEFAULT_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics/full_shape/base')
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parent / '_cache'
+LOCAL_SAFE_THREAD_ENV = {
+    'OMP_NUM_THREADS': '1',
+    'OPENBLAS_NUM_THREADS': '1',
+    'VECLIB_MAXIMUM_THREADS': '1',
+}
 KRANGES = {
     'mesh2_spectrum': [
         {'ells': 0, 'k': [0.02, 0.40, 0.005]},
@@ -97,6 +102,13 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, theory_mo
     return tools.fill_fiducial_options(options)
 
 
+def _apply_local_safe_threads(environ=None):
+    environ = os.environ if environ is None else environ
+    for name, value in LOCAL_SAFE_THREAD_ENV.items():
+        environ.setdefault(name, value)
+    return environ
+
+
 def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-complete',
             covariance='holi-v1-altmtl',
             stats_dir=DEFAULT_STATS_DIR,
@@ -104,7 +116,7 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
             cache_dir=DEFAULT_CACHE_DIR,
             stats=['mesh2_spectrum'], tracers=None, theory_model='folpsD',
             cosmo_model='base', sampler='emcee', nchains=1, thin_by=1, resume=False,
-            prior_basis='physical_aap'):
+            prior_basis='physical_aap', local_safe_threads=False):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -112,9 +124,8 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
     import functools
     from mpi4py import MPI
     mpicomm = MPI.COMM_WORLD
-    os.environ.setdefault('OMP_NUM_THREADS', '1')
-    os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
-    os.environ.setdefault('VECLIB_MAXIMUM_THREADS', '1')
+    if local_safe_threads:
+        _apply_local_safe_threads()
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     os.environ['CUDA_VISIBLE_DEVICES'] = str(mpicomm.rank)
     import jax
@@ -197,6 +208,9 @@ def _get_parser():
                         help='Thin samples by this factor while the desilike sampler is running. Defaults to 1.')
     parser.add_argument('--resume', action='store_true',
                         help='Resume sampling from existing chain files in the derived fits directory.')
+    parser.add_argument('--local_safe_threads', action='store_true',
+                        help='Limit OpenMP/BLAS thread counts for local macOS CLASS/OpenMP crashes. '
+                             'Defaults to off so cluster runs keep their normal threading.')
     return parser
 
 
@@ -216,4 +230,5 @@ if __name__ == '__main__':
     run_fit(actions=args.todo, version=version, covariance=covariance, stats_dir=stats_dir,
             fits_dir=fits_dir, cache_dir=cache_dir, stats=stats, tracers=tracers, theory_model=args.theory_model,
             cosmo_model=args.cosmo_params, sampler=args.sampler, nchains=args.nchains,
-            thin_by=args.thin_by, resume=args.resume, prior_basis=args.prior_basis)
+            thin_by=args.thin_by, resume=args.resume, prior_basis=args.prior_basis,
+            local_safe_threads=args.local_safe_threads)
