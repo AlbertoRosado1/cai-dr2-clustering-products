@@ -112,6 +112,9 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
     import functools
     from mpi4py import MPI
     mpicomm = MPI.COMM_WORLD
+    os.environ.setdefault('OMP_NUM_THREADS', '1')
+    os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+    os.environ.setdefault('VECLIB_MAXIMUM_THREADS', '1')
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     os.environ['CUDA_VISIBLE_DEVICES'] = str(mpicomm.rank)
     import jax
