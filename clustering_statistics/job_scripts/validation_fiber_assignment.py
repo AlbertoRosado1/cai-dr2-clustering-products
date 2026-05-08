@@ -78,7 +78,9 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
-                           mesh3_spectrum=mesh3_spectrum, window_mesh3_spectrum=window_mesh3_spectrum)
+                           mesh3_spectrum=mesh3_spectrum, window_mesh3_spectrum=window_mesh3_spectrum,
+                           particle2_correlation={'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))},
+                           particle3_correlation={'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(5)), 'firstpoint'))})
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
@@ -112,18 +114,18 @@ if __name__ == '__main__':
     # version = 'abacus-2ndgen-dr2-altmtl'
     check_for_existing_measurements = False
 
-    imocks = np.arange(1)
+    imocks = np.arange(9)
     #imocks = np.arange(5, 25)
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['LRG', 'ELG_LOPnotqso', 'QSO']
+    tracers = ['LRG', 'ELG_LOPnotqso', 'QSO'][1:]
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
-    stats = ['mesh3_spectrum']
-    #stats = ['particle3_correlation']
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    stats = ['particle2_correlation', 'particle3_correlation']
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics'
@@ -132,13 +134,13 @@ if __name__ == '__main__':
     regions = ['NGC', 'SGC']
     max_mocks_per_batch = 5 
 
-    onthefly = None
+    #onthefly = None
     #onthefly = 'complete-nozfail'
     #onthefly = 'complete-renorm'
     #onthefly = 'complete-downsample'
     #onthefly = 'complete-samenz'
     #onthefly = 'complete-fixnz'
-    #onthefly = 'complete'
+    onthefly = 'complete'
     
     for tracer in tracers:
         if 'png' in analysis:

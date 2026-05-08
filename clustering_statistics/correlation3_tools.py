@@ -95,8 +95,8 @@ def compute_particle3_angular_upweights(*get_data_randoms):
         theta = 10**np.arange(-4, np.log10(180.), 0.2)
         battrs = BinAttrs(theta=theta)
 
-        counts_fibered = _compute_particle3_close_pair_correction(all_particles_fibered, [battrs] * 3, auw=None, cut=None, veto23=None, normalize_randoms=False)
-        counts_parent = _compute_particle3_close_pair_correction(all_particles_parent, [battrs] * 3, auw=None, cut=None, veto23=None, normalize_randoms=False)
+        counts_fibered = _compute_particle3_correlation_close_pair_correction(all_particles_fibered, [battrs] * 3, auw=None, cut=None, veto23=None, normalize_randoms=False)
+        counts_parent = _compute_particle3_correlation_close_pair_correction(all_particles_parent, [battrs] * 3, auw=None, cut=None, veto23=None, normalize_randoms=False)
 
     coords = ['theta1', 'theta2', 'theta3']
     kw = dict(coords=coords)
@@ -198,11 +198,11 @@ def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: di
     correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)
 
     # Galaxy pairs at small angular separation
-    results = compute_particle3_close_pair_correction(all_particles, correlation, auw=auw, cut=cut)
+    results = compute_particle3_correlation_close_pair_correction(*all_particles, correlation=correlation, battrs=battrs, auw=auw, cut=cut)
     return results
 
 
-def compute_particle3_close_pair_correction(*get_data_randoms, correlation, auw=None, cut=None):
+def compute_particle3_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None):
     """Compute and apply close-pair corrections."""
 
     from cucount.jax import create_sharding_mesh, BinAttrs
@@ -212,47 +212,40 @@ def compute_particle3_close_pair_correction(*get_data_randoms, correlation, auw=
             all_particles = prepare_cucount_particles(*get_data_randoms)
             if jax.process_index() == 0: logger.info('All particles on the device')
 
-        edges = correlation.edges()
-        ells = getattr(correlation.get('DDD'), 'ells', [])
-        ells = [[ell[idim] for ell in ells] for idim in [0, 1]]
-
-        battrs = []
-        for idim in range(3):
-            for name in ['s', 'theta']:
-                coord_name = f'{name}{idim + 1}'
-                if coord_name in edges:
-                    edge = edges[coord_name]
-                    d = {name: np.append(edge[:, 0], edge[-1, 1])}
-                    if idim < len(ells) and ells[idim]:
-                        d['pole'] = (ells[idim], 'firstpoint')
-                    battrs.append(BinAttrs(**d))
+        if battrs is None:
+            edges = correlation.edges()
+            ells = getattr(correlation.get('DDD'), 'ells', [])
+            ells = [[ell[idim] for ell in ells] for idim in [0, 1]]
+    
+            battrs = []
+            for idim in range(3):
+                for name in ['s', 'theta']:
+                    coord_name = f'{name}{idim + 1}'
+                    if coord_name in edges:
+                        edge = edges[coord_name]
+                        d = {name: np.append(edge[:, 0], edge[-1, 1])}
+                        if idim < len(ells) and ells[idim]:
+                            d['pole'] = (ells[idim], 'firstpoint')
+                        battrs.append(BinAttrs(**d))
 
         results = {}
         results['raw'] = correlation
         corrections = {'auw': auw, 'cut': cut}
-        for name in corrections:
-            if corrections[name] is not None:
-                correction = _compute_particle3_close_pair_correction(all_particles, battrs, **{name: corrections[name]}, normalize_randoms=False, veto23=None)
-                results[name] = _apply_particle3_close_pair_correction(correlation, correction)
+        for correction_name in corrections:
+            if corrections[correction_name] is not None:
+                correction = _compute_particle3_correlation_close_pair_correction(all_particles, battrs, **{correction_name: corrections[correction_name]}, normalize_randoms=False, veto23=None)
+                results[correction_name] = _apply_particle3_correlation_close_pair_correction(correlation, correction)
 
     return results
 
 
-def _apply_particle3_close_pair_correction(correlation, correction):
+def _apply_particle3_correlation_close_pair_correction(correlation, correction):
     """Apply additive corrections to a :class:`Count3Correlation`."""
-    out = correlation
-
-    def sum_counts(leaves):
-        return leaves[0].clone(counts=sum(leaf.values('counts') for leaf in leaves), norm=leaves[0].values('norm'))
-
-    for count_name in correlation.count_names:
-        correction_count_name = count_name.replace('S', 'R')
-        out = out.at(count_name).replace(types.tree_map(sum_counts, [correlation.get(count_name), correction[correction_count_name]], level=None, is_leaf=lambda *args: False))
-
-    return out
+    from .correlation2_tools import _apply_particle2_correlation_close_pair_correction
+    return _apply_particle2_correlation_close_pair_correction(correlation, correction)
 
 
-def _compute_particle3_close_pair_correction(all_particles, battrs, auw=None, cut=None, veto23: bool=None, normalize_randoms: bool=True):
+def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, auw=None, cut=None, veto23: bool=None, normalize_randoms: bool=True):
     """
     Compute close-pair corrections to three-point counts.
 
@@ -344,8 +337,9 @@ def _compute_particle3_close_pair_correction(all_particles, battrs, auw=None, cu
 
         with_veto = True
         if len(close_pairs) == 1:
-            limits = [0.] + limits[2:]
-            resols = resols[1:]
+            if len(limits) > 2:
+                limits = [0.] + limits[2:]  # remove the second edge
+            resols = resols[1:]  # remove None
             with_veto = False
         #print(limits, resols, close_pairs, flush=True)
         all_particles = list(all_particles) + [all_particles[-1]] * (3 - len(all_particles))
@@ -405,6 +399,7 @@ def _compute_particle3_close_pair_correction(all_particles, battrs, auw=None, cu
             for name in ['shifted', 'randoms']:
                 if name in particles:
                     data = data.concatenate([data, particles[name].clone(weights=-particles[name].get('individual_weight')[0])])
+            all_particles_cut.append(data)
         counts = compute_particle3_resol(*all_particles_cut, sattrs=sattrs, wattrs=wattrs)
         correction['DDD'] = counts.clone(value=-counts.value())
         return correction

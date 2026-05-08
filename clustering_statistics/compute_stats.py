@@ -31,18 +31,13 @@ import lsstypes as types
 
 from . import tools
 from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, setup_logging
-from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation
 
-from .spectrum2_tools import (
-    compute_mesh2_spectrum,
-    compute_window_mesh2_spectrum,
-    compute_covariance_mesh2_spectrum,
-    run_preliminary_fit_mesh2_spectrum,
-    compute_rotation_mesh2_spectrum,
-    compute_window_mesh2_spectrum_fm,
-)
-from .correlation3_tools import compute_particle3_angular_upweights, compute_particle3_correlation
-from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum
+from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction
+from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
+
+from .correlation3_tools import compute_particle3_angular_upweights, compute_particle3_correlation, compute_particle3_correlation_close_pair_correction
+from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction
+
 from .recon_tools import compute_reconstruction
 
 
@@ -52,7 +47,7 @@ logger = logging.getLogger('summary-statistics')
 def _expand_cut_auw_options(stat, options):
     # Helper to generate separate option dictionaries for raw, theta-cut, and angular upweight variants
     # For spectrum measurements, create variants with different options
-    if 'spectrum' in stat:
+    if 'spectrum' in stat or 'correlation' in stat:
         keys = ['cut', 'auw']
         kw = dict(options)
         for key in keys: kw.pop(key, None)
@@ -144,6 +139,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         # Load data and random catalogs for each tracer
         for tracer in tracers:
             _catalog_options = dict(catalog_options[tracer])
+            _catalog_options['region'] = 'ALL'
             # Expand redshift range to cover all requested z-bins
 
             # Add bitwise weight information (PIP, completeness) if needed
@@ -167,7 +163,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 _catalog_options.setdefault('reshuffle', {})  # to pass on complete data
 
             # Read data and random catalogs
-            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=False), kind='data', binned_weight=binned_weight)
+            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=True), kind='data', **_catalog_options)
             binned_weight.update(data[tracer].attrs)  # update with any additional info from prepared data catalog
             #_catalog_options.pop('complete', None)
             #_catalog_options.pop('reshuffle', None)
@@ -216,10 +212,10 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 for kind in ['fibered_data', 'parent_data'] + (['fibered_randoms', 'parent_randoms'] if npt > 2 else []):
                     if kind not in _cache_full:
                         if tracer not in raw_full_data:
-                            raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=False)
+                            raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=True)
                             _catalog_options['binned_weight'].update(raw_full_data[tracer].attrs)  # update binned weight info for AUW computation
-                        _cache_full[name] = prepare_catalog(raw_randoms[tracer] if 'randoms' in kind else raw_full_data[tracer], kind=kind, **_catalog_options)
-                    toret[name] = _cache_full[name]
+                        _cache_full[kind] = prepare_catalog(raw_randoms[tracer] if 'randoms' in kind else raw_full_data[tracer], kind=kind, **_catalog_options)
+                    toret[kind] = _cache_full[kind]
                 return toret
 
             stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}'])]
@@ -254,7 +250,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
         # Summary statistics computation loop
         for recon in ['', 'recon_']:
-            funcs = {f'{recon}particle2_correlation': compute_particle2_correlation, f'{recon}particle3_correlation': compute_particle3_correlation}
+            funcs = {f'{recon}particle2_correlation': (compute_particle2_correlation, compute_particle2_correlation_close_pair_correction), f'{recon}particle3_correlation': (compute_particle3_correlation, compute_particle3_correlation_close_pair_correction)}
             for stat, func in funcs.items():
                 if stat in stats:
                     correlation_options = dict(options[stat])
@@ -269,19 +265,37 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         return {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
 
                     # Compute 2 or 3-point correlation function
-                    correlation = func(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
-                    # Apply blinding if requested (only for raw measurements, not reconstruction)
-                    if with_stats_blinding and not recon:  # FIXME
-                        correlation = tools.apply_blinding(correlation, tracers, zrange=sum(zrange.values(), start=tuple()))
-                    # Store reconstruction metadata
-                    if recon:
-                        correlation.attrs.update(stat_recon_attrs)
-                    # Write correlation to disk
-                    fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **correlation_options)
-                    tools.write_stats(fn, correlation)
+                    if 'close_pair_correction' in stats:
+                        # Add close pair correction (angular upweighting or theta-cut)
+                        _correlation_options = correlation_options | dict(auw=False, cut=False)
+                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **_correlation_options)
+                        correlation = types.read(fn)
+                        correlation = func[1](*[functools.partial(get_data, tracer) for tracer in tracers], correlation=correlation, **correlation_options)
+
+                        # Write all correlation variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, correlation_options).items():
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            if key != 'raw':
+                                tools.write_stats(fn, correlation[key])
+                    else:
+                        # Base calculation
+                        correlation = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
+                        # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
+                        if not isinstance(correlation, dict): correlation = {'raw': correlation}
+    
+                        # Write all spectrum variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, correlation_options).items():
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            # Apply blinding if requested
+                            if with_stats_blinding:
+                                correlation[key] = tools.apply_blinding(correlation[key], tracers, zrange=sum(zrange.values(), start=tuple()))
+                            # Store reconstruction metadata
+                            if recon:
+                                correlation.attrs.update(stat_recon_attrs)
+                            tools.write_stats(fn, correlation[key])
 
             # Map of spectrum statistics to computation functions
-            funcs = {f'{recon}mesh2_spectrum': compute_mesh2_spectrum, f'{recon}mesh3_spectrum': compute_mesh3_spectrum}
+            funcs = {f'{recon}mesh2_spectrum': (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction), f'{recon}mesh3_spectrum': (compute_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction)}
 
             for stat, func in funcs.items():
                 if stat in stats:
@@ -305,21 +319,34 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
                         return toret
 
-                    # Compute power spectrum or bispectrum
-                    spectrum = func(*[functools.partial(get_data, tracer) for tracer in tracers], cache=cache, **spectrum_options)
-                    # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
-                    if not isinstance(spectrum, dict): spectrum = {'raw': spectrum}
+                    if 'close_pair_correction' in stats:
+                        # Add close pair correction (angular upweighting or theta-cut)
+                        _spectrum_options = spectrum_options | dict(auw=False, cut=False)
+                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **_spectrum_options)
+                        spectrum = types.read(fn)
+                        spectrum = func[1](*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, **spectrum_options)
 
-                    # Write all spectrum variants to disk
-                    for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
-                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
-                        # Apply blinding if requested
-                        if with_stats_blinding:
-                            spectrum[key] = tools.apply_blinding(spectrum[key], tracers, zrange=sum(zrange.values(), start=tuple()))
-                        # Store reconstruction metadata
-                        if recon:
-                            spectrum.attrs.update(stat_recon_attrs)
-                        tools.write_stats(fn, spectrum[key])
+                        # Write all spectrum variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            if key != 'raw':
+                                tools.write_stats(fn, spectrum[key])
+                    else: 
+                        # Compute power spectrum or bispectrum
+                        spectrum = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], cache=cache, **spectrum_options)
+                        # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
+                        if not isinstance(spectrum, dict): spectrum = {'raw': spectrum}
+    
+                        # Write all spectrum variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            # Apply blinding if requested
+                            if with_stats_blinding:
+                                spectrum[key] = tools.apply_blinding(spectrum[key], tracers, zrange=sum(zrange.values(), start=tuple()))
+                            # Store reconstruction metadata
+                            if recon:
+                                spectrum.attrs.update(stat_recon_attrs)
+                            tools.write_stats(fn, spectrum[key])
 
         # Synchronize across all processes before proceeding to windows
         jax.experimental.multihost_utils.sync_global_devices('spectrum')  # wait for the writer

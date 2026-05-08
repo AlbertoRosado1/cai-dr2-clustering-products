@@ -9,6 +9,7 @@ Main functions
 """
 
 import logging
+import itertools
 from functools import partial
 
 import numpy as np
@@ -18,7 +19,7 @@ import lsstypes as types
 from .tools import _format_bitweights
 
 
-logger = logging.getLogger('correlation2')
+logger = logging.getLogger('particle2_correlation')
 
 
 def compute_particle2_angular_upweights(*get_data):
@@ -49,8 +50,8 @@ def compute_particle2_angular_upweights(*get_data):
         theta = 10**np.arange(-5, -1 + 0.1, 0.1)
         battrs = BinAttrs(theta=theta)
 
-        counts_fibered = _compute_particle2_close_pair_correction(all_fibered_particles, battrs, auw=None, cut=None, normalize_randoms=False)
-        counts_parent = _compute_particle2_close_pair_correction(all_parent_particles, battrs, auw=None, cut=None, normalize_randoms=False)
+        counts_fibered = _compute_particle2_correlation_close_pair_correction(all_fibered_particles, battrs, auw=None, cut=None, normalize_randoms=False)
+        counts_parent = _compute_particle2_correlation_close_pair_correction(all_parent_particles, battrs, auw=None, cut=None, normalize_randoms=False)
 
     kw = dict(theta=battrs.coords('theta'), theta_edges=battrs.edges('theta'), coords=['theta'])
     auw = {}
@@ -62,7 +63,7 @@ def compute_particle2_angular_upweights(*get_data):
     return ObservableTree(list(auw.values()), pairs=list(auw.keys()))
 
 
-def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsampler=None, jackknife=None, wattrs=None):
+def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsampler=None, jackknife=None, concatenate=False, wattrs=None):
     """
     Convert catalogs to :class:`cucount.Particles`.
 
@@ -91,6 +92,7 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
     if kw_jackknife: kw_jackknife = {'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42} | kw_jackknife
 
     def get_pw(catalog):
+        catalog = catalog.all_to_all()  # loadbalance
         if positions_type == 'rd':
             positions = (catalog['RA'], catalog['DEC'])
         else:
@@ -116,7 +118,12 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
 
     def get_all_particles(catalog, as_list=False):
         if as_list and not _is_list(catalog): catalog = [catalog]
-        if _is_list(catalog): return [get_all_particles(c) for c in catalog]
+        if _is_list(catalog):
+            if concatenate:
+                if len(catalog): catalog = catalog[0]
+                else: catalog = catalog[0].concatenate(catalog)
+            else:
+                return [get_all_particles(c) for c in catalog]
         positions, weights = get_pw(catalog)
         splits = None if subsampler is None else subsampler.label(positions).astype('i8')
         return Particles(positions, weights=weights, splits=splits, positions_type=positions_type, exchange=True)
@@ -132,6 +139,28 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
     if subsampler is not None:
         return all_particles, subsampler
     return all_particles
+
+
+def _guess_wattrs(get_data_randoms, auw=None):
+    """Guess WeightAttrs from input catalogs (callable or Particles)."""
+    from cucount.jax import WeightAttrs
+    bitwise = angular = None
+    if callable(get_data_randoms):
+        catalogs = get_data_randoms()
+        if 'BITWEIGHT' in catalogs['data']:
+            bitwise = dict(weights=_format_bitweights(catalogs['data']['BITWEIGHT']))
+            if jax.process_index() == 0:
+                logger.info(f'Applying PIP weights {bitwise}.')
+    else:  # Particles
+        bitwise = get_data_randoms.get('bitwise_weight')
+
+    if auw is not None:
+        angular = dict(sep=auw.get('DD').coords('theta'), weight=auw.get('DD').value())
+        if jax.process_index() == 0:
+            logger.info(f'Applying AUW {angular}.')
+
+    wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
+    return wattrs
 
 
 def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs: dict=None, zeff: dict=None, jackknife: dict=None):
@@ -183,6 +212,7 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
         zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=2, split=seed,
                                                          resampler='cic', return_fraction=True)
 
+    key = 'raw'
     with create_sharding_mesh():
         if battrs is None:
             battrs = dict(s=np.linspace(0., 180., 181), mu=(np.linspace(-1., 1., 201), 'midpoint'))
@@ -190,20 +220,13 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
 
         sattrs = None
         if cut is not None:
-            sattrs = SelectionAttrs(theta=(0., 0.05))
+            sattrs = SelectionAttrs(theta=(0.05, 180.))
             if jax.process_index() == 0: logger.info(f'Applying theta-cut {sattrs}.')
-
-        bitwise = angular = None
-        catalogs = get_data_randoms[0]()
-        if 'BITWEIGHT' in catalogs['data']:
-            bitwise = dict(weights=_format_bitweights(catalogs['data']['BITWEIGHT']))
-            if jax.process_index() == 0: logger.info(f'Applying PIP weights {bitwise}.')
-
+            key = 'cut'
         if auw is not None:
-            angular = dict(sep=auw.get('DD').coords('theta'), weight=auw.get('DD').value())
-            if jax.process_index() == 0: logger.info(f'Applying AUW {angular}.')
+            key = 'auw'
 
-        wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
+        wattrs = _guess_wattrs(get_data_randoms[0], auw=auw)
         mattrs = None
 
         spattrs = None
@@ -252,8 +275,8 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
                 counts['RR'] = count2split(*[particles['randoms'] for particles in all_particles])
 
     correlation = (Count2JackknifeCorrelation if kw_jackknife else Count2Correlation)(estimator='landyszalay', **counts)
-    correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)
-    return correlation
+    correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)    
+    return {key: correlation}
 
 
 
@@ -354,7 +377,7 @@ def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict
     return Count2Correlation(estimator='natural', DD=counts['DD'], RR=counts['RR'])
 
 
-def compute_particle2_close_pair_correction(*get_data_randoms, correlation, auw=None, cut=None, jackknife=None):
+def compute_particle2_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, jackknife=None, **kwargs):
     """Compute and apply close-pair corrections."""
 
     from cucount.jax import create_sharding_mesh, BinAttrs
@@ -365,54 +388,62 @@ def compute_particle2_close_pair_correction(*get_data_randoms, correlation, auw=
     with create_sharding_mesh() as sharding_mesh:
         if callable(get_data_randoms[0]):
             spattrs = None
+            wattrs = _guess_wattrs(get_data_randoms[0], auw=auw)
             all_particles = prepare_cucount_particles(*get_data_randoms, jackknife=kw_jackknife, wattrs=wattrs)
             if isinstance(all_particles, tuple):
                 all_particles, subsampler = all_particles
                 spattrs = SplitAttrs(mode='jackknife', nsplits=subsampler.nsplits)
             if jax.process_index() == 0: logger.info('All particles on the device')
 
-        edges = correlation.edges()
-        ells = getattr(correlation.get('DD'), 'ells', [])
-
-        d = {}
-        los = 'midpoint'  # guessing line-of-sight
-        for coord_name in ['s', 'theta']:
-            coord_name = f'{name}{idim + 1}'
-            if coord_name in edges:
-                edge = edges[coord_name]
-                edge = np.append(edge[:, 0], edge[-1, 1])
-                if name == 'mu':
-                    edge = (edge, los)
-                d[name] = edge
-        if ells:
-            d['pole'] = (ells, los)
-        battrs = BinAttrs(**d)
+        if battrs is None:
+            # Try to find battrs from lsstypes object
+            edges = correlation.edges()
+            ells = getattr(correlation.get('DD'), 'ells', [])
+            d = {}
+            los = 'midpoint'  # guessing line-of-sight
+            for coord_name in ['s', 'theta']:
+                coord_name = f'{name}{idim + 1}'
+                if coord_name in edges:
+                    edge = edges[coord_name]
+                    edge = np.append(edge[:, 0], edge[-1, 1])
+                    if name == 'mu':
+                        edge = (edge, los)
+                    d[name] = edge
+            if ells:
+                d['pole'] = (ells, los)
+            battrs = BinAttrs(**d)
+        else:
+            battrs = BinAttrs(**battrs)
         results = {}
         results['raw'] = correlation
         corrections = {'auw': auw, 'cut': cut}
-        for name in corrections:
-            if corrections[name] is not None:
-                correction = _compute_particle2_close_pair_correction(all_particles, battrs, **{name: corrections[name]}, spattrs=spattrs, normalize_randoms=False)
-                results[name] = _apply_particle2_close_pair_correction(correlation, correction)
+        for correction_name in corrections:
+            if corrections[correction_name] is not None:
+                correction = _compute_particle2_correlation_close_pair_correction(all_particles, battrs, **{correction_name: corrections[correction_name]}, spattrs=spattrs, normalize_randoms=False)
+                results[correction_name] = _apply_particle2_correlation_close_pair_correction(correlation, correction)
 
     return results
 
 
-def _apply_particle2_close_pair_correction(correlation, correction):
+def _apply_particle2_correlation_close_pair_correction(correlation, correction):
     """Apply additive corrections to a :class:`Count2Correlation`."""
-    out = correlation
+    out = correlation.copy()
 
     def sum_counts(leaves):
         return leaves[0].clone(counts=sum(leaf.values('counts') for leaf in leaves), norm=leaves[0].values('norm'))
 
-    for count_name in correlation.count_names:
-        correction_count_name = count_name.replace('S', 'R')
-        out = out.at(count_name).replace(types.tree_map(sum_counts, [correlation.get(count_name), correction[correction_count_name]], level=None, is_leaf=lambda *args: False))
+    _branches = []
+    for label, branch in correlation.items(level=1):
+        correction_count_name = label['count_names'].replace('S', 'R')
+        if correction_count_name in correction:
+            branch = types.tree_map(sum_counts, [branch, correction[correction_count_name]], level=None, is_leaf=lambda *args: False)
+        _branches.append(branch)
 
+    out._branches = _branches
     return out
 
 
-def _compute_particle2_close_pair_correction(all_particles, battrs, spattrs=None, auw=None, cut=None, normalize_randoms: bool=True):
+def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, spattrs=None, auw=None, cut=None, normalize_randoms: bool=True):
     """
     Compute close-pair corrections to two-point counts.
 
@@ -471,7 +502,7 @@ def _compute_particle2_close_pair_correction(all_particles, battrs, spattrs=None
                     particles[name] = normalize_randoms(particles['data'], particles[name], wattrs=wattrs)
 
     def count2split(*particles, wattrs=None, mattrs=None):
-        kw = dict(battrs=battrs, mattrs=mattrs, spattrs=spattrs, wattrs=wattrs)
+        kw = dict(battrs=battrs, wattrs=wattrs, sattrs=sattrs, mattrs=mattrs, spattrs=spattrs, norm=1.)
         nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
         if any(nsplits):
             for nsplit in nsplits:
@@ -498,25 +529,28 @@ def _compute_particle2_close_pair_correction(all_particles, battrs, spattrs=None
         return correction
 
     bitwise = angular = None
-    with_bitweights = all_particles[0]['data'].get('bitwise_weight')
-    if with_bitweights:
-        bitwise = dict(weights=all_particles[0]['data'].get('bitwise_weight'))
+    bitweights = all_particles[0]['data'].get('bitwise_weight')
+    if bitweights:
+        bitwise = dict(weights=bitweights)
 
     angular = None
     if auw is not None:
         combinations = 'DD'
         angular = dict(edges=[np.append(edge[:, 0], edge[-1, 1]) for edge in auw.get(combinations).edges().values()],
                        weight=auw.get(combinations).value())
-        if with_bitweights:
-            for particles in all_particles:
-                assert particles['data'].get('negative_weight')
-        else:
-            angular['weight'] = angular['weight'] - 1.
         if jax.process_index() == 0:
             logger.info('Applying AUW.')
 
+    if bitwise is not None or auw is not None:
+        wattrs = WeightAttrs(bitwise=bitwise)
+        # Set default negative_weight = individual_weight
+        for i, particles in enumerate(all_particles):
+            particles = particles['data']
+            if not particles.get('negative_weight'):
+                negative_weight = wattrs(particles)
+                all_particles[i]['data'] = particles.clone(weights=particles.get('weights') + [negative_weight], index_value=particles.index_value.clone(negative_weight=1))
+    
     wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
     particles, combinations = _get_particle_combinations('DD', all_particles, with_repeats=False)
     correction['DD'] = count2split(*particles, wattrs=wattrs)
-
     return correction

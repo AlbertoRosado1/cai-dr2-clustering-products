@@ -139,30 +139,99 @@ def _get_jaxpower_attrs(*all_particles):
     return attrs
 
 
-def compute_spectrum2_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None):
+def compute_mesh2_spectrum_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None, los='firstpoint', optimal_weights=None, **kwargs):
     """Compute and apply close-pair corrections."""
 
-    from cucount.jax import create_sharding_mesh, BinAttrs
+    from cucount.jax import create_sharding_mesh, WeightAttrs
+    from jaxpower import MeshAttrs, BinMesh2SpectrumPoles
+    from .correlation2_tools import prepare_cucount_particles
+
+    columns_optimal_weights = get_optimal_weight_columns(optimal_weights)
 
     with create_sharding_mesh() as sharding_mesh:
         if callable(get_data_randoms[0]):
-            all_particles = prepare_cucount_particles(*get_data_randoms)
+            all_particles = prepare_cucount_particles(*get_data_randoms, concatenate=True)
             if jax.process_index() == 0: logger.info('All particles on the device')
 
-    results = {}
-    results['raw'] = spectrum
+    ells = spectrum.ells
+    edges = next(iter(spectrum)).edges('k')
+    mattrs = MeshAttrs(**{name: spectrum.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']})
+    bin = BinMesh2SpectrumPoles(mattrs, edges=edges, ells=ells)
     corrections = {'auw': auw, 'cut': cut}
-    for name in corrections:
-        if corrections[name] is not None:
-            correction = _compute_spectrum2_close_pair_correction(all_particles, k=next(iter(spectrum)).coords('k'), ells=spectrum.ells, **{name: corrections[name]})
-            results[name] = _apply_spectrum2_close_pair_correction(spectrum, correction)
+
+    def _compute_corrections(all_particles, ells, fields=None):
+        results = {'raw': spectrum}
+
+        for correction_name, correction_input in corrections.items():
+            if correction_input is None:
+                continue
+            if correction_name == 'cut':
+                wattrs = WeightAttrs()
+                all_particles_cut = []
+                for particles in all_particles:
+                    data = particles['data']
+                    data_weights = wattrs(data)
+                    data = data.clone(weights=data_weights)
+                    for name in ['shifted', 'randoms']:
+                        if name in particles:
+                            randoms = particles[name]
+                            data_weights, randoms_weights = wattrs(data), wattrs(randoms)
+                            data = data.concatenate([data, randoms.clone(weights=-data_weights.sum() / randoms_weights.sum() * randoms_weights)], local=True)
+                            break
+                    all_particles_cut.append(data)
+                particles = all_particles_cut
+            else:
+                all_particles_auw = []
+                for particles in all_particles:
+                    particles = [particles['data'] for particles in all_particles]
+
+            correction = _compute_mesh2_spectrum_close_pair_correction(particles, bin=bin, los=los, fields=fields, **{correction_name: correction_input})
+            results[correction_name] = _apply_mesh2_spectrum_close_pair_correction(spectrum, correction)
+
+        return results
+
+    if optimal_weights is None:
+        results = _compute_corrections(all_particles, ells=ells)
+
+    else:
+        fields = tuple(range(len(all_particles)))
+        fields = fields + (fields[-1],) * max(0, 2 - len(fields))
+
+        all_particles = tuple(all_particles)
+        all_particles = all_particles + (all_particles[-1],) * max(0, len(fields) - len(all_particles))
+
+        def compute(ell):
+            result_ell = {}
+
+            # Apply optimal weights to the data particles used by the close-pair correction.
+            for weighted_particles in iter_optimal_weighted_particles(ell, all_particles, optimal_weights, columns_optimal_weights):
+                _result = _compute_corrections(weighted_particles, ells=[ell], fields=fields)
+
+                for key, value in _result.items():
+                    result_ell.setdefault(key, [])
+                    result_ell[key].append(value)
+
+            # Sum symmetric optimal-weight realizations for this ell.
+            return {key: combine_stats(value) for key, value in result_ell.items()}
+
+        def join(results):
+            # Join per-ell outputs into one spectrum-like object per key.
+            for key in results:
+                results[key] = types.join(results[key])
+            return results
+
+        results = loop_over_optimal_weights(ells, compute, join)
+
+    if len(results) == 1:
+        return next(iter(results.values()))
     return results
 
 
-def _compute_spectrum2_close_pair_correction(all_particles, bin=None, auw=None, cut=None, los=None, fields=None):
+def _compute_mesh2_spectrum_close_pair_correction(all_particles, bin=None, auw=None, cut=None, los=None, fields=None):
     """Compute and apply close-pair corrections."""
-    from jaxpower import BinMesh2SpectrumPoles, BinParticle2CorrelationPoles, BinParticle2SpectrumPoles, compute_particle2, compute_particle2_shotnoise
+    from jaxpower import BinParticle2CorrelationPoles, BinParticle2SpectrumPoles, compute_particle2, compute_particle2_shotnoise
 
+    all_particles = list(all_particles)
     mattrs, edges, k, ells = bin.mattrs, bin.edges, bin.xavg, bin.ells
     results = {}
     # First compute the theta-cut (close-pair) contribution for contamination correction
@@ -184,7 +253,7 @@ def _compute_spectrum2_close_pair_correction(all_particles, bin=None, auw=None, 
     # Then compute the AUW-weighted (angular upweight) pairs and bitwise-weighted pairs
     with_bitweights = bool(all_particles[0].get('bitwise_weight'))
     if auw is not None or with_bitweights:
-        from cucount.jax import WeightAttrs
+        from cucount.jax import WeightAttrs, BitwiseWeight
         # Define angular selection for close pairs (< 0.1 degrees for bitwise weights)
         sattrs = {'theta': (0., 0.1)}
         bitwise = angular = None
@@ -204,6 +273,12 @@ def _compute_spectrum2_close_pair_correction(all_particles, bin=None, auw=None, 
             angular = dict(sep=auw.get('DD').coords('theta'), weight=auw.get('DD').value())
             if jax.process_index() == 0:
                 logger.info(f'Applying AUW {angular}.')
+        wattrs = WeightAttrs(bitwise=bitwise)
+        # Set default negative_weight = individual_weight
+        for i, particles in enumerate(all_particles):
+            if not particles.get('negative_weight'):
+                negative_weight = wattrs(particles)
+                all_particles[i] = particles.clone(weights=particles.get('weights') + [negative_weight], index_value=particles.index_value.clone(negative_weight=1))
         # Set up weight attributes for pair counting
         wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
         # Create binning for close-pair data-data counts with weights
@@ -215,7 +290,7 @@ def _compute_spectrum2_close_pair_correction(all_particles, bin=None, auw=None, 
         return DD
 
 
-def _apply_spectrum2_close_pair_correction(spectrum, correction):
+def _apply_mesh2_spectrum_close_pair_correction(spectrum, correction):
     """Apply additive corrections to a :class:`Mesh2SpectrumPoles`."""
     # norm
     def sum_counts(leaves):
@@ -384,8 +459,8 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                             if with_bitweights:
                                 all_particles = [convert_particles(fkp.data, weights=[fkp.data.extra['INDWEIGHT_NO_COMP']] + list(jnp.unstack(fkp.data.extra['BITWEIGHT'], axis=-1)) + [fkp.data.weights], exchange_weights=False) for fkp in all_fkp]
                             else:
-                                all_particles = [convert_particles(fkp.data, weights=[fkp.data.weights] * 2, exchange_weights=False, index_value=dict(individual_weight=1, negative_weight=1)) for fkp in all_fkp]
-                        results[name] = _compute_spectrum2_close_pair_correction(all_particles, bin=bin, **{name: corrections[name]}, los=los, fields=fields)
+                                all_particles = [convert_particles(fkp.data) for fkp in all_fkp]
+                        results[name] = _compute_mesh2_spectrum_close_pair_correction(all_particles, bin=bin, **{name: corrections[name]}, los=los, fields=fields)
 
             # Wait for particle-based calculations to complete
             jax.block_until_ready(results)
@@ -416,7 +491,7 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                 logger.info('Mesh-based computation finished')
 
             for name in results:
-                results[name] = _apply_spectrum2_close_pair_correction(spectrum, results[name])
+                results[name] = _apply_mesh2_spectrum_close_pair_correction(spectrum, results[name])
             results['raw'] = spectrum
 
             return results

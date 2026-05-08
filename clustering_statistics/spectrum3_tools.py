@@ -24,14 +24,15 @@ from .spectrum2_tools import prepare_jaxpower_particles, _get_jaxpower_attrs
 logger = logging.getLogger('spectrum3')
 
 
-def compute_spectrum3_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None):
+def compute_mesh3_spectrum_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None, **kwargs):
     """Compute and apply close-pair corrections."""
 
     from cucount.jax import create_sharding_mesh, BinAttrs, triposh_to_poles
+    from .correlation2_tools import prepare_cucount_particles
 
     with create_sharding_mesh() as sharding_mesh:
         if callable(get_data_randoms[0]):
-            all_particles = prepare_cucount_particles(*get_data_randoms)
+            all_particles = prepare_cucount_particles(*get_data_randoms, concatenate=True)
             if jax.process_index() == 0: logger.info('All particles on the device')
 
     results = {}
@@ -39,12 +40,12 @@ def compute_spectrum3_close_pair_correction(*get_data_randoms, spectrum, auw=Non
     corrections = {'auw': auw, 'cut': cut}
     for name in corrections:
         if corrections[name] is not None:
-            correction = _compute_spectrum3_close_pair_correction(all_particles, ells=spectrum.ells, **{name: corrections[name]})
-            results[name] = _apply_spectrum3_close_pair_correction(spectrum, correction)
+            correction = _compute_mesh3_spectrum_close_pair_correction(all_particles, ells=spectrum.ells, **{name: corrections[name]})
+            results[name] = _apply_mesh3_spectrum_close_pair_correction(spectrum, correction)
     return results
 
 
-def _compute_spectrum3_close_pair_correction(all_particles, edges=None, ells: list=None, auw=None, cut=None):
+def _compute_mesh3_spectrum_close_pair_correction(all_particles, edges=None, ells: list=None, auw=None, cut=None):
     """Compute and apply close-pair corrections."""
 
     from cucount.jax import BinAttrs, triposh_to_poles
@@ -55,11 +56,11 @@ def _compute_spectrum3_close_pair_correction(all_particles, edges=None, ells: li
         ells = [(0, 0, 0), (2, 0, 2)]
     ells = triposh_to_poles(ells)
     battrs = [BinAttrs(s=edges, pole=(ell, 'firstpoint')) for ell in ells]
-    from .correlation3_tools import _compute_particle3_close_pair_correction
-    return _compute_particle3_close_pair_correction(all_particles, battrs, auw=auw, cut=cut, veto23=True)
+    from .correlation3_tools import _compute_particle3_correlation_close_pair_correction
+    return _compute_particle3_correlation_close_pair_correction(all_particles, battrs, auw=auw, cut=cut, veto23=True, normalize_randoms=True)
 
 
-def _apply_spectrum3_close_pair_correction(spectrum, correction):
+def _apply_mesh3_spectrum_close_pair_correction(spectrum, correction):
     """Apply additive corrections to a :class:`Mesh3SpectrumPoles`."""
     from cucount.jax import triposh_transform_matrix
     from jaxpower.particle3 import Particle3CorrelationPole, Particle3CorrelationPoles
@@ -179,7 +180,7 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
                              'randoms': convert_particles(fkp.randoms, weights=fkp.randoms.weights, exchange_weights=False)} for fkp in all_fkp]
             for name in corrections:
                 if corrections[name] is not None:
-                    results[name] = _compute_spectrum3_close_pair_correction(all_particles, ells=bin.ells, **{name: corrections[name]})
+                    results[name] = _compute_mesh3_spectrum_close_pair_correction(all_particles, ells=bin.ells, **{name: corrections[name]})
 
         # Paint FKP fields onto mesh grids (stored as real-valued arrays to save memory)
         meshes = [fkp.paint(**kw, out='real') for fkp in all_fkp]
@@ -204,7 +205,7 @@ def compute_mesh3_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
             logger.info('Mesh-based computation finished')
 
         for name in results:
-            results[name] = _apply_spectrum3_close_pair_correction(spectrum, results[name])
+            results[name] = _apply_mesh3_spectrum_close_pair_correction(spectrum, results[name])
         results['raw'] = spectrum
 
     return results

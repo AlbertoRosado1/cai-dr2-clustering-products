@@ -237,7 +237,7 @@ def test_cross(stats=['mesh2_spectrum']):
     for tracer in [('LRG', 'ELG_LOPnotqso')]:
         zranges = [(0.8, 1.1)]
         for region in ['NGC', 'SGC'][:1]:
-            catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
+            catalog_options = dict(version='data-dr2-v2', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
             compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True}, particle2_correlation={}, analysis='png_local')
 
 
@@ -479,7 +479,7 @@ def test_auw3(stats=['mesh3_spectrum']):
     for tracer in ['LRG', 'ELG_LOPnotqso'][1:]:
         zranges = tools.propose_fiducial('zranges', tracer)[-1:]
         for region in ['NGC', 'SGC'][:1]:
-            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zranges, region=region, imock=1, nran=4)
+            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zranges, region=region, imock=1, nran=1)
             #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
             catalog_options['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
             compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh3_spectrum={'ells': [(0, 0, 0), (2, 0, 2)], 'auw': True})
@@ -495,12 +495,35 @@ def test_correlation3():
         for region in ['NGC', 'SGC'][:1]:
             catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, weight='default-FKP', imock=451, nran=1)
             catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
-            #particle2_correlation = {'battrs': dict(s=np.linspace(0., 180., 181), pole=(list(range(2)), 'firstpoint'))}
-            particle2_correlation = {}
-            compute_stats_from_options(stats, catalog=catalog_options, particle3_correlation=particle2_correlation, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir))
+            #particle3_correlation = {'battrs': dict(s=np.linspace(0., 180., 181), pole=(list(range(2)), 'firstpoint'))}
+            particle3_correlation = {}
+            compute_stats_from_options(stats, catalog=catalog_options, particle3_correlation=particle3_correlation, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir))
     
     #options = dict(catalog=catalog_options, combine_regions={'stats': ['particle3_correlation']})
     #postprocess_stats_from_options(['combine_regions'], get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **options)
+
+
+def test_close_pair_correction():
+    stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-close-pairs'
+    stats = ['mesh2_spectrum', 'particle2_correlation', 'mesh3_spectrum', 'particle3_correlation']
+
+    for tracer in ['LRG']:
+        zrange = tools.propose_fiducial('zranges', tracer)[-1]
+        for region in ['NGC', 'SGC'][:1]:
+            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zrange, region=region, imock=1, nran=1)
+            #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zrange, region=region, weight='default-FKP', nran=1)
+            catalog_options['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
+            get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir)
+            kw = dict(mesh2_spectrum={}, mesh3_spectrum={},
+                      particle2_correlation={'battrs': dict(s=np.linspace(0., 80., 81), mu=(np.linspace(-1., 1., 51), 'midpoint'))},
+                      particle3_correlation={'battrs': dict(s=np.linspace(0., 40., 41), pole=(list(range(2)), 'firstpoint'))})
+            compute_stats_from_options(stats, catalog=catalog_options, **kw, get_stats_fn=get_stats_fn)
+
+            for name in kw:
+                kw[name]['auw'] = True
+                if '3' not in name:
+                    kw[name]['cut'] = True
+            compute_stats_from_options(stats + ['close_pair_correction'], catalog=catalog_options, **kw, get_stats_fn=get_stats_fn)
 
 
 if __name__ == '__main__':
@@ -516,8 +539,8 @@ if __name__ == '__main__':
 
     jax.distributed.initialize()
     #test_window_fm('LRG')
-
-    test_auw3()
+    test_close_pair_correction()
+    # test_auw3()
     # test_window_fm('LRG')
     # test_correlation2()
     # test_correlation3()

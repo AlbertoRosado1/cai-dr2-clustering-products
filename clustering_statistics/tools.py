@@ -1427,7 +1427,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
     if isinstance(keep_columns, bool) and keep_columns:
         keep_all_columns = True
     elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES', 'WEIGHT_NTILE']
     else:
         assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
         keep_columns = list(keep_columns)
@@ -1544,6 +1544,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
         irank = ifn % mpicomm.size
         catalogs[ifn] = (irank, None)
         if mpicomm.rank == irank:  # Faster to read catalogs from one rank
+            #print(kind, fn)
             if kind == 'data' and complete_data is not None:
                 catalog = complete_data
             else:
@@ -1564,9 +1565,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                 if 'data' in kind:
                     catalog.attrs['completeness'] = {column: _compute_binned_weight(catalog[column], catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES']) for column in ['NTILE']}
             elif kind == 'data':
-                catalog.attrs['weight_ntile'] = _compute_binned_weight(catalog['NTILE'], catalog['WEIGHT'] / catalog['WEIGHT_COMP'])
+                catalog.attrs['weight_ntile'] = {column: _compute_binned_weight(catalog[column], catalog['WEIGHT'] / catalog['WEIGHT_COMP']) for column in ['NTILE']}
             if not keep_all_columns:
-                catalog = catalog[keep_columns + [column for column in catalog if 'WEIGHT' in column.upper()]]
+                catalog = catalog[[column for column in catalog if 'WEIGHT' in column.upper() or column in keep_columns]]
             catalogs[ifn] = (irank, catalog)
 
     rdzw = []
@@ -1698,12 +1699,15 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
     weight_type = weight
     assert weight_type is not None, 'provide weight'
 
-    if 'full' in kind or 'fibered' in kind:
-        individual_weight = get_binned_weight(catalog, catalog.attrs['weight_ntile'])
+    if 'parent' in kind or 'fibered' in kind:
+        if False: #'WEIGHT_NTILE' in catalog:
+            individual_weight = catalog['WEIGHT_NTILE']
+        else:
+            individual_weight = get_binned_weight(catalog, binned_weight['weight_ntile'])
         bitwise_weights = None
         if 'fibered' in kind and 'data' in kind:
             if 'bitwise' in weight_type:
-                individual_weight /= get_binned_weight(catalog, catalog.attrs['missing_power'])
+                individual_weight /= get_binned_weight(catalog, binned_weight['missing_power'])
                 bitwise_weights = catalog['BITWEIGHTS']
             else:
                 # equivalent of IIP weights
@@ -1831,10 +1835,11 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     for i, catalog in enumerate(catalogs):
         catalog = mask_catalog(catalog, kind, zrange=zrange, region=region)
         catalog = set_catalog_weights(catalog, kind, weight=weight, FKP_P0=FKP_P0, binned_weight=binned_weight, log=i == 0)
-        catalog = set_positions_from_rdz(catalog)
+        if kind in ['data', 'randoms']:
+            catalog = set_positions_from_rdz(catalog)
         rdzw.append(catalog)
         if not keep_all_columns:
-            catalog = catalog[[column for column in keep_columns if column in catalog]]
+            catalog = catalog[[column for column in catalog if column in keep_columns]]
 
     if concatenate:
         if len(rdzw) == 1: return rdzw[0]
