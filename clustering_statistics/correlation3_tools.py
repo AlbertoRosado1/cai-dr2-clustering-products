@@ -91,7 +91,7 @@ def compute_particle3_angular_upweights(*get_data_randoms):
         for particles in all_particles:
             all_particles_fibered.append({'data': particles['fibered_data'], 'randoms': particles['fibered_randoms']})
             all_particles_parent.append({'data': particles['parent_data'], 'randoms': particles['parent_randoms']})
-    
+
         theta = 10**np.arange(-4, np.log10(180.), 0.2)
         battrs = BinAttrs(theta=theta)
 
@@ -216,7 +216,7 @@ def compute_particle3_correlation_close_pair_correction(*get_data_randoms, corre
             edges = correlation.edges()
             ells = getattr(correlation.get('DDD'), 'ells', [])
             ells = [[ell[idim] for ell in ells] for idim in [0, 1]]
-    
+
             battrs = []
             for idim in range(3):
                 for name in ['s', 'theta']:
@@ -492,7 +492,7 @@ def compute_box_particle3_correlation(*get_data, battrs: dict=None, mattrs: dict
 
         # Helper
         def count3split(*particles, wattrs=None):
-            kw = dict(battrs12=battrs, battrs13=battrs, mattrs1=mattrs, mattrs2=mattrs, mattrs3=mattrs, wattrs=wattrs)
+            kw = dict(battrs12=battrs, battrs13=battrs, mattrs1=mattrs, mattrs2=mattrs, mattrs3=mattrs, wattrs=wattrs, norm=1.)
 
             nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
 

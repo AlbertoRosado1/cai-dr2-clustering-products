@@ -27,7 +27,7 @@ logger = logging.getLogger('spectrum3')
 def compute_mesh3_spectrum_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None, **kwargs):
     """Compute and apply close-pair corrections."""
 
-    from cucount.jax import create_sharding_mesh, BinAttrs, triposh_to_poles
+    from cucount.jax import create_sharding_mesh, BinAttrs
     from .correlation2_tools import prepare_cucount_particles
 
     with create_sharding_mesh() as sharding_mesh:
@@ -48,33 +48,31 @@ def compute_mesh3_spectrum_close_pair_correction(*get_data_randoms, spectrum, au
 def _compute_mesh3_spectrum_close_pair_correction(all_particles, edges=None, ells: list=None, auw=None, cut=None):
     """Compute and apply close-pair corrections."""
 
-    from cucount.jax import BinAttrs, triposh_to_poles
+    from cucount.jax import BinAttrs
+    from lsstypes.types import convert_ells
 
     if edges is None:
         edges = np.linspace(1e-3, 5000., 3001)
     if ells is None:
         ells = [(0, 0, 0), (2, 0, 2)]
-    ells = triposh_to_poles(ells)
-    battrs = [BinAttrs(s=edges, pole=(ell, 'firstpoint')) for ell in ells]
+    ells = convert_ells(ells, 'sugiyama', 'slepian')
+    battrs = [BinAttrs(s=edges, pole=(tuple(np.unique([ell[idim] for ell in ells])), 'firstpoint')) for idim in range(2)]
     from .correlation3_tools import _compute_particle3_correlation_close_pair_correction
-    return _compute_particle3_correlation_close_pair_correction(all_particles, battrs, auw=auw, cut=cut, veto23=True, normalize_randoms=True)
+    correction = _compute_particle3_correlation_close_pair_correction(all_particles, battrs, auw=auw, cut=cut, veto23=True, normalize_randoms=True)
+    for count_name in correction:
+        correction[count_name] = correction[count_name].to_basis('sugiyama')
+    return correction
 
 
 def _apply_mesh3_spectrum_close_pair_correction(spectrum, correction):
     """Apply additive corrections to a :class:`Mesh3SpectrumPoles`."""
-    from cucount.jax import triposh_transform_matrix
     from jaxpower.particle3 import Particle3CorrelationPole, Particle3CorrelationPoles
     out = spectrum
     value = 0.
-    matrix = None
     for count_name in correction:
         sign = (-1)**(3 - count_name.count('D'))  # randoms can be R or S
         poles = correction[count_name].ravel()
-        if matrix is None:
-            ells = getattr(poles, 'ells', [])
-            ells = [list(dict.fromkeys([ell[idim] for ell in ells])) for idim in [0, 1]]
-            _, matrix = triposh_transform_matrix(*ells, spectrum.ells)
-        value += sign * jnp.dot(matrix, jnp.array([pole.values('counts') for pole in poles]))
+        value += sign * jnp.array([pole.values('counts') for pole in poles])
     correlation = []
     for ill, ell in enumerate(spectrum.ells):
         correlation.append(Particle3CorrelationPole(s=poles.coords('s'), s_edges=poles.edges('s'), num_raw=value[ill], norm=jnp.ones_like(value[ill]) * spectrum.get(ell).values('norm').mean(), ell=ell))
@@ -325,7 +323,7 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
         kw, ellsin = get_smooth3_window_bin_attrs(ells, ellsin=2, fields=fields, return_ellsin=True)
         # Filter to low multipoles only (reduce computational cost)
         kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]
-        # For now, keep only (0,0,0) multipole
+        # For now, keep only (0, 0, 0) multipole
         kw['ells'] = kw['ells'][:1]
         # JIT-compile 3-point correlation computation
         jitted_compute_mesh3_correlation = jax.jit(compute_mesh3_correlation, static_argnames=['los'], donate_argnums=[0])
