@@ -843,7 +843,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         covariance = get_from_cache(cache_fn)
         covariance_cache_hit = covariance is not None
         if covariance is not None and mpicomm.rank == 0:
-            logger.info(f"Reading covariance cache from manifest entry with imocks={imocks_exists}.")
+            logger.info(f"Reading covariance cache {cache_fn} from manifest {get_covariance_manifest_fn()}.")
         if covariance is None:
             all_fns = []
             covariance_log_patterns = []
