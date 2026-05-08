@@ -71,7 +71,7 @@ if __name__ == '__main__':
     
     # run on interactive node
     # mode = 'interactive'
-    # imocks2run = 1 + np.arange(50)
+    # imocks2run = 1 + np.arange(1)
     # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
     
     # to run job
@@ -85,7 +85,7 @@ if __name__ == '__main__':
     project  = f'{analysis}'
     tracers  = ['ELG']
     los = 'z'
-    max_mocks_per_batch = 50
+    max_mocks_per_batch = 1
     
     for tracer in tracers:
         zsnaps = box_tools.propose_box_fiducial('zsnaps', tracer, version=version)[:1]

@@ -121,8 +121,10 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
     propose_fiducial['catalog'] = {'hod': '', 'los': 'z'}
     if 'abacus' in version:
         propose_fiducial['catalog'].update({'cosmo': '000'})
+        propose_meshsizes = {'meshsize': 512}
     if 'ezmock' in version:
         propose_fiducial['catalog'].update({'cosmo': '000', 'boxsize': 6000.})
+        propose_meshsizes = {'meshsize': 800}
     if 'abacus-hf' in version:
         hod = 'base'
         if 'BGS' in tracer or 'LRG' in tracer:
@@ -132,7 +134,7 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
         propose_fiducial['catalog'].update({'hod': hod})
     propose_fiducial['zsnaps'] = list(get_zrange_from_snap(tracer, zsnap=None, version=version))
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
-        propose_fiducial[stat]['mattrs'] = {'meshsize': 512}
+        propose_fiducial[stat]['mattrs'] = propose_meshsizes
     propose_fiducial['mesh2_spectrum'].update(ells=(0, 2, 4))
     propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal')
     for stat in ['recon']:
