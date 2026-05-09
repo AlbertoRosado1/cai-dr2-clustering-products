@@ -52,7 +52,7 @@ def _compute_mesh3_spectrum_close_pair_correction(all_particles, edges=None, ell
     from lsstypes.types import convert_ells
 
     if edges is None:
-        edges = np.linspace(1e-3, 5000., 3001)
+        edges = np.linspace(1e-3, 8000., 4001)
     if ells is None:
         ells = [(0, 0, 0), (2, 0, 2)]
     ells = convert_ells(ells, 'sugiyama', 'slepian')

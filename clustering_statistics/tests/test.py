@@ -492,11 +492,12 @@ def test_correlation3():
 
     for tracer in ['LRG']:
         zrange = tools.propose_fiducial('zranges', tracer)[0]
+        zrange = (0.4, 1.1)
         for region in ['NGC', 'SGC'][:1]:
-            catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, weight='default-FKP', imock=451, nran=1)
+            catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, weight='default-FKP', imock=451, nran=5)
             catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
             #particle3_correlation = {'battrs': dict(s=np.linspace(0., 180., 181), pole=(list(range(2)), 'firstpoint'))}
-            particle3_correlation = {}
+            particle3_correlation = {'split_randoms': (1.5, 7), 'battrs': dict(s=np.linspace(0., 160., 21), pole=(list(range(6)), 'firstpoint'))}
             compute_stats_from_options(stats, catalog=catalog_options, particle3_correlation=particle3_correlation, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir))
 
     #options = dict(catalog=catalog_options, combine_regions={'stats': ['particle3_correlation']})
@@ -528,58 +529,61 @@ def test_close_pair_correction():
 
 def test_particle_vs_fft():
     from jaxpower import ParticleField, split_particles, MeshAttrs, BinMesh3CorrelationPoles, compute_mesh3_correlation, get_smooth3_window_bin_attrs
-    from jaxpower.particle import convert_particles
+    from jaxpower.particle3 import convert_particles
     from cucount.jax import BinAttrs, WeightAttrs
     from cucount.types import count3, count3_analytic
     from lsstypes.types import convert_ells
 
-    catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer='LRG', zrange=(0.8, 1.1), region='NGC', imock=1, nran=1)
+    catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer='LRG', zrange=(0.4, 0.6), region='NGC', weight='default-FKP', imock=1, nran=1)
     catalog = tools.read_clustering_catalog(kind='data', **catalog_options)
 
-    mattrs = MeshAttrs(meshsize=400, boxsize=6000.)
+    mattrs = MeshAttrs(meshsize=256, boxsize=4000.)
     particles = ParticleField(catalog['POSITION'], catalog['INDWEIGHT'], attrs=mattrs,  exchange=True, backend='mpi')
     particles = split_particles([particles, None, None], seed=42)
 
     los = 'local'
+
     ells = [(0, 0, 0), (2, 0, 2)]
     # Get window basis attributes (e.g., which multipoles to compute)
     kw, ellsin = get_smooth3_window_bin_attrs(ells, ellsin=2, return_ellsin=True)
     # Filter to low multipoles only (reduce computational cost)
-    kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]
-    edges = np.linspace(0., mattrs.boxsize.min() / 2., 20)
-    sbin = BinMesh3CorrelationPoles(mattrs, edges=edges, **kw, buffer_size=10)
+    ells = kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]
+    edges = np.linspace(0., 200., 20)
+
+    sbin = BinMesh3CorrelationPoles(mattrs, edges=edges, **kw, buffer_size=20)
     kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
     meshes = [particle.paint(**kw_paint) for particle in particles]
     correlation_mesh = compute_mesh3_correlation(meshes, bin=sbin, los=los)
 
-    ells12, ells13 = convert_ells(ells, 'sugiyama', 'slepian')
+    _ells = convert_ells(ells, 'sugiyama', 'slepian')
+    ells12, ells13 = [tuple(np.unique([ell[idim] for ell in _ells])) for idim in range(2)]
     battrs12, battrs13 = [BinAttrs(s=edges, pole=(ell, 'firstpoint')) for ell in [ells12, ells13]]
-    particles = [convert_particles(particle) for particle in particles]
-    wattrs = WeightAttrs()
-    counts = count3(*particles, battrs12=battrs12, battrs13=battrs13)['weight']
-    correlation_particle = counts.to_basis('sugiyama', ells=ells)
     RRR0 = count3_analytic(mattrs=1., battrs12=battrs12, battrs13=battrs13)
 
+    particles = [convert_particles(particle) for particle in particles]
+    wattrs = WeightAttrs()
+    counts = count3(*particles, battrs12=battrs12, battrs13=battrs13, wattrs=wattrs)['weight']
+    correlation_particle = counts.to_basis('sugiyama', ells=ells)
     norm = next(iter(correlation_mesh)).values('norm').mean()
 
     def renormalize(pole):
-        return pole.clone(counts=pole.values('counts'), norm=norm * RRR0.value())
+        return pole.clone(counts=pole.values('counts'), norm=norm * RRR0.get((0, 0, 0)).value())
 
     correlation_particle = correlation_particle.map(renormalize)
 
     if jax.process_index() == 0:
         from matplotlib import pyplot as plt
-        fig, lax = plt.subplots(2)
+        fig, lax = plt.subplots(len(ells) + 1, figsize=(8, 14))
         for ill, ell in enumerate(ells):
             color = f'C{ill:d}'
-            pole = correlation_mesh.get(ell).value()
+            pole = correlation_mesh.get(ell)
             s = pole.coords('s')
             mask = (s[..., 1] > s[..., 0])
             idx = np.arange(mask.sum())
-            lax[0].plot(idx, pole.value()[mask], color=color, label=str(ell))
-            pole = correlation_particle.get(ell).ravel().value()
-            lax[0].plot(idx, pole.value()[mask], color=color, linestyle='--')
-        lax[0].legend(frameon=False)
+            lax[ill].plot(idx, s.prod(axis=-1)[mask] * pole.value()[mask], color=color, label=str(ell))
+            pole_particle = correlation_particle.get(ell).ravel()
+            lax[ill].plot(idx, s.prod(axis=-1)[mask] * pole_particle.value()[mask], color=color, linestyle='--')
+            lax[ill].legend(frameon=False)
         for idim in range(s.shape[1]):
             lax[-1].plot(idx, s[mask, idim], color=f'C{idim:d}', label=f'$s_{idim + 1:d}$')
         lax[-1].set_ylabel(r'$s$ [$\mathrm{Mpc}/h$]')
@@ -602,14 +606,13 @@ if __name__ == '__main__':
 
     jax.distributed.initialize()
 
-    test_particle_vs_fft()
-
-    #test_window_fm('LRG')
+    # test_particle_vs_fft()
+    # test_window_fm('LRG')
     # test_close_pair_correction()
     # test_auw3()
     # test_window_fm('LRG')
     # test_correlation2()
-    # test_correlation3()
+    test_correlation3()
     # test_covariance()
     # test_stats_fn()
     # test_complete_catalog()

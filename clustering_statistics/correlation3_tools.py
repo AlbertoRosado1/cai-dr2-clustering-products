@@ -115,7 +115,7 @@ def compute_particle3_angular_upweights(*get_data_randoms):
     return ObservableTree(list(auw.values()), triplets=list(auw.keys()))
 
 
-def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: dict=None, auw=None, cut=None):
+def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: dict=None, auw=None, cut=None, split_randoms: bool | float=False):
     """
     Compute three-point correlation function using :mod:`cucount.jax`.
 
@@ -157,19 +157,18 @@ def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: di
 
     with create_sharding_mesh():
         if battrs is None:
-            battrs = dict(s=np.linspace(0., 180., 181), pole=(list(range(6)), 'firstpoint'))
+            battrs = dict(s=np.linspace(0., 160., 161), pole=(list(range(6)), 'firstpoint'))
         battrs = BinAttrs(**battrs)
         mattrs = None
 
-        all_particles = prepare_cucount_particles(*get_data_randoms)
+        all_particles = prepare_cucount_particles(*get_data_randoms, split_randoms=split_randoms)
         if jax.process_index() == 0: logger.info('All particles on the device')
 
         def count3split(*particles, wattrs=None):
             kw = dict(battrs12=battrs, battrs13=battrs, mattrs1=mattrs, mattrs2=mattrs, mattrs3=mattrs, wattrs=wattrs)
             nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
             if any(nsplits):
-                for nsplit in nsplits:
-                    if nsplit: break
+                nsplit = next(n for n in nsplits if n)
                 particles = list(particles)
                 for ip, particle in enumerate(particles):
                     if isinstance(particle, list):
@@ -202,14 +201,14 @@ def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: di
     return results
 
 
-def compute_particle3_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None):
+def compute_particle3_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, split_randoms: bool | float=False):
     """Compute and apply close-pair corrections."""
 
     from cucount.jax import create_sharding_mesh, BinAttrs
 
     with create_sharding_mesh() as sharding_mesh:
         if callable(get_data_randoms[0]):
-            all_particles = prepare_cucount_particles(*get_data_randoms)
+            all_particles = prepare_cucount_particles(*get_data_randoms, split_randoms=split_randoms)
             if jax.process_index() == 0: logger.info('All particles on the device')
 
         if battrs is None:
@@ -440,7 +439,7 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
 
 
 
-def compute_box_particle3_correlation(*get_data, battrs: dict=None, mattrs: dict=None, nran: int=10):
+def compute_box_particle3_correlation(*get_data, battrs: dict=None, mattrs: dict=None, nran: int=10, split_randoms: bool | float=False):
     """
     Compute three-point correlation function using :mod:`cucount.jax`.
 
@@ -471,7 +470,7 @@ def compute_box_particle3_correlation(*get_data, battrs: dict=None, mattrs: dict
         mattrs = mattrs or {}
         wattrs = WeightAttrs()
 
-        all_particles = prepare_cucount_particles(*get_data)
+        all_particles = prepare_cucount_particles(*get_data, split_randoms=split_randoms)
 
         if jax.process_index() == 0:
             logger.info('All particles on the device')

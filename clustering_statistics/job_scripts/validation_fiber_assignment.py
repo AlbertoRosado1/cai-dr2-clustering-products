@@ -23,8 +23,8 @@ from clustering_statistics import tools
 setup_logging()
 
 # to run job
-mode = 'interactive'
-#mode = 'slurm'
+#mode = 'interactive'
+mode = 'slurm'
 
 if mode == 'slurm':
     queue = Queue('abacus_mocks')
@@ -34,10 +34,10 @@ if mode == 'slurm':
     kwargs = {}
     environ = Environment('nersc-cosmodesi', command=['module unload desi-clustering cucount jaxpower lsstypes'])
     tm = TaskManager(queue=queue, environ=environ)
-    tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
+    tm = tm.clone(scheduler=dict(max_workers=20), provider=dict(provider='nersc', time='02:00:00',
                                 mpiprocs_per_worker=4, output=output, error=error, constraint='gpu'))
-    tm80 = tm.clone(provider=dict(provider='nersc', time='04:00:00',
-                                mpiprocs_per_worker=4, output=output, error=error, constraint='gpu&hbm80g'))
+    tm80 = tm.clone(provider=dict(provider='nersc', time='02:30:00',
+                                mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
     tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='00:10:00',
                     mpiprocs_per_worker=2250, nodes_per_worker=25, output=output, error=error, stop_after=1, constraint='cpu'))
 
@@ -57,6 +57,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
     from pathlib import Path
     import jax
     from jax import config
+    import numpy as np
     config.update('jax_enable_x64', True)
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     try: jax.distributed.initialize()
@@ -75,12 +76,14 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             window_mesh2_spectrum = {'cut': True if 'full_shape' in analysis else None}
             mesh3_spectrum = {'auw': True if 'altmtl' in version and onthefly is None and 'full_shape' in analysis else None}
             window_mesh3_spectrum = {'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch}
+            particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))}
+            particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
             
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            mesh3_spectrum=mesh3_spectrum, window_mesh3_spectrum=window_mesh3_spectrum,
-                           particle2_correlation={'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))},
-                           particle3_correlation={'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(5)), 'firstpoint'))})
+                           particle2_correlation=particle2_correlation,
+                           particle3_correlation=particle3_correlation)
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
@@ -114,35 +117,41 @@ if __name__ == '__main__':
     # version = 'abacus-2ndgen-dr2-altmtl'
     check_for_existing_measurements = False
 
-    imocks = np.arange(9)
+    imocks = np.arange(25)
     #imocks = np.arange(5, 25)
+    #imocks = np.arange(9)
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['LRG', 'ELG_LOPnotqso', 'QSO'][1:]
+    tracers = ['LRG', 'ELG', 'QSO']
+
+    # run BGS
+    #version = 'abacus-2ndgen-dr2-altmtl'
+    #tracers = ['BGS']
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
-    #stats = ['mesh2_spectrum', 'mesh3_spectrum']
-    stats = ['particle2_correlation', 'particle3_correlation']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    #stats = ['particle2_correlation', 'particle3_correlation']
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics'
     weight = 'default-FKP'
     #weight = 'default'
     regions = ['NGC', 'SGC']
-    max_mocks_per_batch = 5 
+    max_mocks_per_batch = 5
 
-    #onthefly = None
+    onthefly = None
     #onthefly = 'complete-nozfail'
     #onthefly = 'complete-renorm'
     #onthefly = 'complete-downsample'
     #onthefly = 'complete-samenz'
     #onthefly = 'complete-fixnz'
-    onthefly = 'complete'
+    #onthefly = 'complete'
     
     for tracer in tracers:
+        tracer = tools.get_full_tracer(tracer, version=version)
         if 'png' in analysis:
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]

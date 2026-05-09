@@ -104,6 +104,8 @@ def get_full_tracer(tracer, version=None):
         if 'LRG' in tracer or 'QSO' in tracer:
             return tracer
         if tracer == 'BGS':
+            if version == 'abacus-2ndgen-dr2-altmtl':
+                return 'BGS_ANY-02'
             if 'dr1' in version:
                 return 'BGS_BRIGHT-21.5'
             return 'BGS_BRIGHT-21.35'
@@ -926,9 +928,9 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif version == 'abacus-2ndgen-dr2-complete':
             if 'BGS' in tracer:
-                cat_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummitBGS_v2/mock{imock:d}'
+                cat_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummitBGS_v2/mock{imock:d}'
             else:
-                cat_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummit_v4_1/mock{imock:d}'
+                cat_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummit_v4_1/mock{imock:d}'
             ext = 'fits'
             if kind == 'data':
                 return cat_dir / f'{tracer}_complete_clustering.dat.{ext}'
@@ -937,9 +939,9 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif version == 'abacus-2ndgen-dr2-altmtl':
             if 'BGS' in tracer:
-                base_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummitBGS_v2'
+                base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummitBGS_v2'
             else:
-                base_dir = desi_dir / f'survey/catalogs/Y3/mocks/SecondGenMocks/AbacusSummit_v4_1'
+                base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummit_v4_1'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
             cat_dir = base_dir / f'altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'

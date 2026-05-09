@@ -11,6 +11,7 @@ Main functions
 import logging
 import itertools
 from functools import partial
+import warnings
 
 import numpy as np
 import jax
@@ -63,7 +64,7 @@ def compute_particle2_angular_upweights(*get_data):
     return ObservableTree(list(auw.values()), pairs=list(auw.keys()))
 
 
-def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsampler=None, jackknife=None, concatenate=False, wattrs=None):
+def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsampler=None, jackknife=None, split_randoms=False, concatenate=False, wattrs=None):
     """
     Convert catalogs to :class:`cucount.Particles`.
 
@@ -76,6 +77,10 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
         Optional object with a ``label(positions)`` method.
     jackknife : dict, optional
         Jackknife configuration. If provided, build a KMeansSubsampler.
+    split_randoms : bool, float
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+    concatenate : bool
+        If ``True``, return concatenated randoms or shifted catalogs.
     wattrs : WeightAttrs, optional
         Weight attributes passed to KMeansSubsampler.
 
@@ -116,12 +121,49 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
         jackknife_particles = cucount.numpy.Particles.concatenate(jackknife_particles)
         subsampler = KMeansSubsampler(jackknife_particles, wattrs=wattrs, **kw_jackknife)
 
-    def get_all_particles(catalog, as_list=False):
-        if as_list and not _is_list(catalog): catalog = [catalog]
+    def _concatenate(catalog, collective=False):
+        if _is_list(catalog):
+            if len(catalog) == 1:
+                catalog = catalog[0]
+            else:
+                if collective:
+                    catalog = catalog[0].cconcatenate(catalog)
+                else:
+                    catalog = catalog[0].concatenate(catalog)
+        return catalog
+
+    def _split_catalog(catalog, split_randoms, data_size):
+        from mpytools.random import MPIRandomState
+        if data_size is None:
+            raise ValueError('split_randoms is in terms of data size, so provide data')
+        catalog = _concatenate(catalog, collective=True)
+        csize = catalog.csize
+        if isinstance(split_randoms, tuple):
+            split_size, nsplits = split_randoms[0] * data_size, split_randoms[1]
+            frac = (split_size * nsplits) / csize
+            if frac > 1.:
+                warnings.warn(f'catalog of randoms is {1. / frac:.2f} too small to perform {nsplits:d} nsplits with {split_randoms[0]:.2f} the data size')
+            frac = min(frac, 1.)
+        else:
+            split_size = split_randoms * data_size
+            nsplits = max(int(csize / split_size), 1)
+            frac = 1.
+        rng = MPIRandomState(seed=42, size=catalog.size)
+        x = rng.uniform(0., 1.)
+        toret = []
+        for isplit in range(nsplits):
+            mask = (x >= isplit * frac / nsplits) & (x < (isplit + 1) * frac / nsplits)
+            toret.append(catalog[mask])
+        return toret
+
+    def get_all_particles(catalog, as_list=False, data_size=None):
+        if as_list and not _is_list(catalog):
+            catalog = [catalog]
+        if as_list and split_randoms:
+            catalog = _split_catalog(catalog, split_randoms, data_size)
         if _is_list(catalog):
             if concatenate:
-                if len(catalog): catalog = catalog[0]
-                else: catalog = catalog[0].concatenate(catalog)
+                catalog = _concatenate_catalog(catalog)
             else:
                 return [get_all_particles(c) for c in catalog]
         positions, weights = get_pw(catalog)
@@ -131,9 +173,10 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
     all_particles = []
     for _get_data_randoms in get_data_randoms:
         catalogs = _get_data_randoms()
+        data_size = catalogs['data'].csize if 'data' in catalogs else None
         particles = {}
         for name, catalog in catalogs.items():
-            particles[name] = get_all_particles(catalog, as_list=name in ['randoms', 'shifted'])
+            particles[name] = get_all_particles(catalog, as_list=name in ['randoms', 'shifted'], data_size=data_size)
         all_particles.append(particles)
 
     if subsampler is not None:
@@ -163,7 +206,7 @@ def _guess_wattrs(get_data_randoms, auw=None):
     return wattrs
 
 
-def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs: dict=None, zeff: dict=None, jackknife: dict=None):
+def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs: dict=None, zeff: dict=None, jackknife: dict=None, split_randoms: bool | float=False):
     """
     Compute two-point correlation function using :mod:`cucount.jax`.
 
@@ -187,7 +230,7 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
     -------
     correlation : Count2Correlation or Count2JackknifeCorrelation
     """
-    from cucount.jax import BinAttrs, WeightAttrs, SelectionAttrs
+    from cucount.jax import BinAttrs, WeightAttrs, SelectionAttrs, SplitAttrs
     from cucount.types import count2
     from lsstypes import Count2Correlation, Count2JackknifeCorrelation
     from jaxpower import create_sharding_mesh
@@ -230,7 +273,7 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
         mattrs = None
 
         spattrs = None
-        all_particles = prepare_cucount_particles(*get_data_randoms, jackknife=kw_jackknife, wattrs=wattrs)
+        all_particles = prepare_cucount_particles(*get_data_randoms, jackknife=kw_jackknife, split_randoms=split_randoms, wattrs=wattrs)
         if isinstance(all_particles, tuple):
             all_particles, subsampler = all_particles
             spattrs = SplitAttrs(mode='jackknife', nsplits=subsampler.nsplits)
@@ -241,8 +284,7 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
             kw = dict(battrs=battrs, mattrs=mattrs, sattrs=sattrs, spattrs=spattrs, wattrs=wattrs)
             nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
             if any(nsplits):
-                for nsplit in nsplits:
-                    if nsplit: break
+                nsplit = next(n for n in nsplits if n)
                 particles = list(particles)
                 for ip, particle in enumerate(particles):
                     if isinstance(particle, list):
@@ -302,7 +344,7 @@ def _get_particle_combinations(combinations, all_particles, with_repeats=True):
     return particles, _combinations
 
 
-def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict=None):
+def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict=None, split_randoms: bool | float=False):
     """
     Compute periodic-box two-point correlation function using :mod:`cucount.jax`.
 
@@ -331,7 +373,7 @@ def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict
         mattrs = mattrs or {}
         wattrs = WeightAttrs()
 
-        all_particles = prepare_cucount_particles(*get_data)
+        all_particles = prepare_cucount_particles(*get_data, split_randoms=split_randoms)
         if jax.process_index() == 0: logger.info('All particles on the device')
 
         mattrs = MeshAttrs(*[particles['data'] for particles in all_particles], battrs=battrs, los=los, **mattrs)
@@ -340,8 +382,7 @@ def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict
             kw = dict(battrs=battrs, mattrs=mattrs, wattrs=wattrs)
             nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
             if any(nsplits):
-                for nsplit in nsplits:
-                    if nsplit: break
+                nsplit = next(n for n in nsplits if n)
                 particles = list(particles)
                 for ip, particle in enumerate(particles):
                     if isinstance(particle, list):
@@ -377,7 +418,7 @@ def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict
     return Count2Correlation(estimator='natural', DD=counts['DD'], RR=counts['RR'])
 
 
-def compute_particle2_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, jackknife=None, **kwargs):
+def compute_particle2_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, jackknife=None,  split_randoms: bool | float=False, **kwargs):
     """Compute and apply close-pair corrections."""
 
     from cucount.jax import create_sharding_mesh, BinAttrs
@@ -389,7 +430,7 @@ def compute_particle2_correlation_close_pair_correction(*get_data_randoms, corre
         if callable(get_data_randoms[0]):
             spattrs = None
             wattrs = _guess_wattrs(get_data_randoms[0], auw=auw)
-            all_particles = prepare_cucount_particles(*get_data_randoms, jackknife=kw_jackknife, wattrs=wattrs)
+            all_particles = prepare_cucount_particles(*get_data_randoms, jackknife=kw_jackknife, wattrs=wattrs, split_randoms=split_randoms)
             if isinstance(all_particles, tuple):
                 all_particles, subsampler = all_particles
                 spattrs = SplitAttrs(mode='jackknife', nsplits=subsampler.nsplits)

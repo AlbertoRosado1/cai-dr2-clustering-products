@@ -118,6 +118,7 @@ if __name__ == '__main__':
     
     # to run job
     mode = 'slurm'
+    mode = 'interactive'
     imocks2run = np.arange(25)
     stats_dir  = tools.base_stats_dir
 
@@ -138,7 +139,7 @@ if __name__ == '__main__':
     weight  = 'default-FKP'
     regions = ['N', 'NGCnoN', 'S', 'SGCnoDES', 'SnoDES', 'DES', 'ACT_DR6', 'PLANCK_PR4', 'GAL040',  'GAL060']
     tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
-    max_mocks_per_batch = 5 
+    max_mocks_per_batch = 5
 
     # run fiducial local_png
     # stats       = ['mesh2_spectrum']
@@ -150,8 +151,8 @@ if __name__ == '__main__':
     # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
     # max_mocks_per_batch = 10
 
-    # onthefly = None
-    onthefly = 'complete'
+    onthefly = None
+    #onthefly = 'complete'
     
     for tracer in tracers:
         if 'png' in analysis:
@@ -159,6 +160,7 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+        tracer = tools.get_full_tracer(tracer, version=version)
         if check_for_existing_measurements:
             exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer[0] if isinstance(tracer, (list, tuple)) else tracer,
                                                                                            region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
