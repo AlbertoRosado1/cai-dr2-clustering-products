@@ -3,6 +3,7 @@ Script to create and spawn desipipe tasks to compute clustering measurements on 
 To create and spawn the tasks on NERSC, use the following commands:
 ```bash
 salloc -N 1 -C "gpu&hbm80g" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
+salloc -N 1 -C "gpu" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 python desipipe_glam-uchuu_mocks.py         # create the list of tasks
 desipipe tasks  -q glam-uchuu_mocks         # check the list of tasks
@@ -26,7 +27,8 @@ queue.clear(kill=False)
 
 output, error = 'slurm_outputs/glam-uchuu_mocks/slurm-%j.out', 'slurm_outputs/glam-uchuu_mocks/slurm-%j.err'
 kwargs = {}
-environ = Environment('nersc-cosmodesi')
+# environ = Environment('nersc-cosmodesi')
+environ = Environment('nersc-cosmodesi', command='export PYTHONPATH=$HOME/LSScode/dr2-clustering-analysis/:$PYTHONPATH')
 tm = TaskManager(queue=queue, environ=environ)
 tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu'))
@@ -112,20 +114,23 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 if __name__ == '__main__':
 
     stats, postprocess = [], []
-    version  = 'glam-uchuu-v2-altmtl'
+    # version  = 'glam-uchuu-v2-altmtl'
+    version  = 'glam-uchuu-bgs-altmtl'
     check_for_existing_measurements = True
     postprocess_only = False # If True, no measurements are performed and only postprocessing of existing measurements is handled.
 
     # run on interactive node
     # mode = 'interactive'
     # imocks2run = 150 + np.arange(1)
+    # imocks2run = 10 + np.arange(1)
     # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
 
     # to run job
     # mode = 'interactive'
     mode = 'slurm'
-    imocks2run = np.arange(2000)
-    if True:
+    # imocks2run = np.arange(2000)
+    imocks2run = np.arange(1000)
+    if version == 'glam-uchuu-v2-altmtl':
         # bad_imocks = np.concatenate([300+np.arange(50),[202, 203, 205, 211, 1275]])
         # bad_imocks = np.loadtxt(f'../helper_scripts/dubious_{version}.txt',dtype=int)
         bad_imocks = [211, 1275, 543]
@@ -133,15 +138,15 @@ if __name__ == '__main__':
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    # stats       = ['mesh2_spectrum', 'mesh3_spectrum'] 
-    stats = ['particle2_correlation']
+    stats       = ['mesh2_spectrum', 'mesh3_spectrum'] 
+    # stats = ['particle2_correlation']
     postprocess = ['combine_regions']
     analysis = 'full_shape'
     project  = f'{analysis}/base'
     weight   = 'default-FKP'
     regions  = ['NGC','SGC']
-    tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
-    # tracers = ['ELG_LOPnotqso']
+    # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    tracers = ['BGS_BRIGHT-21.35']
     max_mocks_per_batch_qso = 20
     max_mocks_per_batch_others = 10
     postregions = ['GCcomb']
@@ -202,7 +207,7 @@ if __name__ == '__main__':
 
         def get_run_stats():
             _tm = tm80
-            if tracer in ['LRG']:
+            if tracer in ['LRG','BGS_BRIGHT-21.35']:
                 _tm = tm
             if any('window_mesh3' in stat for stat in stats):
                 _tm = tmw
