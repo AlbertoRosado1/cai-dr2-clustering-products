@@ -133,7 +133,7 @@ if __name__ == '__main__':
     if version == 'glam-uchuu-v2-altmtl':
         # bad_imocks = np.concatenate([300+np.arange(50),[202, 203, 205, 211, 1275]])
         # bad_imocks = np.loadtxt(f'../helper_scripts/dubious_{version}.txt',dtype=int)
-        bad_imocks = [211, 1275, 543]
+        bad_imocks = [280, 543, 1275]
         imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
     stats_dir  = tools.base_stats_dir
 
