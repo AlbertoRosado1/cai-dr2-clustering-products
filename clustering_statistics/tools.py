@@ -1057,7 +1057,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         for tracer in catalog_options:
             catalog_options[tracer].setdefault('imock', None)
     imock = next(iter(catalog_options.values()))['imock']
-    if imock and imock == '*':
+    if imock == '*':
         fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options, imock=imock, **kwargs) for imock in range(2001)]
         return [fn for fn in fns if os.path.exists(fn)]
 
