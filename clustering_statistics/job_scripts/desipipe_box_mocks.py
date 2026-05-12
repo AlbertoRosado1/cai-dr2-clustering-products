@@ -76,19 +76,25 @@ if __name__ == '__main__':
     
     # to run job
     mode = 'slurm'
-    imocks2run = np.arange(1000)
+    imocks2run = 1 + np.arange(1001)
     stats_dir  = tools.base_stats_dir
 
     # run 
     stats    = ['mesh2_spectrum', 'mesh3_spectrum']
     analysis = 'mock_challenge'
     project  = f'{analysis}'
-    tracers  = ['ELG']
+    # tracers  = ['ELG']
+    tracers  = ['QSO','LRG']
     los = 'z'
     max_mocks_per_batch = 1
     
     for tracer in tracers:
-        zsnaps = box_tools.propose_box_fiducial('zsnaps', tracer, version=version)[:1]
+        if tracer in ['QSO','ELG']:
+            # only use zsnaps 1.400 and 0.950 for QSO and ELG respectively.
+            zsnaps = box_tools.propose_box_fiducial('zsnaps', tracer, version=version)[:1]
+        elif tracer in ['LRG']:
+            # only use zsnap 0.800 for LRG
+            zsnaps = box_tools.propose_box_fiducial('zsnaps', tracer, version=version)[1:]
         cosmo  = box_tools.propose_box_fiducial('catalog', tracer, version=version)['cosmo']
         if check_for_existing_measurements:
             rerun = []
