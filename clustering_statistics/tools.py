@@ -1582,6 +1582,9 @@ def read_clustering_catalog(kind=None, concatenate=True, get_catalog_fn=get_cata
             catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=irank)
         if 'default' in weight_type:
             individual_weight = catalog['WEIGHT'].copy()
+            if individual_weight.dtype != 'float64': 
+                # to avoid "numpy._core._exceptions._UFuncOutputCastingError: Cannot cast ufunc 'multiply' output from dtype('float64') to dtype('>i8') with casting rule 'same_kind'"
+                individual_weight = individual_weight.astype('f8')
         else:
             if i == 0: logger.info('Not using WEIGHT column as individual weight')
             individual_weight = np.ones(len(catalog), dtype='f8')
