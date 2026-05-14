@@ -464,8 +464,8 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
             edges = np.arange(0., mattrs.boxsize.min(), mattrs.cellsize.min())
             ells = kw['ells']
             ells_slepian = convert_ells(ells, 'sugiyama', 'slepian')
-            battrs12, battrs13 = [BinAttrs(s=edges, pole=((0, 1, 2), 'firstpoint')) for idim in range(2)]
-            #battrs12, battrs13 = [BinAttrs(s=edges, pole=(tuple(np.unique([ell[idim] for ell in ells_slepian])), 'firstpoint')) for idim in range(2)]
+            #battrs12, battrs13 = [BinAttrs(s=edges, pole=((0, 2), 'firstpoint')) for idim in range(2)]
+            battrs12, battrs13 = [BinAttrs(s=edges, pole=(tuple(np.unique([ell[idim] for ell in ells_slepian])), 'firstpoint')) for idim in range(2)]
 
             sepmax = edges.max()
             #sepmax = 100.
@@ -485,7 +485,6 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
             def count3split(*particles, sattrs12=None, sattrs13=None):
                 kw = dict(wattrs=wattrs, battrs12=battrs12, battrs13=battrs13, sattrs12=sattrs12, sattrs13=sattrs13, norm=1.)
                 nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
-                print(nsplits)
                 if any(nsplits):
                     nsplit = next(n for n in nsplits if n)
                     particles = list(particles)

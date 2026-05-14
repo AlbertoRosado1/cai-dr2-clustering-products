@@ -130,25 +130,25 @@ if __name__ == '__main__':
     #imocks = np.arange(5, 25)
     #imocks = np.arange(5, 9)
     #imocks = np.arange(1)
-    #imocks = [3]
+    imocks = [0]
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['LRG', 'ELG', 'QSO']
+    #tracers = ['LRG', 'ELG', 'QSO']
     #tracers = ['ELG', 'LRG']
     #tracers = ['ELG']
 
     # run BGS
-    #version = 'abacus-2ndgen-dr2-altmtl'
-    #tracers = ['BGS']
+    version = 'abacus-2ndgen-dr2-altmtl'
+    tracers = ['BGS']
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum'][:0] # 'particle2_correlation', 'particle3_correlation']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle3_correlation']
-    postprocess = ['combine_regions'][:1]
+    postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics'
     weight = 'default-FKP'
@@ -156,13 +156,13 @@ if __name__ == '__main__':
     regions = ['NGC', 'SGC']
     max_mocks_per_batch = 5
 
-    onthefly = None
+    #onthefly = None
     #onthefly = 'complete-nozfail'
     #onthefly = 'complete-renorm'
     #onthefly = 'complete-downsample'
     #onthefly = 'complete-samenz'
     #onthefly = 'complete-fixnz'
-    #onthefly = 'complete'
+    onthefly = 'complete'
     
     for tracer in tracers:
         tracer = tools.get_full_tracer(tracer, version=version)

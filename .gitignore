@@ -25,7 +25,7 @@ doc/_build/
 **/auw3.ipynb
 **/validation2.ipynb
 **/*.pdf
-**/.zip
+**/*.zip
 **/log
 **/tmp
 **/tmp.py

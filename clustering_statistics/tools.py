@@ -79,8 +79,12 @@ def get_simple_tracer(tracer):
             return 'BGS'
         elif 'LRG+ELG' in tracer:
             return 'LRG+ELG'
+        elif 'LRG+LGE' in tracer:
+            return 'LRG+LGE'
         elif 'LRG' in tracer:
             return 'LRG'
+        elif 'LGE' in tracer:
+            return 'LGE'
         elif 'ELG' in tracer:
             return 'ELG'
         elif 'QSO' in tracer:
@@ -101,7 +105,7 @@ def get_full_tracer(tracer, version=None):
             return 'x'.join(_get_full_tracer(t) for t in tracer.split('x'))
         if '+' in tracer:
             return '+'.join(_get_full_tracer(t) for t in tracer.split('+'))
-        if 'LRG' in tracer or 'QSO' in tracer:
+        if any(_tracer in tracer for _tracer in ['LRG', 'LGE', 'QSO']):
             return tracer
         if tracer == 'BGS':
             if version == 'abacus-2ndgen-dr2-altmtl':
@@ -431,7 +435,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     kind : str
         Statistic kind. Options are 'zranges', 'nran', 'particle2_correlation', 'mesh2_spectrum', 'particle3_correlation', 'mesh3_spectrum', 'recon'.
     tracer : str
-        Tracer name. Options are 'BGS', 'LRG', 'ELG', 'LRG+ELG', 'QSO'.
+        Tracer name. Options are 'BGS', 'LRG', 'LGE', 'ELG', 'LRG+ELG', 'QSO'.
     zrange : tuple, optional
         Redshift range. If provided, it will override the default zrange.
 
@@ -443,8 +447,10 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     base = {"catalog": {}, "particle2_correlation": {},  "particle3_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
     propose_fiducial = {
         'BGS': {'nran': 3, 'recon': {'mode': 'recsym', 'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
+        'LRG+LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15.}, 'zrange': (0.4, 1.1)},
         'LRG+ELG': {'nran': 13, 'recon': {'mode': 'recsym', 'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
         'LRG': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 2.0, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
+        'LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
         'ELG': {'nran': 15, 'recon': {'mode': 'recsym', 'bias': 1.2, 'smoothing_radius': 15., 'zrange': (0.8, 1.6)}},
         'QSO': {'nran': 4, 'recon': {'mode': 'recsym', 'bias': 2.1, 'smoothing_radius': 30., 'zrange': (0.8, 2.1)}}}
 
@@ -465,10 +471,12 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     else:  # full_shape
         propose_weight = 'default-FKP'
         propose_zranges = {'BGS': [(0.1, 0.4)], 'LRG': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
+                           'LGE': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
                            'ELG': [(0.8, 1.1), (1.1, 1.6)], 'LRG+ELG': [(0.8, 1.1)], 'QSO': [(0.8, 2.1)],
+                           'LRGxLGE': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
                            'LRGxELG': [(0.8, 1.1)], 'LRGxQSO': [(0.8, 1.1)], 'ELGxQSO': [(0.8, 1.1), (1.1, 1.6)]}
-        propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'LRG+ELG': 1e4, 'QSO': 6e3}
-        propose_meshsizes = {'BGS': 750, 'LRG': 750, 'ELG': 960, 'LRG+ELG': 750, 'QSO': 1152}
+        propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'LRG+ELG': 1e4, 'QSO': 6e3}
+        propose_meshsizes = {'BGS': 750, 'LRG': 750, 'LGE': 750, 'ELG': 960, 'LRG+ELG': 750, 'QSO': 1152}
         propose_cellsize = 7.5
 
     propose_fiducial.update(zranges=propose_zranges[simple_tracer])
@@ -507,26 +515,28 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': 700, 'cellsize': 20.}
     else:
-        propose_meshsizes = {'BGS': 864, 'LRG': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
+        propose_meshsizes = {'BGS': 864, 'LRG': 864, 'LGE': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10.}
 
-    propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
+    propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'LGE': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
         _zranges = zrange or propose_zranges[simple_tracer]
 
-        if simple_tracers[0] not in ["BGS", "LRG", "ELG", "QSO"]:
+        if simple_tracers[0] not in ["BGS", "LRG", "LGE", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
-        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
+        propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "LGE": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
 
         propose_regression_zranges = {
             "BGS": [(0.1, 0.4)],
             "LRG": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
+            "LGE": [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)],
             "ELG": [(0.8, 1.1), (1.1, 1.6)],
             "QSO": [(0.8, 1.3), (1.3, 2.1), (2.1, 3.5)],
+            "LRGxLGE": {"LRG": [(0.8, 0.9), (0.9, 1.0), (1.0, 1.1)], "LGE": [(0.8, 0.9), (0.9, 1.0), (1.0, 1.1)]},
             "LRGxELG": {"LRG": [(0.8, 0.9), (0.9, 1.0), (1.0, 1.1)], "ELG": [(0.8, 1.1)]},
             "LRGxQSO": {"LRG": [(0.8, 0.9), (0.9, 1.0), (1.0, 1.1)], "QSO": [(0.8, 1.3)]},
             "ELGxQSO": {"ELG": [(0.8, 1.1), (1.1, 1.6)], "QSO": [(0.8, 1.3), (1.3, 2.1)]},
@@ -535,8 +545,10 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_total_region_zrange = {
             "BGS": ("ALL", (_zranges[0][0], _zranges[-1][1])),
             "LRG": ("ALL", (_zranges[0][0], _zranges[-1][1])),
+            "LGE": ("ALL", (_zranges[0][0], _zranges[-1][1])),
             "ELG": ("ALL", (_zranges[0][0], _zranges[-1][1])),
             "QSO": ("ALL", (_zranges[0][0], _zranges[-1][1])),
+            "LRGxLGE": ("ALL", (0.4, 1.1)),
             "LRGxELG": ("ALL", (0.8, 1.1)),
             "LRGxQSO": ("ALL", (0.8, 1.3)),
             "ELGxQSO": ("ALL", (0.8, 2.1)),
@@ -545,12 +557,13 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_templates = {
             "BGS": ['STARDENS', 'GALDEPTH_R', 'HI', 'EBV_DIFF_GR', 'EBV_DIFF_RZ'],
             "LRG": ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'HI', 'PSFDEPTH_W1', 'EBV_DIFF_GR', 'EBV_DIFF_RZ'],
+            "LGE": ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'HI', 'PSFDEPTH_W1', 'EBV_DIFF_GR', 'EBV_DIFF_RZ'],
             "ELG": ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'EBV_DIFF_GR', 'EBV_DIFF_RZ', 'HI'],
             "QSO": ['PSFDEPTH_W1', 'PSFDEPTH_W2', 'STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'PSFDEPTH_G', 'PSFDEPTH_R', 'PSFDEPTH_Z', 'EBV_DIFF_GR', 'EBV_DIFF_RZ', 'HI'],
             }  # fmt: skip
 
         templates_dir = Path("/dvs_ro/cfs/cdirs/desi/survey/catalogs/Y3/LSS/loa-v1/LSScats/v2/hpmaps/")
-        translate_template_tracer = {'BGS': 'BGS_BRIGHT', 'ELG_LOPnotqso': 'ELG_LOPnotqso', 'ELG': 'ELG', 'LRG': 'LRG', 'QSO': 'QSO'}
+        translate_template_tracer = {'BGS': 'BGS_BRIGHT', 'ELG_LOPnotqso': 'ELG_LOPnotqso', 'ELG': 'ELG', 'LRG': 'LRG', 'LGE': 'LGE', 'QSO': 'QSO'}
 
         template_tracers = [translate_template_tracer[tt] for tt in simple_tracers]
 
@@ -598,7 +611,7 @@ def check_if_stats_requires_blinding(analysis='full_shape', **catalog_options):
     version = catalog_options.get('version', '')
     if 'protected' in analysis:
         return False
-    if version is not None and version.startswith('data-dr2') and 'blinded' not in version:
+    if version is not None and any(version.startswith(data_version) for data_version in ['data-dr2', 'data-dr3']) and 'blinded' not in version:
         return True
     cat_dir = catalog_options.get('cat_dir', '')
     if 'nonKP' in str(cat_dir):
@@ -612,6 +625,9 @@ def apply_blinding(data, tracer, zrange):
             ('LRG', (0.4, 0.6)): 'LRG1',
             ('LRG', (0.6, 0.8)): 'LRG2',
             ('LRG', (0.8, 1.1)): 'LRG3',
+            ('LGE', (0.4, 0.6)): 'LGE1',
+            ('LGE', (0.6, 0.8)): 'LGE2',
+            ('LGE', (0.8, 1.1)): 'LGE3',
             ('ELG', (0.8, 1.1)): 'ELG1',
             ('ELG', (1.1, 1.6)): 'ELG2',
             ('QSO', (0.8, 2.1)): 'QSO1'}
@@ -793,7 +809,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
     kind : str
         Catalog kind. Options are 'data', 'randoms', 'full_data', 'full_randoms'.
     tracer : str
-        Tracer name. Options are 'BGS', 'LRG', 'ELG', 'LRG+ELG', 'QSO'.
+        Tracer name. Options are 'BGS', 'LRG', 'LGE', 'ELG', 'LRG+ELG', 'QSO'.
     region : str
         Region name. Options are 'NGC', 'SGC', 'N', 'S', 'ALL', 'NGCnoN', 'SGCnoDES'.
     weight : str
@@ -878,8 +894,13 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'full_randoms':
                 return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
 
-        elif version == 'data-dr3-daily':
-            cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/daily/LSScats/test/nonKP'
+        elif 'data-dr3' in version:
+            if version == 'data-dr3-matterhorn-v2-test':
+                cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/matterhorn-v2/LSScats/test'
+            elif version == 'data-dr3-daily-test':
+                cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/daily/LSScats/test'
+            else:
+                raise NotImplementedError
             if kind == 'parent_randoms':
                 program = 'bright' if 'BGS' in tracer else 'dark'
                 return [cat_dir / f'{program}_{iran}_full_noveto.ran.h5' for iran in nrans]
@@ -975,6 +996,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         elif version == 'abacus-2ndgen-dr2-altmtl':
             if 'BGS' in tracer:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummitBGS_v2'
+                if kind == 'full_data' and 'BGS_ANY' in tracer:
+                    tracer = 'BGS_ANY'
             else:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummit_v4_1'
             if kind == 'forfa_data':
@@ -1509,8 +1532,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
     if isinstance(complete, dict):
 
         def get_complete_data():
-            full_data_fn = get_catalog_fn(kind='full_data', **(kwargs | dict(region='ALL')))
-            forfa_data_fn = get_catalog_fn(kind='forfa_data', **(kwargs | dict(region='ALL')))
+            full_kwargs = kwargs | dict(region='ALL')
+            full_data_fn = get_catalog_fn(kind='full_data', **full_kwargs)
+            forfa_data_fn = get_catalog_fn(kind='forfa_data', **full_kwargs)
             nz = {region: np.loadtxt(get_catalog_fn(kind='nz', **(kwargs | dict(region=region))), unpack=True) for region in ['NGC', 'SGC']}
             full_data = read(full_data_fn, mpicomm=MPI.COMM_SELF)
             forfa_data = read(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
@@ -1604,6 +1628,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                 catalog = complete_data
             else:
                 catalog = read(fn, mpicomm=MPI.COMM_SELF)
+
             if expand is not None:
                 catalog = expand(catalog, ifn)
 
@@ -1623,6 +1648,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                 catalog.attrs['weight_ntile'] = {column: _compute_binned_weight(catalog[column], catalog['WEIGHT'] / catalog['WEIGHT_COMP']) for column in ['NTILE']}
             if not keep_all_columns:
                 catalog = catalog[[column for column in catalog if 'WEIGHT' in column.upper() or column in keep_columns]]
+            for column in catalog:
+                if np.issubdtype(catalog[column].dtype, np.floating):
+                    catalog[column] = catalog[column].astype('f8')
             catalogs[ifn] = (irank, catalog)
 
     rdzw = []
@@ -1770,8 +1798,6 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                 bitwise_weights = None
         catalog = catalog[['RA', 'DEC']]
         catalog['INDWEIGHT'] = individual_weight
-        for column in catalog:
-            catalog[column] = catalog[column].astype('f8')
         if bitwise_weights is not None: catalog['BITWEIGHT'] = bitwise_weights
 
     else:
@@ -1780,10 +1806,11 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             catalog = catalog[(catalog['FRAC_TLOBS_TILES'] != 0)]
 
         if 'default' in weight_type:
-            individual_weight = catalog['WEIGHT'].copy()
-            if individual_weight.dtype != 'float64': 
+            # cast to float as e.g. Uchuu reference has integer = 1
+            individual_weight = catalog['WEIGHT'].copy().astype('f8')
+            #if individual_weight.dtype != 'float64':
                 # to avoid "numpy._core._exceptions._UFuncOutputCastingError: Cannot cast ufunc 'multiply' output from dtype('float64') to dtype('>i8') with casting rule 'same_kind'"
-                individual_weight = individual_weight.astype('f8')
+            #    individual_weight = individual_weight.astype('f8')
         else:
             logger.info('Not using WEIGHT column as individual weight')
             individual_weight = np.ones(len(catalog), dtype='f8')
@@ -1824,9 +1851,6 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog['WEIGHT_SYS']
 
         catalog['INDWEIGHT'] = individual_weight
-        for column in catalog:
-            if np.issubdtype(catalog[column].dtype, np.floating):
-                catalog[column] = catalog[column].astype('f8')
         if bitwise_weights is not None:
             catalog['BITWEIGHT'] = bitwise_weights
 
@@ -1898,7 +1922,6 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
         rdzw.append(catalog)
         if not keep_all_columns:
             catalog = catalog[[column for column in catalog if column in keep_columns]]
-
     if concatenate:
         if len(rdzw) == 1: return rdzw[0]
         return Catalog.concatenate(rdzw)
@@ -2378,7 +2401,7 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     rng = np.random.RandomState(seed=seed)
 
     tracer = get_simple_tracer(tracer)
-    P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
+    P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
     regions = ['N', 'S']
     if tracer == 'QSO':
         regions = ['N', 'SnoDES', 'DES']
@@ -2492,7 +2515,7 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
     forfa_data = forfa_data[['TARGETID', 'RSDZ']]
     forfa_data['Z'] = forfa_data.pop('RSDZ')
     tracer = get_simple_tracer(tracer)
-    P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
+    P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
     full_data = full_data[['TARGETID', 'RA', 'DEC', 'NTILE', 'ZWARN'] + (['R_MAG_ABS'] if 'BGS' in tracer else [])]
     mask_contaminants = full_data['TARGETID'] < 419430400000000  # remove contaminants
     full_data = full_data[mask_contaminants]
