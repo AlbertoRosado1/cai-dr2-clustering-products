@@ -1018,7 +1018,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
     # print(version)
     if cat_dir is None:
-        raise ValueError('provide either cat_dir or version')
+        raise ValueError(f'provide either cat_dir or a valid version; {version=} was not recognized')
 
     cat_dir = Path(cat_dir)
     if kind == 'data':
