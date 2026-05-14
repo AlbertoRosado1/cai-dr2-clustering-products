@@ -1041,7 +1041,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
     # print(version)
     if cat_dir is None:
-        raise ValueError('provide either cat_dir or version')
+        raise ValueError(f'provide either cat_dir or a valid version; {version=} was not recognized')
 
     cat_dir = Path(cat_dir)
     if kind == 'data':
@@ -1096,8 +1096,8 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         Whether to include theta cut.
     weight : str
         Weight type. Options are 'default-FKP', 'defaut-FKP-bitwise', etc.
-    imock : int, str, optional
-        Mock index (for mock catalogs). If '*', return all existing mock filenames.
+    imock : int, str, list of int, optional
+        Mock index (for mock catalogs). If '*', return all existing mock filenames. If a list of int, return existing filenames among this given set of mock indices.
         If `project` is an empty str the imock tag will be in the filename, otherwise the tag is used to identify a subdirectory named 'mock{imock}' within `project`.
     extra : str, optional
         Extra string to append to filename.
@@ -1120,8 +1120,9 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         for tracer in catalog_options:
             catalog_options[tracer].setdefault('imock', None)
     imock = next(iter(catalog_options.values()))['imock']
-    if imock and imock == '*':
-        fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options, imock=imock, **kwargs) for imock in range(2001)]
+    if imock == '*': imock = np.arange(2001) # broad range that should cover all existing mocks; existence is checked later
+    if np.iterable(imock) and not isinstance(imock, str): # string is iterable but we don't want to iterate over characters. not sure if we should expect strings other than '*', but better be safe than sorry
+        fns = [get_stats_fn(stats_dir=stats_dir, project=project, kind=kind, auw=auw, cut=cut, ext=ext, extra=extra, catalog=catalog_options, imock=i_mock, **kwargs) for i_mock in imock]
         return [fn for fn in fns if os.path.exists(fn)]
 
     # catalog_options[tracer]['expand'] is a complicated object, ensuring uniqueness significantly slows things down
