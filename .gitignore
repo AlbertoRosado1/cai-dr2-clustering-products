@@ -24,8 +24,11 @@ doc/_build/
 **/check_complete.ipynb
 **/auw3.ipynb
 **/validation2.ipynb
+**/*.pdf
+**/.zip
 **/log
 **/tmp
+**/tmp.py
 
 .vscode/
 

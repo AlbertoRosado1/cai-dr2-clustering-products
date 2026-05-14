@@ -10,6 +10,8 @@ Main functions
 
 import time
 import logging
+import functools
+import operator
 import itertools
 
 import numpy as np
@@ -52,7 +54,8 @@ def _compute_mesh3_spectrum_close_pair_correction(all_particles, edges=None, ell
     from lsstypes.types import convert_ells
 
     if edges is None:
-        edges = np.linspace(1e-3, 8000., 4001)
+        #edges = np.linspace(1e-3, 8000., 4001)
+        edges = np.linspace(1e-3, 8000., 3001)
     if ells is None:
         ells = [(0, 0, 0), (2, 0, 2)]
     ells = convert_ells(ells, 'sugiyama', 'slepian')
@@ -240,7 +243,8 @@ def _get_window_edges(mattrs, scales: tuple=(1, 4)):
     return edges
 
 
-def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, ibatch: tuple=None, computed_batches: list=None, buffer_size=0):
+def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, ibatch: tuple=None,
+                                  computed_batches: list=None, buffer_size=0, method: str='smooth_mesh', split_randoms: int=None):
     r"""
     Compute the 3-point spectrum window with :mod:`jaxpower`.
 
@@ -266,27 +270,124 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
     spectrum : WindowMatrix or dict of WindowMatrix
         The computed 3-point spectrum window.
     """
-    # Import window and correlation functions from jaxpower
-    from jaxpower import (create_sharding_mesh, BinMesh3SpectrumPoles, BinMesh3CorrelationPoles, compute_mesh3_correlation,
-                           compute_smooth3_spectrum_window, get_smooth3_window_bin_attrs, interpolate_window_function, split_particles)
+    from jaxpower import create_sharding_mesh, BinMesh3SpectrumPoles, compute_smooth3_spectrum_window, MeshAttrs
 
+    # Extract mesh attributes from spectrum
+    mattrs = {name: spectrum.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']}
+
+    # Extract first multipole pole
+    pole = next(iter(spectrum))
+    ells, edges, basis = spectrum.ells, pole.edges('k'), pole.basis
+    # Gather normalization from all multipoles
+    norm = jnp.concatenate([spectrum.get(ell).values('norm') for ell in spectrum.ells])
+
+    # Build 1D k-bin edges
+    k, index = np.unique(pole.coords('k', center='mid_if_edges')[..., 0], return_index=True)
+    edges = edges[index, 0]
+    edges = np.insert(edges[:, 1], 0, edges[0, 0])
+
+    # Set up distributed computation mesh
+    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)) as sharding_mesh:
+    
+        if zeff is None: zeff = {'cellsize': 10.}
+        kw_zeff = dict(zeff)
+        # Compute raw mesh3 correlation window
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
+        all_randoms = [particles['randoms'] for particles in all_particles]
+        mattrs = all_randoms[0].attrs
+    
+        # Use object IDs for process-invariant random splitting
+        seed = [(42, randoms.extra['IDS']) for randoms in all_randoms]
+        zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, return_fraction=True, **kw_zeff)
+
+        correlation = compute_smooth3_spectrum_window_correlation(*all_randoms, spectrum=spectrum, zeff=kw_zeff, ibatch=ibatch,
+                                                                  computed_batches=computed_batches, buffer_size=buffer_size, method=method, split_randoms=split_randoms)
+
+        # Create spectrum binning
+        bin = BinMesh3SpectrumPoles(mattrs, edges=edges, ells=ells, basis=basis, mask_edges='')
+    
+        # Create finer input correlation binning
+        stop = bin.edges1d[0].max()
+        step = np.diff(bin.edges1d[0], axis=-1).min()
+        edgesin = np.arange(0., 1.5 * stop, step / 2.)
+        edgesin = jnp.column_stack([edgesin[:-1], edgesin[1:]])
+
+    results = {}
+    results[f'window_{method}3_correlation_raw'] = correlation
+
+    # When batching, only return intermediate raw correlations
+    if ibatch is not None:
+        return results
+
+    if jax.process_index() == 0:
+        logger.info('Building window matrix.')
+
+    # Convert correlation window into spectrum window
+    window = compute_smooth3_spectrum_window(correlation, edgesin=edgesin, ellsin=correlation.attrs['ellsin'], bin=bin,
+                                             flags=('fftlog',), batch_size=4)
+
+    # Update observable metadata
+    observable = window.observable
+    observable = observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'),
+                                                               attrs=pole.attrs | dict(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)),
+                                                               input_label=True)
+
+    # Renormalize final window
+    window = window.clone(observable=observable, value=window.value() / (norm[..., None] / np.mean(norm)))
+    results['raw'] = window
+    return results
+
+
+def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None, zeff: dict=None, ibatch: tuple=None, computed_batches: list=None, buffer_size=0, method: str='smooth_mesh', split_randoms: int=None):
+    r"""
+    Compute the 3-point spectrum window function with :mod:`jaxpower` or :mod:`cucount`.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions that return tuples of (data, randoms) catalogs.
+        See :func:`prepare_jaxpower_particles` for details.
+    spectrum : Mesh3SpectrumPoles
+        Measured 3-point spectrum multipoles.
+    zeff : dict, optional
+        Optional arguments for computing effective redshift.
+        Default is ``{'cellsize': 10.}`` (density computed with ``cellsize = 10.``)
+    ibatch : tuple, optional
+        To split the window function multipoles to compute in batches, provide (0, nbatches) for the first batch,
+        (1, nbatches) for the second, etc; up to (nbatches - 1, nbatches).
+        ``None`` to compute the final window matrix.
+    computed_batches : list, optional
+        The window function multipoles that have been computed thus far.
+
+    Returns
+    -------
+    spectrum : WindowMatrix or dict of WindowMatrix
+        The computed 3-point spectrum window.
+    """
+    # Import window and correlation functions from jaxpower
+    from jaxpower import (create_sharding_mesh, BinMesh3CorrelationPoles, compute_mesh3_correlation,
+                        get_smooth3_window_bin_attrs, interpolate_window_function, split_particles)
+
+    assert method in ['smooth_particle', 'smooth_mesh']
     # Extract multipole orders from measured spectrum
     ells = spectrum.ells
     # Extract mesh attributes from spectrum (boxsize, gridsize, etc.)
     mattrs = {name: spectrum.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']}
     los = spectrum.attrs['los']
-    # Painting parameters: third-order spline with 3-fold interlacing
-    kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
-    # Set effective redshift computation parameters
-    if zeff is None: zeff = {'cellsize': 10.}
-    kw_zeff = dict(zeff)
+    # Set default effective redshift computation parameters
+    if zeff is None: kw_zeff = None
+    else: kw_zeff = dict(zeff)
 
     # Set up distributed computation
-    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
+    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)) as sharding_mesh:
         # Load random catalogs and prepare particles
-        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
-        all_randoms = [particles['randoms'] for particles in all_particles]
-        del all_particles
+        if callable(get_data_randoms[0]):
+            all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
+            all_randoms = [particles['randoms'] for particles in all_particles]
+            del all_particles
+        else:
+            all_randoms = list(get_data_randoms)
+
         # Update mesh attributes from random catalog attributes
         mattrs = all_randoms[0].attrs
 
@@ -295,20 +396,6 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
         ells, edges, basis = spectrum.ells, pole.edges('k'), pole.basis
         # Gather normalization from all multipoles
         norm = jnp.concatenate([spectrum.get(ell).values('norm') for ell in spectrum.ells])
-        # Get unique k-values and corresponding bin edges
-        k, index = np.unique(pole.coords('k', center='mid_if_edges')[..., 0], return_index=True)
-        edges = edges[index, 0]
-        # Reconstruct edges from bin centers
-        edges = np.insert(edges[:, 1], 0, edges[0, 0])
-        # Create binning for power spectrum (not bispectrum) correlation
-        bin = BinMesh3SpectrumPoles(mattrs, edges=edges, ells=ells, basis=basis, mask_edges='')
-        # Maximum k value in binning
-        stop = bin.edges1d[0].max()
-        # Minimum step between adjacent k bins
-        step = np.diff(bin.edges1d[0], axis=-1).min()
-        # Create finer binning for input correlation (half step size)
-        edgesin = np.arange(0., 1.5 * stop, step / 2.)
-        edgesin = jnp.column_stack([edgesin[:-1], edgesin[1:]])
 
         # Map particle indices to catalog indices (cycle if fewer catalogs than 3 fields)
         fields = list(range(len(all_randoms)))
@@ -316,113 +403,212 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
         # Use object IDs for process-invariant random splitting
         seed = [(42, randoms.extra['IDS']) for randoms in all_randoms]
         # Compute effective redshift for window computation (third-order expansion)
-        zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, return_fraction=True, **kw_zeff)
+        if kw_zeff is not None:
+            zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, return_fraction=True, **kw_zeff)
 
         correlations = []
         # Get window basis attributes (e.g., which multipoles to compute)
         kw, ellsin = get_smooth3_window_bin_attrs(ells, ellsin=2, fields=fields, return_ellsin=True)
-        # Filter to low multipoles only (reduce computational cost)
-        kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]
-        # For now, keep only (0, 0, 0) multipole
-        kw['ells'] = kw['ells'][:1]
-        # JIT-compile 3-point correlation computation
-        jitted_compute_mesh3_correlation = jax.jit(compute_mesh3_correlation, static_argnames=['los'], donate_argnums=[0])
 
-        # Create logarithmic k-grid for window interpolation
+        # Create logarithmic s-grid for window interpolation (and FFTlog)
         coords = jnp.logspace(-3, 5, 1024)
-        # List of scale factors for multigrid computation (coarse and fine)
-        list_scales = [1, 4]
-        # Get binning edges for each scale
-        list_edges = _get_window_edges(mattrs, scales=list_scales)
 
-        ells = kw['ells']
-        # If batching, select only subset of multipoles for this batch
-        if ibatch is not None:
-            start, stop = ibatch[0] * len(ells) // ibatch[1], (ibatch[0] + 1) * len(ells) // ibatch[1]
-            kw['ells'] = ells[start:stop]
+        assert len(pole.attrs['wsum_data']) == 1
+        wsum_data = pole.attrs['wsum_data'][0]
 
-        # Compute window using multigrid approach if first batch
-        if ells and not bool(computed_batches):
-            # Painting parameters
-            kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
-            # Loop over scale factors (coarse to fine)
-            for scale, edges in zip(list_scales, list_edges):
-                # Create coarser mesh (larger boxsize)
-                mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
-                if jax.process_index() == 0:
-                    logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
-                # Create binning for coarse mesh
-                sbin = BinMesh3CorrelationPoles(mattrs2, edges=edges, **kw, buffer_size=buffer_size)
+        if method == 'smooth_particle':
+            from jaxpower.particle2 import convert_particles
+            from cucount.jax import BinAttrs, SelectionAttrs, WeightAttrs
+            from cucount.types import count3, count3_analytic
+            from lsstypes.types import convert_ells
+            from .correlation3_tools import _digitize_cartesian
 
-                meshes = []
-                # Paint random catalogs on coarse mesh
-                for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
-                                                               seed=seed, fields=fields)):
-                    # Adapt random catalog to coarse mesh and exchange across processes
-                    randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
-                    # Normalize by data/random weight ratio
-                    alpha = pole.attrs['wsum_data'][0][min(iran, len(all_randoms) - 1)] / randoms.weights.sum()
-                    # Paint random on mesh scaled by alpha
-                    meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
+            all_particles = []
+            # Paint random catalogs on coarse mesh
+            for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
+                                                            seed=seed, fields=fields)):
+                # Normalize by data/random weight ratio
+                alpha = wsum_data[min(iran, len(wsum_data) - 1)] / randoms.weights.sum()
+                # Paint random on mesh scaled by alpha
+                randoms = randoms.clone(weights=alpha * randoms.weights)
+                all_particles.append(convert_particles(randoms))
+            del all_randoms
 
-                # Compute 3-point correlation on coarse mesh
-                t0 = time.time()
-                correlation = jitted_compute_mesh3_correlation(meshes, bin=sbin, los=los)
-                # Normalize correlation by average normalization factor
-                correlation = correlation.clone(norm=[np.mean(norm)] * len(sbin.ells))
-                jax.block_until_ready(correlation)
-                if jax.process_index() == 0:
-                    logger.info(f"Computed windows {kw['ells']}, scale {scale}, in {time.time() - t0:.2f} s.")
-                # Interpolate correlation to fine k-grid
-                correlation = interpolate_window_function(correlation.unravel(), coords=coords, order=3)
-                correlations.append(correlation)
+            edges = np.arange(0., mattrs.boxsize.min(), mattrs.cellsize.min())
+            ells = kw['ells']
+            ells_slepian = convert_ells(ells, 'sugiyama', 'slepian')
+            battrs12, battrs13 = [BinAttrs(s=edges, pole=((0, 1, 2), 'firstpoint')) for idim in range(2)]
+            #battrs12, battrs13 = [BinAttrs(s=edges, pole=(tuple(np.unique([ell[idim] for ell in ells_slepian])), 'firstpoint')) for idim in range(2)]
 
-            # Extract coordinate grids from correlations
-            coords = list(next(iter(correlations[0])).coords().values())
-            # Create masks for smooth transition between scales (using -3 offset for cubic spline)
-            masks = [(coords[0] < edges[-3])[:, None] * (coords[1] < edges[-3])[None, :] for edges in list_edges[:-1]]
-            # Add final mask (all points)
-            masks.append((coords[0] < np.inf)[:, None] * (coords[1] < np.inf)[None, :])
-            weights = []
-            for mask in masks:
-                if len(weights):
-                    # Exclude already-weighted regions
-                    weights.append(mask & (~weights[-1]))
+            sepmax = edges.max()
+            #sepmax = 100.
+            limits = [0., 100., 500.]
+            limits = [lim for lim in limits if lim < sepmax] + [sepmax]
+            resols = [None, 40., 100.]
+            nsplits, max_nsplits = 1, 1
+            if split_randoms is not None:
+                if isinstance(split_randoms, tuple):
+                    nsplits, max_nsplits = split_randoms
                 else:
-                    weights.append(mask)
-            # Regularize weights to avoid zero division
-            weights = [np.maximum(mask, 1e-6) for mask in weights]
-            # Combine correlations from different scales using weights
-            correlation = correlations[0].sum(correlations, weights=weights)
+                    nsplits = max_nsplits = split_randoms
 
-        # If batching, join with previously computed batches
-        if computed_batches:
-            correlation = types.join(computed_batches)
-            # Reorder to match original ells sequence
-            correlation = types.join([correlation.get(ells=[ell]) for ell in ells])
+            wattrs = WeightAttrs()
+            prod = functools.partial(functools.reduce, operator.mul)
+
+            def count3split(*particles, sattrs12=None, sattrs13=None):
+                kw = dict(wattrs=wattrs, battrs12=battrs12, battrs13=battrs13, sattrs12=sattrs12, sattrs13=sattrs13, norm=1.)
+                nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
+                print(nsplits)
+                if any(nsplits):
+                    nsplit = next(n for n in nsplits if n)
+                    particles = list(particles)
+                    sum_weights1 = []
+                    for ip, particle in enumerate(particles):
+                        if isinstance(particle, list):
+                            assert len(particle) == nsplit
+                        else:
+                            particles[ip] = [particle] * nsplit
+                        sum_weights1.append([wattrs(particle).sum() for particle in particles[ip]])
+                    norm_splits = sum(prod(weights1) for weights1 in zip(*sum_weights1))
+                    norm_total = prod(sum(weights1) for weights1 in sum_weights1)
+                    counts = [count3(*p, **kw)['weight'] for p in zip(*particles)]
+                    counts = types.sum(counts)
+                    return counts.clone(value=norm_total / norm_splits * counts.value())
+                return count3(*particles, **kw)['weight']
+
+            counts = []
+            resol_limits = list(zip(zip(limits[:-1], limits[1:]), resols))
+
+            for (resol_limit12, resol12), (resol_limit13, resol13) in itertools.product(resol_limits, repeat=2):
+                sattrs12 = SelectionAttrs(s=resol_limit12)
+                sattrs13 = SelectionAttrs(s=resol_limit13)
+                all_particles_resol = list(all_particles)
+                digitized = set()
+                t0 = time.time()
+
+                if resol12 is not None:
+                    all_particles_resol[1] = _digitize_cartesian(all_particles_resol[1], wattrs=wattrs, cellsize=resol12, sharding_mesh=sharding_mesh)
+                    digitized.add(1)
+
+                if resol13 is not None:
+                    all_particles_resol[2] = _digitize_cartesian(all_particles_resol[2], wattrs=wattrs, cellsize=resol13, sharding_mesh=sharding_mesh)
+                    digitized.add(2)
+
+                if nsplits > 1 and len(all_particles_resol) - len(digitized) > 1:
+                    for ip, particles in enumerate(all_particles_resol):
+                        if ip not in digitized:
+                            masks = split_particles([particles] + [None] * (nsplits - 1), seed=(84, 'index'), return_masks=True)[:max_nsplits]
+                            weights = wattrs(particles)
+                            all_particles_resol[ip] = [particles.clone(weights=weights * mask) for mask in masks]
+
+                counts.append(count3split(*all_particles_resol, sattrs12=sattrs12, sattrs13=sattrs13))
+                if jax.process_index() == 0:
+                    logger.info(f'Computed RRR counts within {resol_limit12} x {resol_limit13} in {time.time() - t0:.1f} s')
+                exit()
+
+            def sum_counts(leaves):
+                return leaves[0].clone(counts=sum(leaf.values('counts') for leaf in leaves), norm=leaves[0].values('norm'))
+
+            counts = types.tree_map(sum_counts, counts, level=None, is_leaf=lambda *args: False)
+            counts = counts.to_basis('sugiyama', ells=ells)
+            RRR0 = count3_analytic(mattrs=1., battrs12=battrs12, battrs13=battrs13)
+
+            # Divide by volume factor and normalization
+            def renormalize(pole):
+                return pole.clone(counts=pole.values('counts'), norm=np.mean(norm) * RRR0.get((0, 0, 0)).value())
+
+            counts = counts.map(renormalize)
+            correlation = interpolate_window_function(counts, coords=coords, order=3)
+
+        elif method == 'smooth_mesh':
+            # Filter to low multipoles only (reduce computational cost)
+            kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]
+            # For now, keep only (0, 0, 0) multipole
+            kw['ells'] = kw['ells'][:1]
+            # JIT-compile 3-point correlation computation
+            jitted_compute_mesh3_correlation = jax.jit(compute_mesh3_correlation, static_argnames=['los'], donate_argnums=[0])
+
+            # List of scale factors for multigrid computation (coarse and fine)
+            list_scales = [1, 4]
+            # Get binning edges for each scale
+            list_edges = _get_window_edges(mattrs, scales=list_scales)
+
+            ells = kw['ells']
+            # If batching, select only subset of multipoles for this batch
+            if ibatch is not None:
+                start, stop = ibatch[0] * len(ells) // ibatch[1], (ibatch[0] + 1) * len(ells) // ibatch[1]
+                kw['ells'] = ells[start:stop]
+
+            # Compute window using multigrid approach if first batch
+            if ells and not bool(computed_batches):
+                # Painting parameters
+                kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+                # Loop over scale factors (coarse to fine)
+                for scale, edges in zip(list_scales, list_edges):
+                    # Create coarser mesh (larger boxsize)
+                    mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
+                    if jax.process_index() == 0:
+                        logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
+                    # Create binning for coarse mesh
+                    sbin = BinMesh3CorrelationPoles(mattrs2, edges=edges, **kw, buffer_size=buffer_size)
+
+                    meshes = []
+                    # Paint random catalogs on coarse mesh
+                    for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
+                                                                   seed=seed, fields=fields)):
+                        # Adapt random catalog to coarse mesh and exchange across processes
+                        randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
+                        # Normalize by data/random weight ratio
+                        alpha = wsum_data[min(iran, len(wsum_data) - 1)] / randoms.weights.sum()
+                        # Paint random on mesh scaled by alpha
+                        meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
+
+                    # Compute 3-point correlation on coarse mesh
+                    t0 = time.time()
+                    correlation = jitted_compute_mesh3_correlation(meshes, bin=sbin, los=los)
+                    # Normalize correlation by average normalization factor
+                    correlation = correlation.clone(norm=[np.mean(norm)] * len(sbin.ells))
+                    jax.block_until_ready(correlation)
+                    if jax.process_index() == 0:
+                        logger.info(f"Computed windows {kw['ells']}, scale {scale}, in {time.time() - t0:.2f} s.")
+                    # Interpolate correlation to fine s-grid
+                    correlation = interpolate_window_function(correlation.unravel(), coords=coords, order=3)
+                    correlations.append(correlation)
+
+                # Extract coordinate grids from correlations
+                coords = list(next(iter(correlations[0])).coords().values())
+                # Create masks for smooth transition between scales (using -3 offset for cubic spline)
+                masks = [(coords[0] < edges[-3])[:, None] * (coords[1] < edges[-3])[None, :] for edges in list_edges[:-1]]
+                # Add final mask (all points)
+                masks.append((coords[0] < np.inf)[:, None] * (coords[1] < np.inf)[None, :])
+                weights = []
+                for mask in masks:
+                    if len(weights):
+                        # Exclude already-weighted regions
+                        weights.append(mask & (~weights[-1]))
+                    else:
+                        weights.append(mask)
+                # Regularize weights to avoid zero division
+                weights = [np.maximum(mask, 1e-6) for mask in weights]
+                # Combine correlations from different scales using weights
+                correlation = correlations[0].sum(correlations, weights=weights)
+
+            # If batching, join with previously computed batches
+            if computed_batches:
+                correlation = types.join(computed_batches)
+                # Reorder to match original ells sequence
+                correlation = types.join([correlation.get(ells=[ell]) for ell in ells])
 
         # Wait for window computation to complete
         jax.block_until_ready(correlation)
         if jax.process_index() == 0:
             logger.info('Window functions computed.')
 
-        results = {}
-        # Store raw correlation (before binning into spectrum window)
-        results['window_mesh3_correlation_raw'] = correlation
-        # Build window matrix (final window) if not batching or if all batches computed
-        if ibatch is None:
-            if jax.process_index() == 0:
-                logger.info('Building window matrix.')
-            # Convert correlation to window matrix using 2D FFTLog
-            window = compute_smooth3_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',), batch_size=4)
-            # Extract observable from window
-            observable = window.observable
-            # Update observable with spectrum normalization and zeff attributes
-            observable = observable.map(lambda pole, label: pole.clone(norm=spectrum.get(**label).values('norm'), attrs=pole.attrs | dict(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)), input_label=True)
-            # Normalize window by average normalization (in case norm is k-dependent)
-            window = window.clone(observable=observable, value=window.value() / (norm[..., None] / np.mean(norm)))
-            results['raw'] = window
-    return results
+        if kw_zeff is not None:
+            correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff, ellsin=ellsin)
+
+    return correlation
+
 
 
 def compute_box_mesh3_spectrum(*get_data, mattrs=None,

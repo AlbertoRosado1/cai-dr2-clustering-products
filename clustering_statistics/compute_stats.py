@@ -221,12 +221,14 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}'])]
             if any(options[stat].get('auw', False) for stat in stats_npt):
                 # Compute angular upweights from fibered vs parent catalogs
-                auw = func(*[functools.partial(get_data, tracer) for tracer in tracers])
                 fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=None) for tracer in tracers}
                 fn = get_stats_fn(kind=f'particle{npt:d}_angular_upweights', catalog=fn_catalog_options)
-                #auw = types.read(fn)
-                # Write computed angular upweights to disk
-                tools.write_stats(fn, auw)
+                if fn.exists():
+                    auw = types.read(fn)
+                else:
+                    auw = func(*[functools.partial(get_data, tracer) for tracer in tracers])
+                    # Write computed angular upweights to disk
+                    tools.write_stats(fn, auw)
                 # Update all statistics options with computed angular upweights
                 for stat in stats_npt:
                     if options[stat].get('auw', False): options[stat]['auw'] = auw  # update with angular upweights
@@ -280,11 +282,10 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     else:
                         # Base calculation
                         correlation = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
-                        # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
-                        if not isinstance(correlation, dict): correlation = {'raw': correlation}
-    
+
                         # Write all spectrum variants to disk
                         for key, kw in _expand_cut_auw_options(stat, correlation_options).items():
+                            if key not in correlation: continue
                             fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
                             # Apply blinding if requested
                             if with_stats_blinding:
@@ -331,7 +332,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
                             if key != 'raw':
                                 tools.write_stats(fn, spectrum[key])
-                    else: 
+                    else:
                         # Compute power spectrum or bispectrum
                         spectrum = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], cache=cache, **spectrum_options)
                         # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
@@ -414,7 +415,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 # Write raw correlation functions (intermediate products) to disk
                 for key in window:
                     if 'correlation' in key:  # window functions
-                        fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(cut=False, extra=extra)))
+                        fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(battrs={'s': None, 'pole': None}, cut=False, extra=extra)))
                         tools.write_stats(fn, window[key])
         # Synchronize before window forward model computation
         jax.experimental.multihost_utils.sync_global_devices('window')  # wait for the writer

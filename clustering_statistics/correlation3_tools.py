@@ -210,6 +210,8 @@ def compute_particle3_correlation_close_pair_correction(*get_data_randoms, corre
         if callable(get_data_randoms[0]):
             all_particles = prepare_cucount_particles(*get_data_randoms, split_randoms=split_randoms)
             if jax.process_index() == 0: logger.info('All particles on the device')
+        else:
+            all_particles = list(get_data_randoms)
 
         if battrs is None:
             edges = correlation.edges()
@@ -274,9 +276,6 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
     input_all_particles = []
     for particles in all_particles:
         particles = dict(particles)
-        for name in ['randoms', 'shifted']:
-            if isinstance(particles.get(name, None), list):
-                particles[name] = particles[name][0].concatenate(particles[name], local=True)
         if 'shifted' in particles:
             particles.pop('randoms')
         input_all_particles.append(particles)
@@ -298,6 +297,11 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
     sattrs = SelectionAttrs(theta=(0., 0.05))
     wattrs = WeightAttrs()
 
+    def _map_catalogs(obj, fn):
+        if isinstance(obj, list):
+            return [fn(o) for o in obj]
+        return fn(obj)
+
     if normalize_randoms:
         def normalize_randoms(data, randoms, wattrs=WeightAttrs()):
             data_weights, randoms_weights = wattrs(data), wattrs(randoms)
@@ -316,7 +320,21 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
         if normalize_randoms:
             for name in ['shifted', 'randoms']:
                 if name in particles:
-                    particles[name] = normalize_randoms(particles['data'], particles[name], wattrs=wattrs)
+                    particles[name] = _map_catalogs(particles[name], lambda randoms, data=particles['data']: normalize_randoms(data, randoms, wattrs=wattrs))
+
+    def count3close_split(*particles, **kw):
+        nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
+        if any(nsplits):
+            nsplit = next(n for n in nsplits if n)
+            particles = list(particles)
+            for ip, particle in enumerate(particles):
+                if isinstance(particle, list):
+                    assert len(particle) == nsplit
+                else:
+                    particles[ip] = [particle] * nsplit
+            counts = [count3close(*p, **kw)['weight'] for p in zip(*particles)]
+            return types.sum(counts)
+        return count3close(*particles, **kw)['weight']
 
     def compute_particle3_resol(*all_particles, sattrs, wattrs, close_pairs=[(1, 2), (1, 3), (2, 3)], **kw):
         """Compute close-pair counts, optionally digitizing the non-close third particle."""
@@ -329,7 +347,7 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
             limits = [0., 100., 500., 2000.]
             limits = [lim for lim in limits if lim < sepmax] + [sepmax]
             resols = [None, 50., 100., 500.]
-        else:
+        else:  # theta
             limits = [0., 0.3, 1., 5., 180.]
             limits = [lim for lim in limits if lim < sepmax] + [sepmax]
             resols = [None, 512, 128, 32]
@@ -337,17 +355,22 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
         with_veto = True
         if len(close_pairs) == 1:
             if len(limits) > 2:
-                limits = [0.] + limits[2:]  # remove the second edge
-            resols = resols[1:]  # remove None
+                limits = [0.] + limits[2:]
+            resols = resols[1:]
             with_veto = False
-        #print(limits, resols, close_pairs, flush=True)
+
         all_particles = list(all_particles) + [all_particles[-1]] * (3 - len(all_particles))
         results = []
+
         for resol_limit, resol in zip(zip(limits[:-1], limits[1:]), resols):
             t0 = time.time()
             sattrs_limit = SelectionAttrs(**{resol_coord: resol_limit})
 
-            def digitize(particles):
+            def digitize(particles, concatenate=True):
+                if isinstance(particles, list):
+                    if concatenate:
+                        return digitize(particles[0].concatenate(particles, local=True) if len(particles) > 1 else particles[0])
+                    return [digitize(particle) for particle in particles]
                 if resol is None:
                     return particles
                 if resol_coord == 's':
@@ -357,32 +380,32 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
             if (1, 2) in close_pairs:
                 all_particles_resol = list(all_particles)
                 all_particles_resol[2] = digitize(all_particles_resol[2])
-                result12 = count3close(*all_particles_resol, **kw_battrs, sattrs12=sattrs,
-                                       sattrs13=sattrs_limit, veto23=veto23,
-                                       wattrs=wattrs, close_pair=(1, 2))['weight']
+                result12 = count3close_split(*all_particles_resol, **kw_battrs, sattrs12=sattrs,
+                                             sattrs13=sattrs_limit, veto23=veto23,
+                                             wattrs=wattrs, close_pair=(1, 2))
                 results += [result12]
 
             if (1, 3) in close_pairs:
                 all_particles_resol = list(all_particles)
                 all_particles_resol[1] = digitize(all_particles_resol[1])
-                result13 = count3close(*all_particles_resol, **kw_battrs, sattrs13=sattrs,
-                                       veto12=sattrs if with_veto else None,
-                                       sattrs12=sattrs_limit, veto23=veto23,
-                                       wattrs=wattrs, close_pair=(1, 3))['weight']
+                result13 = count3close_split(*all_particles_resol, **kw_battrs, sattrs13=sattrs,
+                                             veto12=sattrs if with_veto else None,
+                                             sattrs12=sattrs_limit, veto23=veto23,
+                                             wattrs=wattrs, close_pair=(1, 3))
                 results += [result13]
 
             if (2, 3) in close_pairs:
                 all_particles_resol = list(all_particles)
                 all_particles_resol[0] = digitize(all_particles_resol[0])
-                result23 = count3close(*all_particles_resol, **kw_battrs, sattrs23=sattrs,
-                                       veto12=sattrs if with_veto else None,
-                                       veto13=sattrs if with_veto else None,
-                                       sattrs12=sattrs_limit, veto23=veto23,
-                                       wattrs=wattrs, close_pair=(2, 3), shard_particle=2)['weight']
+                result23 = count3close_split(*all_particles_resol, **kw_battrs, sattrs23=sattrs,
+                                             veto12=sattrs if with_veto else None,
+                                             veto13=sattrs if with_veto else None,
+                                             sattrs12=sattrs_limit, veto23=veto23,
+                                             wattrs=wattrs, close_pair=(2, 3), shard_particle=2)
                 results += [result23]
 
             if jax.process_index() == 0:
-                logger.info(f'{close_pairs} {resol_limit} {time.time() - t0:.3f}')
+                logger.info(f'Computed correction for {close_pairs}, {resol_limit} in {time.time() - t0:.3f} s')
 
         def sum_counts(leaves):
             return leaves[0].clone(counts=sum(leaf.values('counts') for leaf in leaves), norm=leaves[0].values('norm'))
@@ -397,7 +420,11 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
             data = particles['data'].clone(weights=wattrs(particles['data']))
             for name in ['shifted', 'randoms']:
                 if name in particles:
-                    data = data.concatenate([data, particles[name].clone(weights=-particles[name].get('individual_weight')[0])])
+                    if isinstance(particles[name], list):
+                        for randoms in particles[name]:
+                            data = data.concatenate([data, randoms.clone(weights=-randoms.get('individual_weight')[0])])
+                    else:
+                        data = data.concatenate([data, particles[name].clone(weights=-particles[name].get('individual_weight')[0])])
             all_particles_cut.append(data)
         counts = compute_particle3_resol(*all_particles_cut, sattrs=sattrs, wattrs=wattrs)
         correction['DDD'] = counts.clone(value=-counts.value())
@@ -432,11 +459,10 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
         wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
         close_pairs = [(1, 2), (1, 3), (2, 3)]
         if combinations.count('S'):
-            # Only retain DD close pairs.
             close_pairs = [close_pair for close_pair in close_pairs if 1 + combinations.index('S') not in close_pair]
         correction[_combinations] = compute_particle3_resol(*particles, sattrs=sattrs, wattrs=wattrs, close_pairs=close_pairs)
-    return correction
 
+    return correction
 
 
 def compute_box_particle3_correlation(*get_data, battrs: dict=None, mattrs: dict=None, nran: int=10, split_randoms: bool | float=False):

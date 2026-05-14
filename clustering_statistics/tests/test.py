@@ -250,22 +250,30 @@ def test_window2(stats=['mesh2_spectrum']):
     #    print(edges, len(edges))
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for stat in stats:
-        """
         for tracer in ['LRG']:
             zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
-                for method in ['smooth', 'exact'][1:]:
-                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
+                for method in ['smooth_mesh', 'smooth_particle', 'exact'][1:2]:
+
+                    def get_stats_fn(*args, extra='', **kwargs):
+                        extra = f'{extra}_{method}' if extra else method
+                        return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
+
+                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, nran=1, imock=451)
                     #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-                    compute_stats_from_options([stat, f'window_{stat}'], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'mattrs': {'meshsize': 250, 'boxsize': 6000.}}, window_mesh2_spectrum={'cut': True, 'method': method})
+                    options = {}
+                    options['mesh2_spectrum'] = {'mattrs': {'meshsize': 250, 'boxsize': 6000.}}
+                    options['window_mesh2_spectrum'] = {'cut': True, 'method': method, 'split_randoms': None}
+                    compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=get_stats_fn, **options)
         if 'mesh3' in stat: continue
-        """
-        for tracer in [('LRG', 'ELG_LOPnotqso')]:
+        '''
+        for tracer in ['LRG', ('LRG', 'ELG_LOPnotqso')][1:]:
             zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-                compute_stats_from_options([stat, f'window_{stat}'], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mattrs={'meshsize': 400}, mesh2_spectrum={}, window_mesh2_spectrum={'cut': True}, analysis='png_local')
+                compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mattrs={'meshsize': 400}, mesh2_spectrum={}, window_mesh2_spectrum={'cut': True}, analysis='png_local')
+        '''
 
 
 def test_window3(stats=['mesh3_spectrum']):
@@ -274,12 +282,21 @@ def test_window3(stats=['mesh3_spectrum']):
     from clustering_statistics.spectrum3_tools import _get_window_edges
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for stat in stats:
-        for tracer in ['QSO']:
-            zranges = [(0.8, 2.1)]
+        for tracer in ['LRG']:
+            zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-                compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir))
+                options = {}
+                options['mesh3_spectrum'] = {'mattrs': {'meshsize': 250}}
+                for method in ['smooth_mesh', 'smooth_particle'][1:]:
+
+                    def get_stats_fn(*args, extra='', **kwargs):
+                        extra = f'{extra}_{method}' if extra else method
+                        return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
+
+                    options['window_mesh3_spectrum'] = {'buffer_size': 40, 'method': method, 'split_randoms': None}
+                    compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, **options, get_stats_fn=get_stats_fn)
 
 
 def test_covariance():
@@ -612,7 +629,7 @@ if __name__ == '__main__':
     # test_auw3()
     # test_window_fm('LRG')
     # test_correlation2()
-    test_correlation3()
+    # test_correlation3()
     # test_covariance()
     # test_stats_fn()
     # test_complete_catalog()
@@ -622,7 +639,6 @@ if __name__ == '__main__':
     # test_blinding()
     # test_covariance()
     # test_rotation()
-    # test_window3()
     # test_stats_fn()
     # test_auw2()
     # test_bitwise()
@@ -630,6 +646,7 @@ if __name__ == '__main__':
     # test_optimal_weights()
     # test_cross()
     # test_window2()
+    test_window3()
     # test_spectrum3()
     # test_norm()
     # test_recon()

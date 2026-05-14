@@ -23,20 +23,20 @@ from clustering_statistics import tools
 setup_logging()
 
 # to run job
-#mode = 'interactive'
-mode = 'slurm'
+mode = 'interactive'
+#mode = 'slurm'
 
 if mode == 'slurm':
-    queue = Queue('abacus_mocks')
+    queue = Queue('abacus_mocks5')
     queue.clear(kill=False)
     
     output, error = 'slurm_outputs/abacus_mocks/slurm-%j.out', 'slurm_outputs/abacus_mocks/slurm-%j.err'
     kwargs = {}
     environ = Environment('nersc-cosmodesi', command=['module unload desi-clustering cucount jaxpower lsstypes'])
     tm = TaskManager(queue=queue, environ=environ)
-    tm = tm.clone(scheduler=dict(max_workers=20), provider=dict(provider='nersc', time='02:00:00',
+    tm = tm.clone(scheduler=dict(max_workers=20), provider=dict(provider='nersc', time='03:00:00',
                                 mpiprocs_per_worker=4, output=output, error=error, constraint='gpu'))
-    tm80 = tm.clone(provider=dict(provider='nersc', time='02:30:00',
+    tm80 = tm.clone(provider=dict(provider='nersc', time='03:00:00',
                                 mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
     tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='00:10:00',
                     mpiprocs_per_worker=2250, nodes_per_worker=25, output=output, error=error, stop_after=1, constraint='cpu'))
@@ -76,9 +76,17 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             window_mesh2_spectrum = {'cut': True if 'full_shape' in analysis else None}
             mesh3_spectrum = {'auw': True if 'altmtl' in version and onthefly is None and 'full_shape' in analysis else None}
             window_mesh3_spectrum = {'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch}
-            particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))}
-            particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
-            
+            mode = 'smu'
+            if mode == 'smu':
+                particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))}
+                particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
+            elif mode == 'theta':
+                particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(theta=np.linspace(0., 0.3, 31))}
+                particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(theta=np.linspace(0., 0.3, 31))}
+            if False:
+                particle2_correlation |= {'auw': True}
+                particle3_correlation |= {'auw': True}
+            #particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            mesh3_spectrum=mesh3_spectrum, window_mesh3_spectrum=window_mesh3_spectrum,
@@ -87,10 +95,11 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
+                #options['catalog'][itracer]['nran'] = 1
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
-                    options['catalog'][itracer]['complete'] = {'downsample_nobj': 'downsample' in onthefly, 'with_completeness': 'nocomp' not in onthefly}
+                    options['catalog'][itracer]['complete'] = {'downsample_nobj': 'downsample' in onthefly, 'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
                 elif onthefly == 'reshuffle':
                     options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'][itracer] | dict(region='ALL')))}
 
@@ -98,11 +107,11 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             compute_stats_from_options(stats, analysis=analysis, get_stats_fn=_get_stats_fn, cache=cache, **options)
 
 
-def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum', 'mesh3_spectrum'], weight='default-FKP', postprocess=['combine_regions'], zranges=None, get_stats_fn=get_stats_fn, **kwargs):
+def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', weight='default-FKP', postprocess=['combine_regions'], zranges=None, get_stats_fn=get_stats_fn, **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum']}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True}, mesh3_spectrum={'auw': True}, window_mesh3_spectrum={})
     stats_dir_kws = dict(stats_dir=stats_dir, project=project)
     _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly)
     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=_get_stats_fn, **options)
@@ -119,11 +128,15 @@ if __name__ == '__main__':
 
     imocks = np.arange(25)
     #imocks = np.arange(5, 25)
-    #imocks = np.arange(9)
+    #imocks = np.arange(5, 9)
+    #imocks = np.arange(1)
+    #imocks = [3]
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
     tracers = ['LRG', 'ELG', 'QSO']
+    #tracers = ['ELG', 'LRG']
+    #tracers = ['ELG']
 
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'
@@ -132,9 +145,10 @@ if __name__ == '__main__':
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum']
-    #stats = ['particle2_correlation', 'particle3_correlation']
-    postprocess = ['combine_regions'][:0]
+    stats = ['mesh2_spectrum', 'mesh3_spectrum'][:0] # 'particle2_correlation', 'particle3_correlation']
+    #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
+    #stats = ['particle3_correlation']
+    postprocess = ['combine_regions'][:1]
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics'
     weight = 'default-FKP'
@@ -183,7 +197,7 @@ if __name__ == '__main__':
             elif any('covariance' in stat for stat in stats):
                 get_run_stats()(imocks=[0], stats=stats, **run_stats_kws)
             elif stats:
-                batch_imocks = np.array_split(imocks, max(len(imocks) // max_mocks_per_batch, 1)) if len(imocks) else []
+                batch_imocks = np.array_split(imocks, max((len(imocks) + max_mocks_per_batch - 1) // max_mocks_per_batch, 1)) if len(imocks) else []
                 for _imocks in batch_imocks:
                     get_run_stats()(imocks=_imocks, stats=stats, **run_stats_kws)
         if postprocess:

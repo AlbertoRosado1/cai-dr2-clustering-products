@@ -1,5 +1,5 @@
 """
-Shared utilities for clusterin -statistics.
+Shared utilities for clustering statistics.
 
 Main functions
 --------------
@@ -487,6 +487,8 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     if 'protected' in analysis:
         propose_fiducial['mesh2_spectrum'].update(ells=(0,), edges={'min': 0.02, 'step': 0.001})
         propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0)])
+        propose_fiducial['particle2_correlation'].update(battrs={'s': np.linspace(0., 80., 81), 'mu': (np.linspace(-1., 1., 201), 'midpoint')})
+        propose_fiducial['particle3_correlation'].update(battrs={'s': np.linspace(0., 80., 81), 'pole': (list(range(6)), 'firstpoint')})
 
     primes, divisors = (2, 3, 5), (2,)
     for stat in ['recon']:
@@ -876,6 +878,25 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'full_randoms':
                 return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
 
+        elif version == 'data-dr3-daily':
+            cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/daily/LSScats/test/nonKP'
+            if kind == 'parent_randoms':
+                program = 'bright' if 'BGS' in tracer else 'dark'
+                return [cat_dir / f'{program}_{iran}_full_noveto.ran.h5' for iran in nrans]
+            if 'bitwise' in weight:
+                data_dir = cat_dir / 'PIP'
+            else:
+                data_dir = cat_dir / 'nonKP'
+            ext = 'fits'
+            if kind == 'data':
+                return data_dir / f'{tracer}_{region}_clustering.dat.{ext}'
+            if kind == 'randoms':
+                return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{ext}' for iran in nrans]
+            if kind == 'full_data':
+                return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
+            if kind == 'full_randoms':
+                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]  
+
         elif version == 'holi-v1-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'fits' if 'full' in kind else 'h5'
@@ -1055,7 +1076,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         return [fn for fn in fns if os.path.exists(fn)]
 
     # catalog_options[tracer]['expand'] is a complicated object, ensuring uniqueness significantly slows things down
-    catalog_options = _zip_catalog_options(catalog_options, squeeze=False, unique=True, ignore=['expand'])
+    catalog_options = _zip_catalog_options(catalog_options, squeeze=False, unique=True, ignore=['expand', 'binned_weight'])
     stats_dir = Path(stats_dir) / project
 
     def join_if_not_none(f, key):
@@ -1083,16 +1104,21 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
     cut = '_thetacut' if cut else ''
     extra = f'_{extra}' if extra else ''
 
-    corr_type = 'smu'
     battrs = kwargs.get('battrs', None)
-    if battrs is not None: corr_type = ''.join(list(battrs))
+    corr_type = ''.join(list(battrs)) if battrs is not None else None
     jackknife = kwargs.get('jackknife', {}).get('nsplits', None)
-    if jackknife:
-        corr_type = f'{corr_type}_jackknife{jackknife:d}'
     if 'particle2_correlation' in kind:
+        if corr_type is None: corr_type = 'smu'
+        if jackknife:
+            corr_type = f'{corr_type}_jackknife{jackknife:d}'
         full = f'particle2_correlation_{corr_type}'
         if full not in kind:
             kind = kind.replace('particle2_correlation', full)
+    if 'particle3_correlation' in kind:
+        if corr_type is None: corr_type = 'spole'
+        full = f'particle3_correlation_{corr_type}'
+        if full not in kind:
+            kind = kind.replace('particle3_correlation', full)
     if 'mesh2_spectrum' in kind:
         full = 'mesh2_spectrum_poles'
         if full not in kind:
@@ -1464,6 +1490,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
             forfa_data = read(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
             return complete_from_full_data(forfa_data, full_data, nz=nz, tracer=tracer,
                                     with_completeness=complete.get('with_completeness', True),
+                                    with_tracer_cuts=complete.get('with_tracer_cuts', True),
                                     downsample_nobj=complete.get('downsample_nobj', False),
                                     seed=complete.get('seed', 100 * imock))
 
@@ -1769,7 +1796,7 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
 
         catalog['INDWEIGHT'] = individual_weight
         for column in catalog:
-            if not np.issubdtype(catalog[column].dtype, np.integer):
+            if np.issubdtype(catalog[column].dtype, np.floating):
                 catalog[column] = catalog[column].astype('f8')
         if bitwise_weights is not None:
             catalog['BITWEIGHT'] = bitwise_weights
@@ -1906,7 +1933,7 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
     """
     catalogs = read_catalog(kind=kind, concatenate=concatenate, get_catalog_fn=get_catalog_fn,
                             expand=expand, reshuffle=reshuffle, complete=complete, mpicomm=mpicomm, read=_read_catalog,
-                            **kwargs)
+                            keep_columns=keep_columns, **kwargs)
     catalogs = prepare_catalog(catalogs, kind=kind, set_positions_from_rdz=set_positions_from_rdz,
                                mask_catalog=mask_catalog, set_catalog_weights=set_catalog_weights,
                                binned_weight=binned_weight, keep_columns=keep_columns, **kwargs)
@@ -2409,7 +2436,7 @@ def _get_zedges_for_nbar(tracer):
     return np.linspace(zmin, zmax, nbin + 1)
 
 
-def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, downsample_nobj=False, seed=42):
+def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, with_tracer_cuts=True, downsample_nobj=False, seed=42):
     """
     Create complete data catalog from For Fiber Assignment (FA) and Full catalogs.
 
@@ -2437,18 +2464,33 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
     forfa_data['Z'] = forfa_data.pop('RSDZ')
     tracer = get_simple_tracer(tracer)
     P0 = {'BGS': 7e3, 'LRG': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
-    full_data = full_data[['TARGETID', 'RA', 'DEC', 'NTILE', 'ZWARN']]
+    full_data = full_data[['TARGETID', 'RA', 'DEC', 'NTILE', 'ZWARN'] + (['R_MAG_ABS'] if 'BGS' in tracer else [])]
     mask_contaminants = full_data['TARGETID'] < 419430400000000  # remove contaminants
     full_data = full_data[mask_contaminants]
     _, full_index, forfa_index = np.intersect1d(full_data['TARGETID'], forfa_data['TARGETID'], return_indices=True)
     data = full_data[full_index]
     forfa_data = forfa_data[forfa_index]
     data['Z'] = forfa_data['Z']
-    if 'ELG' in tracer:
-        rng = np.random.RandomState(seed=seed)
-        r = rng.random(data.size)
-        downsample_z = np.where(data['Z'] < 1.49, r < 0.96, r < 0.76)
-        data = data[downsample_z]
+    if with_tracer_cuts:
+        if 'ELG' in tracer:
+            rng = np.random.RandomState(seed=seed)
+            r = rng.random(data.size)
+            downsample_z = np.where(data['Z'] < 1.49, r < 0.96, r < 0.76)
+            data = data[downsample_z]
+        if 'BGS' in tracer:
+            fit_a = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_a.dat"))
+            fit_b = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_b.dat"))
+            fit_zcut = 0.3
+            def fit(z):
+                ff = np.empty(len(z))
+                mask_a = z < fit_zcut
+                mask_b = ~mask_a
+                ff[mask_a] = fit_a(z[mask_a])
+                ff[mask_b] = fit_b(z[mask_b])
+                return ff + 0.078
+            mock_z_cut = fit(data['Z'])
+            downsample_mag = data['R_MAG_ABS'] < mock_z_cut
+            data = data[downsample_mag]
     _mask_assigned = data['ZWARN'] != 999999
     if with_completeness:
         mask_assigned = _mask_assigned
