@@ -142,8 +142,34 @@ def _get_jaxpower_attrs(*all_particles):
 
 
 def compute_mesh2_spectrum_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None, los='firstpoint', optimal_weights=None, **kwargs):
-    """Compute and apply close-pair corrections."""
+    """
+    Compute and apply close-pair corrections to 2-point spectrum.
 
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions returning dicts with 'data', 'randoms' (optionally 'shifted').
+        Catalogs must contain 'POSITION', 'INDWEIGHT', optionally 'BITWEIGHT'.
+    spectrum : ObservableTree
+        Input spectrum to add close pair correction to.
+    auw : Mesh2SpectrumPoles, optional
+        Angular upweights to apply.
+    cut : bool, optional
+        If provided, apply a theta-cut of (0, 0.05) degrees.
+    los : {'local', 'firstpoint', 'x', 'y', 'z', array-like}, optional
+        Line-of-sight definition. 'local' uses local LOS, 'firstpoint' uses the position of the first point in the pair,
+        'x', 'y', 'z' use fixed axes, or provide a 3-vector.
+    optimal_weights : callable or None, optional
+        Function taking (ell, catalog) as input and returning total weights to apply to data and randoms.
+        It can have an optional attribute 'columns' that specifies which additional columns are needed to compute the optimal weights.
+        As a default, ``optimal_weights.columns = ['Z']`` to indicate that redshift information is needed.
+        A dictionary ``catalog`` of columns is provided, containing 'INDWEIGHT' and the requested columns.
+        If ``None``, no optimal weights are applied.
+
+    Returns
+    -------
+    spectrum : Mesh2SpectrumPoles
+    """
     from cucount.jax import create_sharding_mesh, WeightAttrs
     from jaxpower import MeshAttrs, BinMesh2SpectrumPoles
     from .correlation2_tools import prepare_cucount_particles
@@ -584,8 +610,8 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
         Optional arguments for computing effective redshift.
         Default is ``{'cellsize': 10.}``.
     method : string, optional
-        ``'smooth'`` to use the reusable smooth window correlation, ``'particle'`` for particle counts,
-        or ``'exact'`` for the exact mesh window.
+        ``'smooth_mesh'`` to use the "smooth" method with 1D window correlation computed with FFTs on the mesh,
+        ``'smooth_particle'`` for particle counts, or ``'exact'`` for the exact mesh window.
 
     Returns
     -------
@@ -770,7 +796,7 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
 
 def compute_smooth2_spectrum_window_correlation(*get_data_randoms, spectrum: types.Mesh2SpectrumPoles, ells=None, zeff: dict=None, wsum_data=None, method: str='smooth_mesh', split_randoms: int=None):
     r"""
-    Compute the 2-point spectrum window with :mod:`jaxpower` or :mod:`cucount`.
+    Compute the 2-point window correlation with :mod:`jaxpower` or :mod:`cucount`.
 
     Parameters
     ----------
@@ -788,11 +814,18 @@ def compute_smooth2_spectrum_window_correlation(*get_data_randoms, spectrum: typ
     zeff : dict, optional
         Optional arguments for computing effective redshift.
         Default is ``{'cellsize': 10.}`` (density computed with ``cellsize = 10.``)
+    method : string, optional
+        ``'smooth_mesh'`` to use the "smooth" method with 1D window correlation computed with FFTs on the mesh,
+        ``'smooth_particle'`` for particle counts.
+    split_randoms : float, tuple
+        If provided, number of subsets to split the random catalogs into.
+        If a tuple, (number of splits, used number of splits).
+        (e.g. (10, 5) will just use the first 5 splits out of 10).
 
     Returns
     -------
-    window : WindowMatrix or dict of WindowMatrix
-        The computed 2-point spectrum window. If `auw` is provided, returns a dict with keys 'raw' and 'auw'.
+    window : ObservableTree
+        The computed 2-point window correlation.
     """
     # Import window and correlation computation tools from jaxpower
     from jaxpower import (create_sharding_mesh, BinMesh2CorrelationPoles, compute_mesh2_correlation,

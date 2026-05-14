@@ -32,7 +32,7 @@ if mode == 'slurm':
     
     output, error = 'slurm_outputs/abacus_mocks/slurm-%j.out', 'slurm_outputs/abacus_mocks/slurm-%j.err'
     kwargs = {}
-    environ = Environment('nersc-cosmodesi', command=['module unload desi-clustering cucount jaxpower lsstypes'])
+    environ = Environment('nersc-cosmodesi', command=['module unload desi-clustering'])
     tm = TaskManager(queue=queue, environ=environ)
     tm = tm.clone(scheduler=dict(max_workers=20), provider=dict(provider='nersc', time='03:00:00',
                                 mpiprocs_per_worker=4, output=output, error=error, constraint='gpu'))

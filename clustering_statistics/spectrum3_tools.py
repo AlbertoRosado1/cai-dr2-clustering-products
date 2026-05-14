@@ -27,7 +27,24 @@ logger = logging.getLogger('spectrum3')
 
 
 def compute_mesh3_spectrum_close_pair_correction(*get_data_randoms, spectrum, auw=None, cut=None, **kwargs):
-    """Compute and apply close-pair corrections."""
+    """
+    Compute and apply close-pair corrections to 3-point spectrum.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions returning dicts with 'data', 'randoms' (optionally 'shifted').
+        Catalogs must contain 'POSITION', 'INDWEIGHT', optionally 'BITWEIGHT'.
+    spectrum : ObservableTree
+        Input spectrum to add close pair correction to.
+    auw : Mesh2SpectrumPoles, optional
+        Angular upweights to apply.
+    cut : bool, optional
+        If provided, apply a theta-cut of (0, 0.05) degrees.
+    Returns
+    -------
+    spectrum : Mesh3SpectrumPoles
+    """
 
     from cucount.jax import create_sharding_mesh, BinAttrs
     from .correlation2_tools import prepare_cucount_particles
@@ -244,7 +261,7 @@ def _get_window_edges(mattrs, scales: tuple=(1, 4)):
 
 
 def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, ibatch: tuple=None,
-                                  computed_batches: list=None, buffer_size=0, method: str='smooth_mesh', split_randoms: int=None):
+                                  computed_batches: list=None, buffer_size: int=0, method: str='smooth_mesh', split_randoms: int=None):
     r"""
     Compute the 3-point spectrum window with :mod:`jaxpower`.
 
@@ -262,6 +279,9 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
         To split the window function multipoles to compute in batches, provide (0, nbatches) for the first batch,
         (1, nbatches) for the second, etc; up to (nbatches - 1, nbatches).
         ``None`` to compute the final window matrix.
+    method : string, optional
+        ``'smooth_mesh'`` to use the "smooth" method with 2D window correlation computed with FFTs on the mesh,
+        ``'smooth_particle'`` for particle counts.
     computed_batches : list, optional
         The window function multipoles that have been computed thus far.
 
@@ -338,9 +358,9 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
     return results
 
 
-def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None, zeff: dict=None, ibatch: tuple=None, computed_batches: list=None, buffer_size=0, method: str='smooth_mesh', split_randoms: int=None):
+def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None, zeff: dict=None, ibatch: tuple=None, computed_batches: list=None, buffer_size: int=0, method: str='smooth_mesh', split_randoms: int=None):
     r"""
-    Compute the 3-point spectrum window function with :mod:`jaxpower` or :mod:`cucount`.
+    Compute the 3-point window correlation with :mod:`jaxpower` or :mod:`cucount`.
 
     Parameters
     ----------
@@ -358,11 +378,18 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
         ``None`` to compute the final window matrix.
     computed_batches : list, optional
         The window function multipoles that have been computed thus far.
+    method : string, optional
+        ``'smooth_mesh'`` to use the "smooth" method with 2D window correlation computed with FFTs on the mesh,
+        ``'smooth_particle'`` for particle counts.
+    split_randoms : float, tuple
+        If provided, number of subsets to split the random catalogs into.
+        If a tuple, (number of splits, used number of splits).
+        (e.g. (10, 5) will just use the first 5 splits out of 10).
 
     Returns
     -------
-    spectrum : WindowMatrix or dict of WindowMatrix
-        The computed 3-point spectrum window.
+    window : ObservableTree
+        The computed 3-point window correlation.
     """
     # Import window and correlation functions from jaxpower
     from jaxpower import (create_sharding_mesh, BinMesh3CorrelationPoles, compute_mesh3_correlation,

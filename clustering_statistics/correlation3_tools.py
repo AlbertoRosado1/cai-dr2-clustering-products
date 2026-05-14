@@ -115,9 +115,9 @@ def compute_particle3_angular_upweights(*get_data_randoms):
     return ObservableTree(list(auw.values()), triplets=list(auw.keys()))
 
 
-def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: dict=None, auw=None, cut=None, split_randoms: bool | float=False):
+def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: dict=None, auw=None, cut=None, split_randoms: float | tuple=False):
     """
-    Compute three-point correlation function using :mod:`cucount.jax`.
+    Compute 3-point correlation function using :mod:`cucount.jax`.
 
     Parameters
     ----------
@@ -127,7 +127,14 @@ def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: di
     battrs : dict, optional
         Bin attributes for cucount.jax.BinAttrs.
     zeff : dict, optional
-        Effective redshift parameters.
+        Options to estimate the effective redshift, e.g. ``{'cellsize': 10.}``.
+    auw : ObservableTree, optional
+        Angular upweights to apply.
+    cut : bool, optional
+        If provided, apply a theta-cut of (0, 0.05) degrees.
+    split_randoms : float, tuple
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
 
     Returns
     -------
@@ -202,8 +209,30 @@ def compute_particle3_correlation(*get_data_randoms, battrs: dict=None, zeff: di
 
 
 def compute_particle3_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, split_randoms: bool | float=False):
-    """Compute and apply close-pair corrections."""
+    """
+    Compute and apply close-pair corrections to 3-point correlation function.
 
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions returning dicts with 'data', 'randoms' (optionally 'shifted').
+        Catalogs must contain 'POSITION', 'INDWEIGHT', optionally 'BITWEIGHT'.
+    correlation : ObservableTree
+        Input correlation function to add close pair correction to.
+    battrs : dict, optional
+        Bin attributes for :class:`cucount.jax.BinAttrs`.
+    auw : ObservableTree, optional
+        Angular upweights to apply.
+    cut : bool, optional
+        If provided, apply a theta-cut of (0, 0.05) degrees.
+    split_randoms : float, tuple
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
+
+    Returns
+    -------
+    correlation : Count3Correlation
+    """
     from cucount.jax import create_sharding_mesh, BinAttrs
 
     with create_sharding_mesh() as sharding_mesh:
@@ -248,25 +277,8 @@ def _apply_particle3_correlation_close_pair_correction(correlation, correction):
 
 def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, auw=None, cut=None, veto23: bool=None, normalize_randoms: bool=True):
     """
-    Compute close-pair corrections to three-point counts.
-
-    Parameters
-    ----------
-    all_particles : list
-        Output of :func:`prepare_cucount_particles`.
-    battrs : BinAttrs or list
-        Bin attributes for the three sides.
-    auw : optional
-        Angular upweighting object.
-    cut : optional
-        If provided, compute direct cut correction only.
-    veto23 : bool, optional
-        Whether to veto the third side at very small separation.
-
-    Returns
-    -------
-    correction : dict
-        Additive correction counts keyed by count name.
+    Compute close-pair corrections to 3-point counts.
+    Returns additive correction counts keyed by count name.
     """
     from cucount.jax import BinAttrs, SelectionAttrs, WeightAttrs, get_sharding_mesh
     from cucount.types import count3close
@@ -467,7 +479,7 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
 
 def compute_box_particle3_correlation(*get_data, battrs: dict=None, mattrs: dict=None, nran: int=10, split_randoms: bool | float=False):
     """
-    Compute three-point correlation function using :mod:`cucount.jax`.
+    Compute 3-point correlation function using :mod:`cucount.jax`.
 
     Parameters
     ----------
@@ -477,6 +489,9 @@ def compute_box_particle3_correlation(*get_data, battrs: dict=None, mattrs: dict
         Bin attributes for cucount.jax.BinAttrs.
     mattrs : dict, optional
         Mesh attributes, typically with 'boxsize' and 'boxcenter'.
+    split_randoms : float, tuple
+        If provided, ratio of shifted randoms / data to split the (concatenated) shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
 
     Returns
     -------

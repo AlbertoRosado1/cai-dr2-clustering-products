@@ -89,7 +89,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     ----------
     stats : str or list of str
         Summary statistics to compute.
-        Choices: ['mesh2_spectrum', 'mesh3_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'window_mesh2_spectrum_fm', 'covariance_mesh2_spectrum']
+        Choices: ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'close_pair_correction', 'window_mesh2_spectrum', 'window_mesh3_spectrum'].
+        If 'close_pair_correction', add angular upweight or theta-cut correction to pre-computed standard 'mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'particle3_correlation'.
     analysis : str, optional
         Type of analysis, 'full_shape' or 'png_local', to set fiducial options.
     cache : dict, optional
@@ -917,7 +918,7 @@ def main(**kwargs):
     """
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
+    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'close_pair_correction', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
     parser.add_argument('--version', help='catalog version; e.g. holi-v1-altmtl', type=str, default=None)
     parser.add_argument('--cat_dir', help='where to find catalogs', type=str, default=None)
     parser.add_argument('--tracer', help='tracer(s) to be selected - e.g. LRG ELG for cross-correlation', nargs='*', type=str, default='LRG')

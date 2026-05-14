@@ -76,13 +76,15 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
     subsampler : optional
         Optional object with a ``label(positions)`` method.
     jackknife : dict, optional
-        Jackknife configuration. If provided, build a KMeansSubsampler.
-    split_randoms : bool, float
+        Jackknife configuration, e.g. ``{'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42}``.
+        If provided, build a :class:`KMeansSubsampler`.
+    split_randoms : float, tuple
         If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
     concatenate : bool
         If ``True``, return concatenated randoms or shifted catalogs.
     wattrs : WeightAttrs, optional
-        Weight attributes passed to KMeansSubsampler.
+        Weight attributes passed to :class:`KMeansSubsampler`.
 
     Returns
     -------
@@ -206,9 +208,9 @@ def _guess_wattrs(get_data_randoms, auw=None):
     return wattrs
 
 
-def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs: dict=None, zeff: dict=None, jackknife: dict=None, split_randoms: bool | float=False):
+def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs: dict=None, zeff: dict=None, jackknife: dict=None, split_randoms: float | tuple=False):
     """
-    Compute two-point correlation function using :mod:`cucount.jax`.
+    Compute 2-point correlation function using :mod:`cucount.jax`.
 
     Parameters
     ----------
@@ -222,9 +224,12 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
     battrs : dict, optional
         Bin attributes for cucount.jax.BinAttrs.
     zeff : dict, optional
-        Effective redshift parameters.
+        Options to estimate the effective redshift, e.g. ``{'cellsize': 10.}``.
     jackknife : dict, optional
-        Jackknife configuration. If non-empty, use angular K-means jackknife splits.
+        Jackknife configuration, e.g. ``{'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42}``.
+    split_randoms : float, tuple
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
 
     Returns
     -------
@@ -346,7 +351,7 @@ def _get_particle_combinations(combinations, all_particles, with_repeats=True):
 
 def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict=None, split_randoms: bool | float=False):
     """
-    Compute periodic-box two-point correlation function using :mod:`cucount.jax`.
+    Compute periodic-box 2-point correlation function using :mod:`cucount.jax`.
 
     Parameters
     ----------
@@ -355,7 +360,10 @@ def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict
     battrs : dict, optional
         Bin attributes for cucount.jax.BinAttrs.
     mattrs : dict, optional
-        Mesh attributes, typically with 'boxsize' and 'boxcenter'.
+        Mesh attributes, typically with 'boxsize', 'meshsize'.
+    split_randoms : float, tuple
+        If provided, ratio of shifted randoms / data to split the (concatenated) shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
 
     Returns
     -------
@@ -418,9 +426,33 @@ def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict
     return Count2Correlation(estimator='natural', DD=counts['DD'], RR=counts['RR'])
 
 
-def compute_particle2_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, jackknife=None,  split_randoms: bool | float=False, **kwargs):
-    """Compute and apply close-pair corrections."""
+def compute_particle2_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, jackknife=None,  split_randoms: float | tuple=False, **kwargs):
+    """
+    Compute and apply close-pair corrections to 2-point correlation function.
 
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions returning dicts with 'data', 'randoms' (optionally 'shifted').
+        Catalogs must contain 'POSITION', 'INDWEIGHT', optionally 'BITWEIGHT'.
+    correlation : Count2Correlation, Count2JackknifeCorrelation
+        Input correlation function to add close pair correction to.
+    battrs : dict, optional
+        Bin attributes for :class:`cucount.jax.BinAttrs`.
+    auw : ObservableTree, optional
+        Angular upweights to apply.
+    cut : bool, optional
+        If provided, apply a theta-cut of (0, 0.05) degrees.
+    jackknife : dict, optional
+        Jackknife configuration, e.g. ``{'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42}``.
+    split_randoms : float, tuple
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
+
+    Returns
+    -------
+    correlation : Count2Correlation or Count2JackknifeCorrelation
+    """
     from cucount.jax import create_sharding_mesh, BinAttrs
 
     if jackknife is None: jackknife = {}
@@ -486,23 +518,8 @@ def _apply_particle2_correlation_close_pair_correction(correlation, correction):
 
 def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, spattrs=None, auw=None, cut=None, normalize_randoms: bool=True):
     """
-    Compute close-pair corrections to two-point counts.
-
-    Parameters
-    ----------
-    all_particles : list
-        Output of :func:`prepare_cucount_particles`.
-    battrs : BinAttrs or list
-        Bin attributes for the three sides.
-    auw : optional
-        Angular upweighting object.
-    cut : optional
-        If provided, compute direct cut correction only.
-
-    Returns
-    -------
-    correction : dict
-        Additive correction counts keyed by count name.
+    Compute close-pair corrections to 2-point counts.
+    Returns additive correction counts keyed by count name.
     """
     from cucount.jax import BinAttrs, SelectionAttrs, WeightAttrs, get_sharding_mesh
     from cucount.types import count2

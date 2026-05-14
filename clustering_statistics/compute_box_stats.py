@@ -47,7 +47,7 @@ def compute_box_stats_from_options(stats, cache=None,
     ----------
     stats : str or list of str
         Summary statistics to compute.
-        Choices: ['mesh2_spectrum', 'mesh3_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum']
+        Choices: ['mesh2_spectrum', 'mesh3_spectrum', 'recon_mesh2_spectrum', 'particle2_correlation', 'particle3_correlation', 'recon_particle2_correlation', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum']
     cache : dict, optional
         Cache to store intermediate results (binning class and parent/reference random catalog).
         See :func:`spectrum2_tools.compute_mesh2_spectrum`, :func:`spectrum3_tools.compute_mesh3_spectrum`,
