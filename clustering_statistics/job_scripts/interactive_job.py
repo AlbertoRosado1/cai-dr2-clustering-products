@@ -52,7 +52,8 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             
             for itracer in options['catalog']:
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
-                options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
+                if version != 'uchuu-hf-reference':
+                    options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
                 if onthefly == 'complete':
                     options['catalog'][itracer]['complete'] = {}
                 elif onthefly == 'reshuffle':
@@ -92,13 +93,14 @@ if __name__ == '__main__':
     stats, postprocess = [], []
     # version  = 'glam-uchuu-v2-altmtl'
     # version  = 'holi-v3-altmtl'
-    version  = 'abacus-hf-dr2-v2-altmtl'
+    # version  = 'abacus-hf-dr2-v2-altmtl'
+    version = 'uchuu-hf-reference'
     check_for_existing_measurements = False # True
     
     # test run 
     # imocks2run = 150 + np.arange(1)
     imocks2run = np.arange(1)
-    stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
+    # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
     
     # official run
     # imocks2run = 150 + np.arange(50)
@@ -108,19 +110,19 @@ if __name__ == '__main__':
     #     # do not perform measurements on dubious mocks
     #     bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
     #     imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
-    # stats_dir  = tools.base_stats_dir
+    stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
     # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
     # stats       = ['mesh3_spectrum', 'window_mesh3_spectrum']
-    stats = ['mesh2_spectrum']
+    stats = ['mesh2_spectrum','mesh3_spectrum']
     postprocess = ['combine_regions']
     analysis = 'full_shape'
     project  = f'{analysis}/base'
     weight   = 'default-FKP'
     regions  = ['NGC','SGC']
     # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    tracers  = ['QSO']
+    tracers  = ['BGS_BRIGHT-21.35']
     max_mocks_per_batch = 1
 
     # run data_splits for lensing group with full_shape setup 
@@ -143,9 +145,9 @@ if __name__ == '__main__':
     # tracers = ['ELGnotqso']
     # max_mocks_per_batch = 1
 
-    onthefly = 'complete'
+    # onthefly = 'complete'
     # onthefly = 'reshuffle'
-    # onthefly = None
+    onthefly = None
     do_jackknife = False
     
     for tracer in tracers:

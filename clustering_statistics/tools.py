@@ -863,7 +863,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
             if kind == 'parent_randoms':
                 program = 'bright' if 'BGS' in tracer else 'dark'
-                return [cat_dir / f'{program}_{iran}_full_noveto.ran.h5' for iran in nrans]
+                return [_find_extension(cat_dir / f'{program}_{iran}_full_noveto.ran', None) for iran in nrans]
             if 'bitwise' in weight:
                 data_dir = cat_dir / 'PIP'
             else:
@@ -914,7 +914,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif version == 'holi-v3-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v3/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
-            ext = 'h5' if 'full' in kind else 'h5'
+            ext = 'h5'
             if kind == 'data':
                 return cat_dir / f'{tracer}_complete_{region}_clustering.dat.{ext}'
             if kind == 'randoms':
@@ -923,7 +923,14 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         elif version == 'holi-v3-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v3'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
-            ext = 'h5' if 'full' in kind else 'h5'
+            ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
+
+        elif version == 'holi-bgs-altmtl':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_bgs'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
 
@@ -936,6 +943,13 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif version == 'glam-uchuu-v2-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/GLAM-Uchuu_v2'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
+
+        elif version == 'glam-uchuu-bgs-altmtl':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/glam_bgs/'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'h5'
             if kind == 'forfa_data':
@@ -985,10 +999,22 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             else:
                 cat_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/complete/')
             ext = 'fits'
-            if kind == 'data':
-                return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_clustering.dat.{ext}')
-            if kind == 'randoms':
-                return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
+            if 'BGS' in tracer:
+                # ugly way to get file with mag cut for BGS
+                if '-' in tracer:
+                    mag = tracer.split('-')[-1]
+                    mag_cut = f'_Mr_{mag}'
+                else: 
+                    mag_cut = ''
+                if kind == 'data':
+                    return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_0000_clustering.dat.{ext}')
+                if kind == 'randoms':
+                    return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_{iran}_0000_clustering.ran.{ext}' for iran in nrans]
+            else:
+                if kind == 'data':
+                    return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_clustering.dat.{ext}')
+                if kind == 'randoms':
+                    return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
 
     # print(version)
     if cat_dir is None:
@@ -1755,6 +1781,9 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
 
         if 'default' in weight_type:
             individual_weight = catalog['WEIGHT'].copy()
+            if individual_weight.dtype != 'float64': 
+                # to avoid "numpy._core._exceptions._UFuncOutputCastingError: Cannot cast ufunc 'multiply' output from dtype('float64') to dtype('>i8') with casting rule 'same_kind'"
+                individual_weight = individual_weight.astype('f8')
         else:
             logger.info('Not using WEIGHT column as individual weight')
             individual_weight = np.ones(len(catalog), dtype='f8')

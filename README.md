@@ -19,7 +19,7 @@ pip install -e .
 ```
 
 Importantly, if you are working at NERSC with the `cosmodesi` conda environment, you need to unload the `desi-clustering` loaded with `cosmodesi`:
-```` bash
+```bash
 module unload desi-clustering
 # add packages locally installed to the PYTHONPATH (supposing you are working with python3.12 which is the python version in cosmodesi)
 export PYTHONPATH=$HOME/.local/lib/python3.12/site-packages/:$PYTHONPATH
