@@ -1984,9 +1984,12 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
         The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     """
+    if isinstance(keep_columns, (tuple, list)) and 'POSITION' in keep_columns: # make sure that we do not drop the RA, DEC, Z columns needed to compute POSITION in prepare_catalog
+        keep_columns_read = list(set(list(keep_columns) + ['RA', 'DEC', 'Z']))
+    else: keep_columns_read = keep_columns
     catalogs = read_catalog(kind=kind, concatenate=concatenate, get_catalog_fn=get_catalog_fn,
                             expand=expand, reshuffle=reshuffle, complete=complete, mpicomm=mpicomm, read=_read_catalog,
-                            keep_columns=keep_columns, **kwargs)
+                            keep_columns=keep_columns_read, **kwargs)
     catalogs = prepare_catalog(catalogs, kind=kind, set_positions_from_rdz=set_positions_from_rdz,
                                mask_catalog=mask_catalog, set_catalog_weights=set_catalog_weights,
                                binned_weight=binned_weight, keep_columns=keep_columns, **kwargs)
