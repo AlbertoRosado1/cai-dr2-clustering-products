@@ -1920,9 +1920,9 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
         catalog = set_catalog_weights(catalog, kind, weight=weight, FKP_P0=FKP_P0, binned_weight=binned_weight, log=i == 0)
         if kind in ['data', 'randoms'] and (keep_all_columns or 'POSITION' in keep_columns):
             catalog = set_positions_from_rdz(catalog)
-        rdzw.append(catalog)
         if not keep_all_columns:
             catalog = catalog[[column for column in catalog if column in keep_columns]]
+        rdzw.append(catalog)
     if concatenate:
         if len(rdzw) == 1: return rdzw[0]
         return Catalog.concatenate(rdzw)
