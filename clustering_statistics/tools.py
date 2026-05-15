@@ -1896,7 +1896,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     catalog : Catalog, list
         Catalog object or list of Catalog objects (if ``concatenate`` is False).
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
-        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     """
     FKP_P0, zrange, region, weight = (kwargs.get(key, None) for key in ['FKP_P0', 'zrange', 'region', 'weight'])
 
@@ -1904,7 +1904,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     if isinstance(keep_columns, bool) and keep_columns:
         keep_all_columns = True
     elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     else:
         assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
 
@@ -1918,7 +1918,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     for i, catalog in enumerate(catalogs):
         catalog = mask_catalog(catalog, kind, zrange=zrange, region=region)
         catalog = set_catalog_weights(catalog, kind, weight=weight, FKP_P0=FKP_P0, binned_weight=binned_weight, log=i == 0)
-        if kind in ['data', 'randoms']:
+        if kind in ['data', 'randoms'] and (keep_all_columns or 'POSITION' in keep_columns):
             catalog = set_positions_from_rdz(catalog)
         rdzw.append(catalog)
         if not keep_all_columns:
@@ -1982,7 +1982,7 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
     catalog : Catalog, list
         Catalog object or list of Catalog objects (if ``concatenate`` is False).
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
-        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     """
     catalogs = read_catalog(kind=kind, concatenate=concatenate, get_catalog_fn=get_catalog_fn,
                             expand=expand, reshuffle=reshuffle, complete=complete, mpicomm=mpicomm, read=_read_catalog,
