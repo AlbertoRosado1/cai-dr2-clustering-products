@@ -22,7 +22,7 @@ doc/_build/
 **/desipipe_data_splits_unblinded.py
 **/auw3.ipynb
 **/check_complete.ipynb
-**/auw3.ipynb
+**/**Copy*.ipynb
 **/validation2.ipynb
 **/*.pdf
 **/*.zip

@@ -259,11 +259,11 @@ def test_window2(stats=['mesh2_spectrum']):
                         extra = f'{extra}_{method}' if extra else method
                         return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
 
-                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, nran=1, imock=451)
+                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451)
                     #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
                     options = {}
                     options['mesh2_spectrum'] = {'mattrs': {'meshsize': 250, 'boxsize': 6000.}}
-                    options['window_mesh2_spectrum'] = {'cut': True, 'method': method, 'split_randoms': None}
+                    options['window_mesh2_spectrum'] = {'cut': True, 'method': method, 'split_randoms': (50, 10)}
                     compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=get_stats_fn, **options)
         if 'mesh3' in stat: continue
         '''
@@ -285,7 +285,7 @@ def test_window3(stats=['mesh3_spectrum']):
         for tracer in ['LRG']:
             zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
-                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
+                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, nran=1, imock=451)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
                 options = {}
                 options['mesh3_spectrum'] = {'mattrs': {'meshsize': 250}}
@@ -295,7 +295,7 @@ def test_window3(stats=['mesh3_spectrum']):
                         extra = f'{extra}_{method}' if extra else method
                         return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
 
-                    options['window_mesh3_spectrum'] = {'buffer_size': 40, 'method': method, 'split_randoms': None}
+                    options['window_mesh3_spectrum'] = {'buffer_size': 40, 'method': method, 'split_randoms': (5, 1)}
                     compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, **options, get_stats_fn=get_stats_fn)
 
 

@@ -30,7 +30,7 @@ import jax.experimental.multihost_utils
 import lsstypes as types
 
 from . import tools
-from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, setup_logging
+from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, _compute_binned_weight, setup_logging
 
 from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction
 from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
@@ -198,44 +198,6 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             # Keep only the requested number of random files (for reduced memory footprint)
             randoms[tracer] = randoms[tracer][:catalog_options[tracer]['nran']]  # keep only relevant random files
 
-    # Compute angular upweights for fiber collision corrections if requested
-    if with_catalogs:
-
-        funcs = {2: compute_particle2_angular_upweights, 3: compute_particle3_angular_upweights}
-        _cache_full = {}
-
-        for npt, func in funcs.items():
-
-            def get_data(tracer):
-                # Load full parent catalogs (before any selection) for AUW computation
-                _catalog_options = dict(catalog_options[tracer])
-                toret = {}
-                for kind in ['fibered_data', 'parent_data'] + (['fibered_randoms', 'parent_randoms'] if npt > 2 else []):
-                    if kind not in _cache_full:
-                        if tracer not in raw_full_data:
-                            raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=True)
-                            _catalog_options['binned_weight'].update(raw_full_data[tracer].attrs)  # update binned weight info for AUW computation
-                        _cache_full[kind] = prepare_catalog(raw_randoms[tracer] if 'randoms' in kind else raw_full_data[tracer], kind=kind, **_catalog_options)
-                    toret[kind] = _cache_full[kind]
-                return toret
-
-            stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}'])]
-            if any(options[stat].get('auw', False) for stat in stats_npt):
-                # Compute angular upweights from fibered vs parent catalogs
-                fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=None) for tracer in tracers}
-                fn = get_stats_fn(kind=f'particle{npt:d}_angular_upweights', catalog=fn_catalog_options)
-                if fn.exists():
-                    auw = types.read(fn)
-                else:
-                    auw = func(*[functools.partial(get_data, tracer) for tracer in tracers])
-                    # Write computed angular upweights to disk
-                    tools.write_stats(fn, auw)
-                # Update all statistics options with computed angular upweights
-                for stat in stats_npt:
-                    if options[stat].get('auw', False): options[stat]['auw'] = auw  # update with angular upweights
-
-        del _cache_full, raw_randoms, raw_full_data
-
     # Loop over all requested redshift bins
     for zvals in zip(*(zranges[tracer] for tracer in tracers)):
         zrange = dict(zip(tracers, zvals))
@@ -247,6 +209,50 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 zrandoms[tracer] = [mask_catalog(random, 'randoms', region=region[tracer], zrange=zrange[tracer]) for random in randoms[tracer]]
         fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=zrange[tracer]) for tracer in tracers}
 
+        # Compute angular upweights for fiber collision corrections if requested
+        auw_options = {}
+        funcs = {2: compute_particle2_angular_upweights, 3: compute_particle3_angular_upweights}
+        for npt, func in funcs.items():
+            # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
+            # FIXME: how to generalize to any stat (correlation) or OQE weights?
+            spectrum_options = options[f'mesh{npt:d}_spectrum']
+            selection_weights = spectrum_options.get('selection_weights', None)
+            _cache_auw = {}
+
+            def get_data(tracer):
+                # Load full parent catalogs (before any selection) for AUW computation
+                _catalog_options = dict(fn_catalog_options[tracer])
+                _zdata = zdata[tracer]
+                if selection_weights:
+                    _zdata = selection_weights[tracer](_zdata)
+
+                _catalog_options['binned_weight']['weight_ntile'] = {column: _compute_binned_weight(_zdata[column], _zdata['INDWEIGHT'] / _zdata['WEIGHT_COMP'], mpicomm=_zdata.mpicomm) for column in ['NTILE']}
+                del _zdata
+                toret = {}
+                for kind in ['fibered_data', 'parent_data'] + (['fibered_randoms', 'parent_randoms'] if npt > 2 else []):
+                    if kind not in _cache_auw:
+                        if tracer not in raw_full_data:
+                            raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=True)
+                            #_catalog_options['binned_weight'].update(raw_full_data[tracer].attrs)  # update binned weight info for AUW computation
+                        _cache_auw[kind] = prepare_catalog(raw_randoms[tracer] if 'randoms' in kind else raw_full_data[tracer], kind=kind, **_catalog_options)
+                    toret[kind] = _cache_auw[kind]
+                return toret
+
+            stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}']) and options[stat].get('auw', False)]
+            if any(stats_npt):
+                # Compute angular upweights from fibered vs parent catalogs
+                fn = get_stats_fn(kind=f'particle{npt:d}_angular_upweights', catalog=fn_catalog_options)
+                if False: #fn.exists():
+                    auw = types.read(fn)
+                else:
+                    auw = func(*[functools.partial(get_data, tracer) for tracer in tracers])
+                    # Write computed angular upweights to disk
+                    tools.write_stats(fn, auw)
+                # Update all statistics options with computed angular upweights
+                for stat in stats_npt:
+                    auw_options[stat] = auw  # update with angular upweight
+            del _cache_auw
+
         def get_catalog_recon(catalog):
             # Replace positions with reconstructed positions
             return catalog.clone(POSITION=catalog['POSITION_REC'])
@@ -256,16 +262,23 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             funcs = {f'{recon}particle2_correlation': (compute_particle2_correlation, compute_particle2_correlation_close_pair_correction), f'{recon}particle3_correlation': (compute_particle3_correlation, compute_particle3_correlation_close_pair_correction)}
             for stat, func in funcs.items():
                 if stat in stats:
-                    correlation_options = dict(options[stat])
+                    correlation_options = dict(options[stat]) | dict(auw=auw_options.get(stat, None))
+                    # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
+                    selection_weights = correlation_options.pop('selection_weights', None)
 
                     def get_data(tracer):
-                        # Prepare data structure for correlation function measurement
+                        # Prepare data for spectrum measurement
                         if recon:
-                            # Use reconstructed positions as primary, randoms for random catalogs
-                            return {'data': get_catalog_recon(zdata[tracer]), 'randoms': zrandoms[tracer],
+                            # Use reconstructed positions, with same shifts applied to randoms
+                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': zrandoms[tracer],
                                     'shifted': [get_catalog_recon(zrandom) for zrandom in zrandoms[tracer]]}
-                        # Default: use original positions
-                        return {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
+                        else:
+                            # Default: use original positions
+                            toret = {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
+                        # Apply selection weights if provided (for bispectrum, NX**(-1. / 3.) weighting, etc.)
+                        if selection_weights:
+                            toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
+                        return toret
 
                     # Compute 2 or 3-point correlation function
                     if 'close_pair_correction' in stats:
@@ -301,8 +314,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
             for stat, func in funcs.items():
                 if stat in stats:
-                    spectrum_options = dict(options[stat])
-                    # Extract selection weights if provided (e.g., angular selection weights)
+                    spectrum_options = dict(options[stat]) | dict(auw=auw_options.get(stat, None))
+                    # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
                     selection_weights = spectrum_options.pop('selection_weights', None)
 
                     def get_data(tracer):
@@ -316,7 +329,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         else:
                             # Default: use original positions
                             toret = {'data': zdata[tracer], 'randoms': czrandoms}
-                        # Apply selection weights if provided (for bispectrum, NZ**(1. / 3.) weighting, etc.)
+                        # Apply selection weights if provided (for bispectrum, NX**(-1. / 3.) weighting, etc.)
                         if selection_weights:
                             toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
                         return toret

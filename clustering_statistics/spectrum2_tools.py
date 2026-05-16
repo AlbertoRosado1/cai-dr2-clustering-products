@@ -19,6 +19,7 @@ from collections.abc import Callable
 import numpy as np
 import jax
 from jax import numpy as jnp
+from jax.sharding import PartitionSpec as P
 import lsstypes as types
 
 from .tools import default_mpicomm, _format_bitweights, compute_fkp_effective_redshift, combine_stats
@@ -880,8 +881,9 @@ def compute_smooth2_spectrum_window_correlation(*get_data_randoms, spectrum: typ
         if method == 'smooth_particle':
             from jaxpower.particle2 import convert_particles
             from cucount.jax import BinAttrs, SelectionAttrs, WeightAttrs
-            from cucount.types import count2, count2_analytic
-            from .correlation3_tools import _digitize_cartesian
+            from cucount.types import count2, count2_analytic, compute_norm2
+            from jaxpower.mesh import create_sharded_random, _process_seed
+            from .correlation3_tools import _digitize_cartesian, _remove_phantom_particles
 
             all_particles = []
             # Paint random catalogs on coarse mesh
@@ -894,11 +896,11 @@ def compute_smooth2_spectrum_window_correlation(*get_data_randoms, spectrum: typ
                 all_particles.append(convert_particles(randoms))
             del all_randoms
 
-            edges = np.arange(0., mattrs.boxsize.min(), mattrs.cellsize.min())
+            edges = np.arange(0., jnp.sqrt(jnp.sum(mattrs.boxsize**2)), mattrs.cellsize.min())
             battrs = BinAttrs(s=edges, pole=(tuple(kw_window['ells']), 'firstpoint'))
 
             sepmax = edges.max()
-            limits = [0., 100., 500.]
+            limits = [0., 200., 500.]
             limits = [lim for lim in limits if lim < sepmax] + [sepmax]
             resols = [None, 40., 100.]
             nsplits, max_nsplits = 1, 1
@@ -911,26 +913,29 @@ def compute_smooth2_spectrum_window_correlation(*get_data_randoms, spectrum: typ
             wattrs = WeightAttrs()
             prod = functools.partial(functools.reduce, operator.mul)
 
-            def count2split(*particles, sattrs=None):
+            def count2split(*particles, sattrs=None, norm_ref=1.):
                 kw = dict(wattrs=wattrs, battrs=battrs, sattrs=sattrs, norm=1.)
-                nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
+                nsplits = [getattr(p, 'nsplits', 0) for p in particles]
                 if any(nsplits):
                     nsplit = next(n for n in nsplits if n)
-                    particles = list(particles)
-                    sum_weights1 = []
-                    for ip, particle in enumerate(particles):
-                        if isinstance(particle, list):
-                            assert len(particle) == nsplit
+                    particle_iters = []
+                    for particle in particles:
+                        if getattr(particle, 'nsplits', 0):
+                            assert particle.nsplits == nsplit
+                            particle_iters.append(particle())
                         else:
-                            particles[ip] = [particle] * nsplit
-                        sum_weights1.append([wattrs(particle).sum() for particle in particles[ip]])
-                    norm_splits = sum(prod(weights1) for weights1 in zip(*sum_weights1))
-                    norm_total = prod(sum(weights1) for weights1 in sum_weights1)
-                    counts = [count2(*p, **kw)['weight'] for p in zip(*particles)]
+                            particle_iters.append(itertools.repeat(particle, nsplit))
+                    counts, norm = [], 0.
+                    for p in zip(*particle_iters):
+                        counts.append(count2(*p, **kw)['weight'])
+                        norm += compute_norm2(*p, wattrs=wattrs)
                     counts = types.sum(counts)
-                    return counts.clone(value=norm_total / norm_splits * counts.value())
-                return count2(*particles, **kw)['weight']
+                else:
+                    counts = count2(*particles, **kw)['weight']
+                    norm = compute_norm2(*particles, wattrs=wattrs)
+                return counts.clone(value=norm_ref / norm * counts.value())
 
+            norm_ref = compute_norm2(*all_particles, wattrs=wattrs)
             counts = []
             resol_limits = zip(zip(limits[:-1], limits[1:]), resols)
 
@@ -944,27 +949,52 @@ def compute_smooth2_spectrum_window_correlation(*get_data_randoms, spectrum: typ
                     all_particles_resol[1] = _digitize_cartesian(all_particles_resol[1], wattrs=wattrs, cellsize=resol, sharding_mesh=sharding_mesh)
                     digitized.add(1)
 
-                if nsplits > 1 and len(all_particles_resol) - len(digitized) > 1:
-                    for ip, particles in enumerate(all_particles_resol):
-                        if ip not in digitized:
-                            particles = all_particles_resol[ip]
-                            masks = split_particles([particles] + [None] * (nsplits - 1), seed=(84, 'index'), return_masks=True)[:max_nsplits]
-                            weights = wattrs(particles)
-                            all_particles_resol[ip] = [particles.clone(weights=weights * mask) for mask in masks]
+                if nsplits > 1:
+    
+                    def _get_uniform(size, seed=(84, 'index')):
+                        return create_sharded_random(jax.random.uniform, _process_seed(seed), size, out_specs=P(sharding_mesh.axis_names,))
+                
+                    def make_particle_splits(particles, x, nsplits, max_nsplits):
+                        weights = wattrs(particles)
+                
+                        def gen():
+                            for isplit in range(max_nsplits):
+                                mask = (x >= isplit / nsplits) & (x < (isplit + 1) / nsplits)
+                                p = particles.clone(weights=weights * mask)
+                                yield _remove_phantom_particles(p, sharding_mesh=sharding_mesh)
+    
+                        gen.nsplits = max_nsplits
+                
+                        return gen
+                
+                    if len(all_particles_resol) - len(digitized) > 1:
+                        for ip, particles in enumerate(all_particles_resol):
+                            if ip not in digitized:
+                                x = _get_uniform(particles.size)
+                                all_particles_resol[ip] = make_particle_splits(particles, x, nsplits=nsplits, max_nsplits=max_nsplits)
 
-                counts.append(count2split(*all_particles_resol, sattrs=sattrs))
+                    elif max_nsplits < nsplits:
+                        for ip, particles in enumerate(all_particles_resol):
+                            if ip not in digitized:
+                                weights = wattrs(particles)
+                                x = _get_uniform(particles.size)
+                                mask = x < max_nsplits / nsplits
+                                all_particles_resol[ip] = _remove_phantom_particles(particles.clone(weights=weights * mask), sharding_mesh=sharding_mesh)
+
+                counts.append(count2split(*all_particles_resol, sattrs=sattrs, norm_ref=norm_ref))
                 if jax.process_index() == 0:
                     logger.info(f'Computed RR counts within {resol_limit} in {time.time() - t0:.1f} s')
-
+            
             def sum_counts(leaves):
                 return leaves[0].clone(counts=sum(leaf.values('counts') for leaf in leaves), norm=leaves[0].values('norm'))
 
             counts = types.tree_map(sum_counts, counts, level=None, is_leaf=lambda *args: False)
-            RR = count2_analytic(mattrs=1., battrs=battrs)
+            battrs = BinAttrs(s=edges)
+            RR0 = count2_analytic(mattrs=1., battrs=battrs)
 
             # Divide by volume factor and normalization
             def renormalize(pole):
-                return pole.clone(counts=pole.values('counts'), norm=np.mean(norm) * RR.get(0).value())
+                return pole.clone(counts=pole.values('counts'), norm=np.mean(norm) * RR0.value())
 
             counts = counts.map(renormalize)
             correlation = interpolate_window_function(counts, coords=coords, order=3)

@@ -18,7 +18,7 @@ from jax.sharding import PartitionSpec as P
 
 import lsstypes as types
 from .tools import _format_bitweights
-from .correlation2_tools import prepare_cucount_particles, _get_particle_combinations
+from .correlation2_tools import prepare_cucount_particles, _get_particle_combinations, _remove_phantom_particles
 
 
 logger = logging.getLogger('correlation3')
@@ -275,6 +275,7 @@ def _apply_particle3_correlation_close_pair_correction(correlation, correction):
     return _apply_particle2_correlation_close_pair_correction(correlation, correction)
 
 
+
 def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, auw=None, cut=None, veto23: bool=None, normalize_randoms: bool=True):
     """
     Compute close-pair corrections to 3-point counts.
@@ -319,16 +320,8 @@ def _compute_particle3_correlation_close_pair_correction(all_particles, battrs, 
             data_weights, randoms_weights = wattrs(data), wattrs(randoms)
             return randoms.clone(weights=data_weights.sum() / randoms_weights.sum() * randoms_weights)
 
-    def remove_phantom_particles(particles):
-        if sharding_mesh.axis_names:
-            particles = jax.jit(_identity_fn, out_shardings=jax.sharding.NamedSharding(sharding_mesh, spec=P(None)))(particles)
-        weights = particles.get('individual_weight')[0]
-        if weights is None:
-            return particles
-        return particles[weights != 0].clone(exchange=True)
-
     for particles in all_particles:
-        #particles['data'] = remove_phantom_particles(particles['data'])
+        #particles['data'] = _remove_phantom_particles(particles['data'], sharding_mesh=sharding_mesh)
         if normalize_randoms:
             for name in ['shifted', 'randoms']:
                 if name in particles:

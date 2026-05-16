@@ -491,6 +491,9 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     else:
         propose_fiducial['mesh2_spectrum'].update(norm={'cellsize': 10.}, ells=(0, 2, 4))
         propose_fiducial['mesh3_spectrum'].update(norm={'cellsize': 10.}, ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal', selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
+        propose_fiducial['particle2_correlation'].update(battrs={'s': np.linspace(0., 180., 181), 'mu': (np.linspace(-1., 1., 201), 'midpoint')})
+        propose_fiducial['particle3_correlation'].update(battrs={'s': np.linspace(0., 160., 21), 'pole': (list(range(6)), 'firstpoint')}, selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
+
 
     if 'protected' in analysis:
         propose_fiducial['mesh2_spectrum'].update(ells=(0,), edges={'min': 0.02, 'step': 0.001})
@@ -1348,10 +1351,16 @@ def _compute_missing_power(ntile, bitweights, loc_assigned, method='missing_powe
     return toret
 
 
-def _compute_binned_weight(ntile, weight):
+def _compute_binned_weight(ntile, weight, mpicomm=None):
     """Compute weights per ntile."""
-    sum_ntile = np.bincount(ntile)
-    sum_weight = np.bincount(ntile, weights=weight)
+    minlength = ntile.max() + 1 if ntile.size else 1
+    if mpicomm is not None:
+        minlength = max(mpicomm.allgather(minlength))
+    sum_ntile = np.bincount(ntile, minlength=minlength)
+    sum_weight = np.bincount(ntile, weights=weight, minlength=minlength)
+    if mpicomm is not None:
+        sum_ntile = mpicomm.allreduce(sum_ntile)
+        sum_weight = mpicomm.allreduce(sum_weight)
     mask_zero_ntile = sum_ntile == 0
     return np.divide(sum_weight, sum_ntile, out=np.ones_like(sum_weight), where=~mask_zero_ntile)
 
@@ -1645,8 +1654,8 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                     catalog.attrs['missing_power'] = {column: _compute_missing_power(catalog[column], catalog['BITWEIGHTS'], catalog['LOCATION_ASSIGNED']) for column in ['NTILE']}
                 if 'data' in kind:
                     catalog.attrs['completeness'] = {column: _compute_binned_weight(catalog[column], catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES']) for column in ['NTILE']}
-            elif kind == 'data':
-                catalog.attrs['weight_ntile'] = {column: _compute_binned_weight(catalog[column], catalog['WEIGHT'] / catalog['WEIGHT_COMP']) for column in ['NTILE']}
+            #elif kind == 'data':
+            #    catalog.attrs['weight_ntile'] = {column: _compute_binned_weight(catalog[column], catalog['WEIGHT'] * catalog['WEIGHT_FKP'] / catalog['WEIGHT_COMP']) for column in ['NTILE']}
             if not keep_all_columns:
                 catalog = catalog[[column for column in catalog if 'WEIGHT' in column.upper() or column in keep_columns]]
             for column in catalog:
@@ -1789,14 +1798,17 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
         else:
             individual_weight = get_binned_weight(catalog, binned_weight['weight_ntile'])
         bitwise_weights = None
-        if 'fibered' in kind and 'data' in kind:
+        if 'data' in kind and 'fibered' in kind:
             if 'bitwise' in weight_type:
                 individual_weight /= get_binned_weight(catalog, binned_weight['missing_power'])
                 bitwise_weights = catalog['BITWEIGHTS']
             else:
                 # equivalent of IIP weights
-                individual_weight /= (catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES'])
+                #individual_weight /= (catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES'])
+                individual_weight /= catalog['FRACZ_TILELOCID']
                 bitwise_weights = None
+        if 'data' in kind and 'parent' in kind and 'bitwise' not in weight_type:
+            individual_weight *= catalog['FRAC_TLOBS_TILES']
         catalog = catalog[['RA', 'DEC']]
         catalog['INDWEIGHT'] = individual_weight
         if bitwise_weights is not None: catalog['BITWEIGHT'] = bitwise_weights

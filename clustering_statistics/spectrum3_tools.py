@@ -17,6 +17,7 @@ import itertools
 import numpy as np
 import jax
 from jax import numpy as jnp
+from jax.sharding import PartitionSpec as P
 import lsstypes as types
 
 from .tools import compute_fkp_effective_redshift
@@ -446,9 +447,10 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
         if method == 'smooth_particle':
             from jaxpower.particle2 import convert_particles
             from cucount.jax import BinAttrs, SelectionAttrs, WeightAttrs
-            from cucount.types import count3, count3_analytic
+            from cucount.types import count3, count3_analytic, compute_norm3
             from lsstypes.types import convert_ells
-            from .correlation3_tools import _digitize_cartesian
+            from jaxpower.mesh import create_sharded_random, _process_seed
+            from .correlation3_tools import _digitize_cartesian, _remove_phantom_particles
 
             all_particles = []
             # Paint random catalogs on coarse mesh
@@ -461,17 +463,20 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
                 all_particles.append(convert_particles(randoms))
             del all_randoms
 
-            edges = np.arange(0., mattrs.boxsize.min(), mattrs.cellsize.min())
             ells = kw['ells']
             ells_slepian = convert_ells(ells, 'sugiyama', 'slepian')
-            #battrs12, battrs13 = [BinAttrs(s=edges, pole=((0, 2), 'firstpoint')) for idim in range(2)]
-            battrs12, battrs13 = [BinAttrs(s=edges, pole=(tuple(np.unique([ell[idim] for ell in ells_slepian])), 'firstpoint')) for idim in range(2)]
+            ells12, ells13 = [tuple(np.unique([ell[idim] for ell in ells_slepian])) for idim in range(2)]
 
-            sepmax = edges.max()
-            #sepmax = 100.
-            limits = [0., 100., 500.]
+            sepmax = jnp.sqrt(jnp.sum(mattrs.boxsize**2))
+            limits = [0., 200., 500.]
             limits = [lim for lim in limits if lim < sepmax] + [sepmax]
             resols = [None, 40., 100.]
+            steps = [step * mattrs.cellsize.min() for step in [1., 4., 10.]]
+            list_edges = [np.linspace(*limit, np.ceil((limit[1] - limit[0]) / step).astype(int)) for limit, step in zip(zip(limits[:-1], limits[1:]), steps)]
+            edges = np.concatenate([np.column_stack([edges[:-1], edges[1:]]) for edges in list_edges], axis=0)
+            mid = np.mean(edges, axis=-1)
+            counts = np.zeros((len(mid),) * 2, dtype='f8')
+            count3pole = types.Count3Pole(counts=counts, norm=np.ones_like(counts), s1=mid, s2=mid, s1_edges=edges, s2_edges=edges, coords=['s1', 's2'], ell=(0, 0, 0), basis='slepian')
             nsplits, max_nsplits = 1, 1
             if split_randoms is not None:
                 if isinstance(split_randoms, tuple):
@@ -482,30 +487,39 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
             wattrs = WeightAttrs()
             prod = functools.partial(functools.reduce, operator.mul)
 
-            def count3split(*particles, sattrs12=None, sattrs13=None):
-                kw = dict(wattrs=wattrs, battrs12=battrs12, battrs13=battrs13, sattrs12=sattrs12, sattrs13=sattrs13, norm=1.)
-                nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
-                if any(nsplits):
-                    nsplit = next(n for n in nsplits if n)
+            def count3split(*particles, battrs12=None, battrs13=None, sattrs12=None, sattrs13=None, norm_ref=1.):
+                kw = dict(wattrs=wattrs, battrs12=battrs12, battrs13=battrs13,
+                          sattrs12=sattrs12, sattrs13=sattrs13, norm=1.)
+            
+                nsplits_ = [getattr(p, 'nsplits', 0) for p in particles]
+            
+                if any(nsplits_):
+                    nsplit = next(n for n in nsplits_ if n)
                     particles = list(particles)
-                    sum_weights1 = []
-                    for ip, particle in enumerate(particles):
-                        if isinstance(particle, list):
-                            assert len(particle) == nsplit
+                    particle_iters = []
+                    for particle in particles:
+                        if getattr(particle, 'nsplits', 0):
+                            assert particle.nsplits == nsplit
+                            particle_iters.append(iter(particle()))
                         else:
-                            particles[ip] = [particle] * nsplit
-                        sum_weights1.append([wattrs(particle).sum() for particle in particles[ip]])
-                    norm_splits = sum(prod(weights1) for weights1 in zip(*sum_weights1))
-                    norm_total = prod(sum(weights1) for weights1 in sum_weights1)
-                    counts = [count3(*p, **kw)['weight'] for p in zip(*particles)]
+                            particle_iters.append(itertools.repeat(particle, nsplit))
+                    counts, norm = [], 0.
+                    for p in zip(*particle_iters):
+                        counts.append(count3(*p, **kw)['weight'])
+                        norm += compute_norm3(*p, wattrs=wattrs)
                     counts = types.sum(counts)
-                    return counts.clone(value=norm_total / norm_splits * counts.value())
-                return count3(*particles, **kw)['weight']
+                else:
+                    counts = count3(*particles, **kw)['weight']
+                    norm = compute_norm3(*particles, wattrs=wattrs)
+                return counts.clone(value=norm_ref / norm * counts.value())
 
+            norm_ref = compute_norm3(*all_particles, wattrs=wattrs)
             counts = []
-            resol_limits = list(zip(zip(limits[:-1], limits[1:]), resols))
+            resol_limits = list(zip(zip(limits[:-1], limits[1:]), list_edges, resols))
 
-            for (resol_limit12, resol12), (resol_limit13, resol13) in itertools.product(resol_limits, repeat=2):
+            for (resol_limit12, edges12, resol12), (resol_limit13, edges13, resol13) in itertools.product(resol_limits, repeat=2):
+                battrs12 = BinAttrs(s=edges12, pole=(ells12, 'firstpoint'))
+                battrs13 = BinAttrs(s=edges13, pole=(ells13, 'firstpoint'))
                 sattrs12 = SelectionAttrs(s=resol_limit12)
                 sattrs13 = SelectionAttrs(s=resol_limit13)
                 all_particles_resol = list(all_particles)
@@ -520,28 +534,68 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
                     all_particles_resol[2] = _digitize_cartesian(all_particles_resol[2], wattrs=wattrs, cellsize=resol13, sharding_mesh=sharding_mesh)
                     digitized.add(2)
 
-                if nsplits > 1 and len(all_particles_resol) - len(digitized) > 1:
-                    for ip, particles in enumerate(all_particles_resol):
-                        if ip not in digitized:
-                            masks = split_particles([particles] + [None] * (nsplits - 1), seed=(84, 'index'), return_masks=True)[:max_nsplits]
-                            weights = wattrs(particles)
-                            all_particles_resol[ip] = [particles.clone(weights=weights * mask) for mask in masks]
+                if nsplits > 1:
+ 
+                    def _get_uniform(size, seed=(84, 'index')):
+                        return create_sharded_random(jax.random.uniform, _process_seed(seed), size, out_specs=P(sharding_mesh.axis_names,))
 
-                counts.append(count3split(*all_particles_resol, sattrs12=sattrs12, sattrs13=sattrs13))
+                    def make_particle_splits(particles, x, nsplits, max_nsplits):
+                        weights = wattrs(particles)
+                        def gen():
+                            for isplit in range(max_nsplits):
+                                mask = ((x >= isplit / nsplits) & (x < (isplit + 1) / nsplits))
+                                #yield particles.clone(weights=weights * mask)
+                                p = particles.clone(weights=weights * mask)
+                                yield _remove_phantom_particles(p, sharding_mesh=sharding_mesh)
+
+                        gen.nsplits = max_nsplits
+                        return gen
+                    
+                    if len(all_particles_resol) - len(digitized) > 1:
+                        for ip, particles in enumerate(all_particles_resol):
+                            if ip not in digitized:
+                                x = _get_uniform(particles.size)
+                                all_particles_resol[ip] = make_particle_splits(particles, x, nsplits=nsplits, max_nsplits=max_nsplits)
+                    elif max_nsplits < nsplits:
+                        for ip, particles in enumerate(all_particles_resol):
+                            if ip not in digitized:
+                                weights = wattrs(particles)
+                                x = _get_uniform(len(weights))
+                                mask = x < max_nsplits * 1. / nsplits
+                                print('LOOOL')
+                                all_particles_resol[ip] = _remove_phantom_particles(particles.clone(weights=weights * mask), sharding_mesh=sharding_mesh)
+
+                counts.append(count3split(*all_particles_resol, battrs12=battrs12, battrs13=battrs13, sattrs12=sattrs12, sattrs13=sattrs13, norm_ref=norm_ref))
                 if jax.process_index() == 0:
                     logger.info(f'Computed RRR counts within {resol_limit12} x {resol_limit13} in {time.time() - t0:.1f} s')
-                exit()
 
             def sum_counts(leaves):
-                return leaves[0].clone(counts=sum(leaf.values('counts') for leaf in leaves), norm=leaves[0].values('norm'))
+                pole = count3pole.clone(meta=leaves[0].meta)
+                counts = np.zeros_like(pole.values('counts'))
+                # leaves have been computed with different bin slices, fix that here
+                for leaf in leaves:
+                    indices = []
+                    for edges_, self_edges_ in zip(pole.edges().values(), leaf.edges().values()):
+                        width = np.abs(edges_[..., 1] - edges_[..., 0])
+                        tol = 1e-5 * width
+                        mask = ((self_edges_[None, :, 0] >= edges_[:, None, 0] - tol[:, None]) &
+                                (self_edges_[None, :, 1] <= edges_[:, None, 1] + tol[:, None]))
+                        assert np.all(mask.sum(axis=0) == 1)
+                        index, index_self = np.nonzero(mask)
+                        index = index[np.argsort(index_self)]
+                        assert np.all(edges_[index] == self_edges_)
+                        indices.append(index)
+                    counts[np.ix_(*indices)] += leaf.values('counts')
+                return pole.clone(counts=counts)
 
             counts = types.tree_map(sum_counts, counts, level=None, is_leaf=lambda *args: False)
             counts = counts.to_basis('sugiyama', ells=ells)
+            battrs12 = battrs13 = BinAttrs(s=np.append(edges[:, 0], edges[-1, 1]))
             RRR0 = count3_analytic(mattrs=1., battrs12=battrs12, battrs13=battrs13)
 
             # Divide by volume factor and normalization
             def renormalize(pole):
-                return pole.clone(counts=pole.values('counts'), norm=np.mean(norm) * RRR0.get((0, 0, 0)).value())
+                return pole.clone(counts=pole.values('counts'), norm=np.mean(norm) * RRR0.value())
 
             counts = counts.map(renormalize)
             correlation = interpolate_window_function(counts, coords=coords, order=3)

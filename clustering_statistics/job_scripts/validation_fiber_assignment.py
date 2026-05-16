@@ -76,7 +76,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             window_mesh2_spectrum = {'cut': True if 'full_shape' in analysis else None}
             mesh3_spectrum = {'auw': True if 'altmtl' in version and onthefly is None and 'full_shape' in analysis else None}
             window_mesh3_spectrum = {'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch}
-            mode = 'smu'
+            mode = 'theta'
             if mode == 'smu':
                 particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))}
                 particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
@@ -129,30 +129,34 @@ if __name__ == '__main__':
     imocks = np.arange(25)
     #imocks = np.arange(5, 25)
     #imocks = np.arange(5, 9)
-    #imocks = np.arange(1)
-    imocks = [0]
+    imocks = np.arange(9)
+    #imocks = np.arange(3)
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    #tracers = ['LRG', 'ELG', 'QSO']
+    tracers = ['LRG', 'ELG', 'QSO'][1:2]
     #tracers = ['ELG', 'LRG']
     #tracers = ['ELG']
 
     # run BGS
-    version = 'abacus-2ndgen-dr2-altmtl'
-    tracers = ['BGS']
+    #version = 'abacus-2ndgen-dr2-altmtl'
+    #tracers = ['BGS']
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
+    #stats = ['particle2_correlation', 'close_pair_correction']
+    #stats = ['particle2_correlation']
+    stats = ['mesh2_spectrum', 'close_pair_correction'][:1]
     #stats = ['particle3_correlation']
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
-    project = f'{analysis}/fiber_assignment_systematics'
-    weight = 'default-FKP'
-    #weight = 'default'
+    project = f'{analysis}/fiber_assignment_systematics_tests'
+    #weight = 'default-FKP-noimsys'
+    weight = 'default-noimsys'
+    weight = 'default'
     regions = ['NGC', 'SGC']
     max_mocks_per_batch = 5
 
