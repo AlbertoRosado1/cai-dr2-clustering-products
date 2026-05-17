@@ -31,7 +31,7 @@ kwargs = {}
 # environ = Environment('nersc-cosmodesi')
 environ = Environment('nersc-cosmodesi', command='export PYTHONPATH=$HOME/LSScode/dr2-clustering-analysis/:$PYTHONPATH')
 tm = TaskManager(queue=queue, environ=environ)
-tm = tm.clone(scheduler=dict(max_workers=20), provider=dict(provider='nersc', time=reservation_time, mpiprocs_per_worker=4, output=output, error=error, 
+tm = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time=reservation_time, mpiprocs_per_worker=4, output=output, error=error, 
                                                             stop_after=1, constraint='gpu', kwargs={'reservation': reservation_name}))
 tm80 = tm.clone(provider=dict(provider='nersc', time=reservation_time, mpiprocs_per_worker=4, output=output, error=error, 
                               stop_after=1, constraint='gpu&hbm80g', kwargs={'reservation': reservation_name}))
@@ -107,7 +107,7 @@ if __name__ == '__main__':
     
     # to run job
     mode = 'slurm'
-    imocks2run = np.arange(1000)
+    imocks2run = np.arange(1500)
     if version == 'glam-uchuu-v2-altmtl':
         imocks2run = np.loadtxt('../../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt',dtype=int)
     stats_dir  = tools.base_stats_dir
@@ -120,7 +120,7 @@ if __name__ == '__main__':
     weight   = 'default-FKP'
     regions  = ['NGC','SGC']
     tracers = ['BGS_BRIGHT-21.35']
-    max_mocks_per_batch_qso = max_mocks_per_batch_others = 50
+    max_mocks_per_batch_qso = max_mocks_per_batch_others = 49
     postregions = ['GCcomb']
 
     onthefly = None
