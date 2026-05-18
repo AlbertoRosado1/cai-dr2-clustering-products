@@ -23,8 +23,8 @@ from clustering_statistics import tools
 setup_logging()
 
 # to run job
-#mode = 'interactive'
-mode = 'slurm'
+mode = 'interactive'
+#mode = 'slurm'
 
 if mode == 'slurm':
     queue = Queue('window_function2')
@@ -32,7 +32,7 @@ if mode == 'slurm':
     
     output, error = 'slurm_outputs/abacus_mocks/slurm-%j.out', 'slurm_outputs/abacus_mocks/slurm-%j.err'
     kwargs = {}
-    environ = Environment('nersc-cosmodesi', command=['module unload desi-clustering cucount'])
+    environ = Environment('nersc-cosmodesi', command=['module unload desi-clustering cucount jaxpower'])
     tm = TaskManager(queue=queue, environ=environ)
     tm = tm.clone(scheduler=dict(max_workers=20), provider=dict(provider='nersc', time='03:00:00',
                                 mpiprocs_per_worker=4, output=output, error=error, constraint='gpu'))
@@ -80,7 +80,8 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))}
             particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
             method = 'smooth_particle'
-            window_mesh3_spectrum = {'method': method, 'split_randoms': (50, 5 if 'ELG' in tracer else 10)}
+            window_mesh2_spectrum = {'method': method, 'split_randoms': (20, 2 if 'ELG' in tracer else 4)}
+            window_mesh3_spectrum = {'method': method, 'split_randoms': (20, 2 if 'ELG' in tracer else 4), 'computed_batches': None} #[None]}
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            mesh3_spectrum=mesh3_spectrum, window_mesh3_spectrum=window_mesh3_spectrum,
@@ -90,7 +91,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             
             for itracer in options['catalog']:
                 #options['catalog'][itracer]['nran'] = 1
-                options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
+                options['catalog'][itracer]['zranges'] = zranges  # override fiducial zranges 
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
                     options['catalog'][itracer]['complete'] = {'downsample_nobj': 'downsample' in onthefly, 'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
@@ -128,7 +129,7 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['LRG', 'ELG', 'QSO']
+    tracers = ['LRG', 'ELG', 'QSO'][1:2]
     #tracers = ['LRG', 'QSO']
     #tracers = ['LRG']
 
@@ -139,6 +140,7 @@ if __name__ == '__main__':
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
+    #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][1:]
     stats = ['mesh3_spectrum', 'window_mesh3_spectrum']
     #stats = ['particle3_correlation']
     postprocess = ['combine_regions'][:0]
@@ -163,7 +165,7 @@ if __name__ == '__main__':
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
-            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[1:]
        
         def get_run_stats():
             if mode == 'interactive':

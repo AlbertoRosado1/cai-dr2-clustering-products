@@ -291,7 +291,7 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
     spectrum : WindowMatrix or dict of WindowMatrix
         The computed 3-point spectrum window.
     """
-    from jaxpower import create_sharding_mesh, BinMesh3SpectrumPoles, compute_smooth3_spectrum_window, MeshAttrs
+    from jaxpower import create_sharding_mesh, BinMesh3SpectrumPoles, compute_smooth3_spectrum_window, get_smooth3_window_bin_attrs, MeshAttrs
 
     # Extract mesh attributes from spectrum
     mattrs = {name: spectrum.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']}
@@ -316,17 +316,43 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
         all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
         all_randoms = [particles['randoms'] for particles in all_particles]
         mattrs = all_randoms[0].attrs
-    
+        # Map particle indices to catalog indices (cycle if fewer catalogs than 3 fields)
+        fields = list(range(len(all_randoms)))
+        fields += [fields[-1]] * (3 - len(fields))
+        
         # Use object IDs for process-invariant random splitting
         seed = [(42, randoms.extra['IDS']) for randoms in all_randoms]
-        zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, return_fraction=True, **kw_zeff)
+        zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, fields=fields, return_fraction=True, **kw_zeff)
 
-        correlation = compute_smooth3_spectrum_window_correlation(*all_randoms, spectrum=spectrum, zeff=kw_zeff, ibatch=ibatch,
-                                                                  computed_batches=computed_batches, buffer_size=buffer_size, method=method, split_randoms=split_randoms)
+        kw, ellsin = get_smooth3_window_bin_attrs(ells, ellsin=2, fields=fields, return_ellsin=True)
+        ellsw = kw['ells']
+        if 'mesh' in method:
+            # Filter to low multipoles only (reduce computational cost)
+            ellsw = [ell for ell in ellsw if all(ell <= 2 for ell in ell)]
+            # For now, keep only (0, 0, 0) multipole
+            ellsw = ellsw[:1]
+        # If batching, join with previously computed batches
+        if computed_batches:
+            correlation = types.join(computed_batches)
+            # Reorder to match original ells sequence
+            correlation = types.join([correlation.get(ells=[ell]) for ell in ellsw])
+        else:
+            # If batching, select only subset of multipoles for this batch
+            if ibatch is not None:
+                start, stop = ibatch[0] * len(ellsw) // ibatch[1], (ibatch[0] + 1) * len(ellsw) // ibatch[1]
+                ellsw = ellsw[start:stop]
+            correlation = compute_smooth3_spectrum_window_correlation(*all_randoms, spectrum=spectrum, zeff=kw_zeff,
+                                                                      buffer_size=buffer_size, method=method, ells=ellsw, split_randoms=split_randoms, fields=fields)
+
+        #def zero(pole, label):
+        #    if label['ells'] in [(1, 1, 0), (1, 1, 2), (1, 3, 2)]:
+        #        mask = (pole.coords('s1') > 20.)[:, None] & (pole.coords('s2') > 20.)
+        #        return pole.clone(value=mask * pole.value())
+        #    return pole
+        #correlation = correlation.map(zero, input_label=True)
 
         # Create spectrum binning
         bin = BinMesh3SpectrumPoles(mattrs, edges=edges, ells=ells, basis=basis, mask_edges='')
-    
         # Create finer input correlation binning
         stop = bin.edges1d[0].max()
         step = np.diff(bin.edges1d[0], axis=-1).min()
@@ -344,7 +370,7 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
         logger.info('Building window matrix.')
 
     # Convert correlation window into spectrum window
-    window = compute_smooth3_spectrum_window(correlation, edgesin=edgesin, ellsin=correlation.attrs['ellsin'], bin=bin,
+    window = compute_smooth3_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin,
                                              flags=('fftlog',), batch_size=4)
 
     # Update observable metadata
@@ -359,7 +385,7 @@ def compute_window_mesh3_spectrum(*get_data_randoms, spectrum, zeff: dict=None, 
     return results
 
 
-def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None, zeff: dict=None, ibatch: tuple=None, computed_batches: list=None, buffer_size: int=0, method: str='smooth_mesh', split_randoms: int=None):
+def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None, zeff: dict=None, ells: int | list=None, buffer_size: int=0, method: str='smooth_mesh', split_randoms: int=None, fields: list=None):
     r"""
     Compute the 3-point window correlation with :mod:`jaxpower` or :mod:`cucount`.
 
@@ -373,12 +399,8 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
     zeff : dict, optional
         Optional arguments for computing effective redshift.
         Default is ``{'cellsize': 10.}`` (density computed with ``cellsize = 10.``)
-    ibatch : tuple, optional
-        To split the window function multipoles to compute in batches, provide (0, nbatches) for the first batch,
-        (1, nbatches) for the second, etc; up to (nbatches - 1, nbatches).
-        ``None`` to compute the final window matrix.
-    computed_batches : list, optional
-        The window function multipoles that have been computed thus far.
+    ells : list, optional
+        The window function multipoles to compute.
     method : string, optional
         ``'smooth_mesh'`` to use the "smooth" method with 2D window correlation computed with FFTs on the mesh,
         ``'smooth_particle'`` for particle counts.
@@ -397,8 +419,6 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
                         get_smooth3_window_bin_attrs, interpolate_window_function, split_particles)
 
     assert method in ['smooth_particle', 'smooth_mesh']
-    # Extract multipole orders from measured spectrum
-    ells = spectrum.ells
     # Extract mesh attributes from spectrum (boxsize, gridsize, etc.)
     mattrs = {name: spectrum.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']}
     los = spectrum.attrs['los']
@@ -421,22 +441,27 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
 
         # Extract first multipole pole to get coordinate information
         pole = next(iter(spectrum))
-        ells, edges, basis = spectrum.ells, pole.edges('k'), pole.basis
+        edges, basis = pole.edges('k'), pole.basis
         # Gather normalization from all multipoles
-        norm = jnp.concatenate([spectrum.get(ell).values('norm') for ell in spectrum.ells])
+        norm = jnp.concatenate([pole.values('norm') for pole in spectrum])
 
         # Map particle indices to catalog indices (cycle if fewer catalogs than 3 fields)
-        fields = list(range(len(all_randoms)))
-        fields += [fields[-1]] * (3 - len(all_randoms))
+        if fields is None:
+            fields = list(range(len(all_randoms)))
+        fields = list(fields)
+        fields += [fields[-1]] * (3 - len(fields))
         # Use object IDs for process-invariant random splitting
         seed = [(42, randoms.extra['IDS']) for randoms in all_randoms]
         # Compute effective redshift for window computation (third-order expansion)
         if kw_zeff is not None:
-            zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, return_fraction=True, **kw_zeff)
+            zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=3, split=seed, fields=fields, return_fraction=True, **kw_zeff)
 
         correlations = []
         # Get window basis attributes (e.g., which multipoles to compute)
-        kw, ellsin = get_smooth3_window_bin_attrs(ells, ellsin=2, fields=fields, return_ellsin=True)
+        kw = get_smooth3_window_bin_attrs(spectrum.ells, ellsin=2, fields=fields)
+        if ells is not None:
+            kw['ells'] = ells
+        ells = kw['ells']
 
         # Create logarithmic s-grid for window interpolation (and FFTlog)
         coords = jnp.logspace(-3, 5, 1024)
@@ -463,12 +488,11 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
                 all_particles.append(convert_particles(randoms))
             del all_randoms
 
-            ells = kw['ells']
             ells_slepian = convert_ells(ells, 'sugiyama', 'slepian')
             ells12, ells13 = [tuple(np.unique([ell[idim] for ell in ells_slepian])) for idim in range(2)]
 
             sepmax = jnp.sqrt(jnp.sum(mattrs.boxsize**2))
-            limits = [0., 200., 500.]
+            limits = [mattrs.cellsize.min(), 200., 500.]  # drop bin at 0., which is noisy
             limits = [lim for lim in limits if lim < sepmax] + [sepmax]
             resols = [None, 40., 100.]
             steps = [step * mattrs.cellsize.min() for step in [1., 4., 10.]]
@@ -562,7 +586,6 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
                                 weights = wattrs(particles)
                                 x = _get_uniform(len(weights))
                                 mask = x < max_nsplits * 1. / nsplits
-                                print('LOOOL')
                                 all_particles_resol[ip] = _remove_phantom_particles(particles.clone(weights=weights * mask), sharding_mesh=sharding_mesh)
 
                 counts.append(count3split(*all_particles_resol, battrs12=battrs12, battrs13=battrs13, sattrs12=sattrs12, sattrs13=sattrs13, norm_ref=norm_ref))
@@ -598,13 +621,19 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
                 return pole.clone(counts=pole.values('counts'), norm=np.mean(norm) * RRR0.value())
 
             counts = counts.map(renormalize)
-            correlation = interpolate_window_function(counts, coords=coords, order=3)
+
+            def pad_value(value, label=None):
+                value1 = value
+                value = jnp.pad(value, ((0, 1),) * value.ndim, mode='constant', constant_values=0.)
+                if label['ells'] == (0, 0, 0):
+                    value = jnp.pad(value, ((1, 0),) * value.ndim, mode='edge')
+                else:
+                    value = jnp.pad(value, ((1, 0),) * value.ndim, mode='constant', constant_values=0.)
+                return value
+
+            correlation = interpolate_window_function(counts, coords=coords, order=3, pad_value=pad_value)
 
         elif method == 'smooth_mesh':
-            # Filter to low multipoles only (reduce computational cost)
-            kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]
-            # For now, keep only (0, 0, 0) multipole
-            kw['ells'] = kw['ells'][:1]
             # JIT-compile 3-point correlation computation
             jitted_compute_mesh3_correlation = jax.jit(compute_mesh3_correlation, static_argnames=['los'], donate_argnums=[0])
 
@@ -612,12 +641,6 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
             list_scales = [1, 4]
             # Get binning edges for each scale
             list_edges = _get_window_edges(mattrs, scales=list_scales)
-
-            ells = kw['ells']
-            # If batching, select only subset of multipoles for this batch
-            if ibatch is not None:
-                start, stop = ibatch[0] * len(ells) // ibatch[1], (ibatch[0] + 1) * len(ells) // ibatch[1]
-                kw['ells'] = ells[start:stop]
 
             # Compute window using multigrid approach if first batch
             if ells and not bool(computed_batches):
@@ -673,19 +696,13 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
                 # Combine correlations from different scales using weights
                 correlation = correlations[0].sum(correlations, weights=weights)
 
-            # If batching, join with previously computed batches
-            if computed_batches:
-                correlation = types.join(computed_batches)
-                # Reorder to match original ells sequence
-                correlation = types.join([correlation.get(ells=[ell]) for ell in ells])
-
         # Wait for window computation to complete
         jax.block_until_ready(correlation)
         if jax.process_index() == 0:
             logger.info('Window functions computed.')
 
         if kw_zeff is not None:
-            correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff, ellsin=ellsin)
+            correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)
 
     return correlation
 

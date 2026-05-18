@@ -395,23 +395,29 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     spectrum_fn = get_stats_fn(kind=spectrum_stat, catalog=fn_catalog_options, **(options[spectrum_stat] | dict(auw=False, cut=False)))
                 spectrum = types.read(spectrum_fn)
 
-                def get_extra(ibatch, nbatch):
+                def get_extra(ibatch):
                     # Generate batch identifier string for window correlation functions
+                    if ibatch is None:
+                        return ''
+                    ibatch, nbatch = ibatch
                     return f'batch-{ibatch:d}-{nbatch:d}'
 
                 # Check if computing window in batches (for memory efficiency)
                 ibatch = window_options.get('ibatch', None)
-                extra = get_extra(*ibatch) if ibatch is not None else None
+                extra = get_extra(ibatch)
 
                 # Load previously computed batch windows if continuing
-                nbatch = window_options.get('computed_batches', False)
-                if nbatch:
+                batches = window_options.get('computed_batches', [])
+                if batches:
+                    if not isinstance(batches, (tuple, list)):
+                        batches = [(ibatch, batches) for ibatch in np.arange(batches)]
                     # Load window multipole batches computed in previous runs
-                    fns = [get_stats_fn(kind=f'{stat.replace("_spectrum", "")}_correlation_raw', catalog=fn_catalog_options, **(fn_window_options | dict(extra=get_extra(ibatch, nbatch)))) for ibatch in range(nbatch)]
+                    method = window_options.get('method', 'smooth_mesh')
+                    npt = {'window_mesh2_spectrum': 2, 'window_mesh3_spectrum': 3}[stat]
+                    fns = [get_stats_fn(kind=f'window_{method}{npt:d}_correlation_raw', catalog=fn_catalog_options, **(fn_window_options | dict(battrs={'s': None, 'pole': None}, extra=get_extra(ibatch)))) for ibatch in batches]
                     window_options['computed_batches'] = [types.read(fn) for fn in fns]
                 # Remove basis from options (will be extracted from spectrum)
                 window_options.pop('basis', None)
-
                 # Compute window function
                 window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, **window_options)
 
@@ -438,34 +444,16 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         funcs = {"window_mesh2_spectrum_fm": compute_window_mesh2_spectrum_fm}
         for stat, func in funcs.items():
             if stat in stats:
-                # if autocorr set tracers = [tracer, tracer], else keep order for cross-corr
-                if len(tracers) == 1:
-                    tracers = [tracers[0], tracers[0]]
-
+                # len(tracers) == 1 if autocorr, else 2
                 window_options = dict(options[stat])
                 selection_weights = window_options.pop("selection_weights", None)
 
                 def get_data(tracer):
                     # Prepare randoms for forward model window computation
-                    czrandoms = Catalog.concatenate(zrandoms[tracer])
-                    toret = {"data": zdata[tracer], "randoms": czrandoms}
+                    toret = {"data": data[tracer], "randoms": Catalog.concatenate(randoms[tracer])}
                     if selection_weights:
                         toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
                     return toret
-
-                def _check_fn(fn, tracers, name=""):
-                    # Convert single filename to dictionary for tracer indexing
-                    if len(tracers) == 1:
-                        fn = {(tracer, tracer): fn for tracer in tracers}
-                    else:
-                        raise ValueError(f"provide a dictionary of (tracer1, tracer2): {name} for tracer1, tracer2 in {tracers}")
-                    return fn
-
-                def _read_tracer(fns, tracers2):
-                    # Read spectrum/window for specific tracer pair (handle ordering)
-                    if tracers2 not in fns:
-                        tracers2 = tracers2[::-1]
-                    return types.read(fns[tracers2])
 
                 # Get fiducial theory for computing forward model derivatives
                 theory_stat = stat.replace("window_", "theory_").replace("_fm", "")
@@ -486,7 +474,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 kw = options[kind_stat] | {"auw": False, "cut": False}
                                 fn = get_stats_fn(
                                     kind=kind_stat,
-                                    catalog=fn_catalog_options[tracers[0]] if tracers[1] == tracers[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                                    catalog={tracer: fn_catalog_options[tracer] for tracer in tracers},
                                     **kw | {"region": _region, "zrange": _zrange},
                                 )
                             products_fn[(_region, _zrange)][name] = fn
@@ -503,9 +491,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     )
                     theory_fn = get_stats_fn(
                         kind=theory_stat,
-                        catalog=fn_catalog_options[tracers[0]]
-                        if tracers[1] == tracers[0]
-                        else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                        catalog={tracer: fn_catalog_options[tracer] for tracer in tracers},
                     )
                     tools.write_stats(theory_fn, theory)
 

@@ -129,7 +129,7 @@ if __name__ == '__main__':
     imocks = np.arange(25)
     #imocks = np.arange(5, 25)
     #imocks = np.arange(5, 9)
-    imocks = np.arange(9)
+    imocks = np.arange(3, 9)
     #imocks = np.arange(3)
     stats_dir = tools.base_stats_dir
 
@@ -148,14 +148,14 @@ if __name__ == '__main__':
     #stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
-    #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'close_pair_correction'][:1]
+    stats = ['particle2_correlation']
+    #stats = ['mesh2_spectrum', 'close_pair_correction'][:1]
     #stats = ['particle3_correlation']
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics_tests'
     #weight = 'default-FKP-noimsys'
-    weight = 'default-noimsys'
+    #weight = 'default-noimsys'
     weight = 'default'
     regions = ['NGC', 'SGC']
     max_mocks_per_batch = 5
@@ -166,7 +166,7 @@ if __name__ == '__main__':
     #onthefly = 'complete-downsample'
     #onthefly = 'complete-samenz'
     #onthefly = 'complete-fixnz'
-    onthefly = 'complete'
+    onthefly = 'complete-nocomp'
     
     for tracer in tracers:
         tracer = tools.get_full_tracer(tracer, version=version)
