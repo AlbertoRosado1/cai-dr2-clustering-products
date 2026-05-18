@@ -52,9 +52,17 @@ def run_fit_from_options(actions,
         elif action == 'sample':
             sampler_options = dict(options['sampler'])
             cls = tools.get_sampler_cls(sampler_options.pop('sampler', 'emcee'))
+            resume = sampler_options.pop('resume', False)
             save_fn = [get_fits_fn(kind='chain', **options, ichain=ichain)\
                        for ichain in range(sampler_options['nchains'])]
-            sampler = cls(likelihood, **sampler_options['init'], save_fn=save_fn)
+            sampler_kwargs = dict(sampler_options['init'], save_fn=save_fn)
+            if resume:
+                missing = [fn for fn in save_fn if not Path(fn).exists()]
+                if missing:
+                    missing_str = ', '.join(str(fn) for fn in missing)
+                    raise FileNotFoundError(f'cannot resume sampling; missing chain file(s): {missing_str}')
+                sampler_kwargs['chains'] = save_fn
+            sampler = cls(likelihood, **sampler_kwargs)
             sampler.run(**sampler_options['run'])
         elif action == 'profile':
             profiler_options = dict(options['profiler'])
@@ -100,6 +108,10 @@ if __name__ == '__main__':
         '--covariance', type=str, default='holi-v1-altmtl',
         help='Covariance mock set (default: holi-v1-altmtl).',
     )
+    parser.add_argument(
+        '--project', type=str, default='',
+        help='Optional measurement project subdirectory under stats_dir.',
+    )
     fits_dir = Path(os.getenv('SCRATCH', '.')) / 'fits'
     parser.add_argument(
         '--fits_dir', type=str, default=fits_dir,
@@ -116,7 +128,7 @@ if __name__ == '__main__':
     options = {'likelihoods': []}
     for tracer in args.tracers:
         likelihood_options = generate_likelihood_options_helper(stats=args.stats, version=args.data, tracer=tracer, region=args.region,
-                                                                covariance=args.covariance)
+                                                                covariance=args.covariance, project=args.project)
         options['likelihoods'].append(likelihood_options)
     run_fit_from_options(args.actions,
                          get_fits_fn=functools.partial(tools.get_fits_fn, fits_dir=args.fits_dir),

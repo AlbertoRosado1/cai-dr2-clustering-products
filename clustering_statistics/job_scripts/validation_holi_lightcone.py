@@ -61,11 +61,6 @@ def run_stats(tracer='LRG', zranges=None, version='holi-v4.80', weight='default'
                     for tracer in options['catalog']:
                         options['catalog'][tracer]['nran'] = min(options['catalog'][tracer]['nran'], 4)
 
-                def read_clustering_catalog_test(**kwargs):
-                    catalog = tools.read_clustering_catalog(**kwargs)
-                    mask = (catalog['Z'] > 0.85) & (catalog['Z'] < 0.95)
-                    return catalog[~mask]
-
                 compute_stats_from_options(stat, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), get_catalog_fn=get_catalog_fn, cache=cache, **options)
     #jax.distributed.shutdown()
 
@@ -76,7 +71,7 @@ def postprocess_stats(tracer='LRG', version='holi-v4.80', weight='default', imoc
     options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=1), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'mesh3_spectrum', 'window_mesh3_spectrum'][:3]})
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir)
     postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **options)
-                
+
 
 def plot_density(imock=[0], tracer='LRG', zranges=None, version='holi-v4.80', weight='default', plots_dir=plots_dir, nside=64, get_catalog_fn=tools.get_catalog_fn):
     from clustering_statistics.density_tools import plot_density_projections
@@ -243,7 +238,7 @@ if __name__ == '__main__':
         for tracer in tracers:
             version = 'v4.80'
             imocks = list_existing_imocks(50, version=version, tracers=[tracer], maximock=47)
-            
+
             make_merged_random_catalog(imocks=imocks, tracer=tracer, version=version, stats_dir=stats_dir, nran=18, get_catalog_fn=get_holi_catalog_fn)
 
     if 'stats' in todo:
@@ -259,7 +254,7 @@ if __name__ == '__main__':
                 run_stats(tracer, version=version, weight=weight, stats=stats, stats_dir=stats_dir, get_catalog_fn=get_holi_catalog_fn, zranges=zranges, imocks=imocks)
             if postprocess:
                 postprocess_stats(tracer, version=version, weight=weight, imocks=imocks, stats_dir=stats_dir, postprocess=postprocess)
-    
+
     if 'density' in todo:
         version = 'v4.80'
         #version = 'v4.00'

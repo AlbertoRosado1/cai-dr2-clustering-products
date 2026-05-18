@@ -3,10 +3,10 @@ Script to create and spawn desipipe tasks to compute clustering measurements on 
 To create and spawn the tasks on NERSC, use the following commands:
 ```bash
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
-python desipipe_abacus_mocks.py  # create the list of tasks
-desipipe tasks -q abacus_mocks  # check the list of tasks
+python desipipe_box_abacus_mocks.py     # create the list of tasks
+desipipe tasks -q abacus_mocks          # check the list of tasks
 desipipe spawn -q abacus_mocks --spawn  # spawn the jobs
-desipipe queues -q abacus_mocks  # check the queue
+desipipe queues -q abacus_mocks         # check the queue
 ```
 """
 import os
@@ -49,13 +49,13 @@ def run_stats(tracer='LRG', version='abacus-2ndgen', imocks=[0], stats_dir=Path(
     setup_logging()
 
     cache = {}
-    zsnaps = box_tools.propose_box_fiducial('zsnaps', tracer, version=version)
+    zsnaps = box_tools.propose_box_fiducial('zsnaps', tracer, version=version)[:1]
     get_box_stats_fn = functools.partial(box_tools.get_box_stats_fn, stats_dir=stats_dir)
     for imock in imocks:
         for zsnap in zsnaps:
             for los in 'xyz'[-1:]:
                 options = dict(catalog=dict(version=version, tracer=tracer, zsnap=zsnap, los=los, imock=imock))
-                options['mesh3_spectrum'] = dict(basis='sugiyama', ells=[(0, 0, 0), (0, 2, 2), (1, 1, 0), (1, 1, 2), (2, 2, 0), (2, 2, 2)], mask_edges=['edge1[:, 1] <= nyq / 2.', 'edge2[:, 1] <= nyq / 2.'], buffer_size=31, mattrs={'meshsize': 400})
+                #options['mesh3_spectrum'] = dict(basis='sugiyama', ells=[(0, 0, 0), (0, 2, 2), (1, 1, 0), (1, 1, 2), (2, 2, 0), (2, 2, 2)], mask_edges=['edge1[:, 1] <= nyq / 2.', 'edge2[:, 1] <= nyq / 2.'], buffer_size=31, mattrs={'meshsize': 400})
                 options = fill_box_fiducial_options(options)
                 compute_box_stats_from_options(stats, get_box_stats_fn=get_box_stats_fn, cache=cache, **options)
 
@@ -65,17 +65,19 @@ if __name__ == '__main__':
     mode = 'interactive'
     #mode = 'slurm'
     stats, postprocess = [], []
-    #stats = ['mesh2_spectrum']
-    stats = ['mesh3_spectrum']
+    stats = ['mesh2_spectrum']
+    # stats = ['mesh3_spectrum']
     #stats = ['window_mesh2_spectrum']
     #stats = ['window_mesh3_spectrum']
     #postprocess = ['combine_regions']
-    imocks = np.arange(9)
+    imocks = 1 + np.arange(1)
 
-    stats_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe/box/')
-    version = 'abacus-2ndgen'
-
-    for tracer in ['BGS_BRIGHT-21.35', 'LRG', 'ELG', 'QSO'][1:]:
+    # stats_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe/box/')
+    stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
+    # version = 'abacus-2ndgen'
+    version = 'ezmock-dr1'
+    tracers = ['ELG']
+    for tracer in tracers:
 
         _run_stats = run_stats if mode == 'interactive' else tm.python_app(run_stats)
 

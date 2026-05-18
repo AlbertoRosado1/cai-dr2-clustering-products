@@ -1,7 +1,7 @@
 """
 salloc -N 1 -C gpu -t 02:00:00 --gpus 4 --qos interactive --account desi_g
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
-srun python run_abacushf_cubic.py
+srun python run_abacushf_box.py
 """
 import os
 import sys
@@ -25,7 +25,7 @@ from clustering_statistics import tools
 from mockfactory import setup_logging
 
 
-logger = logging.getLogger('run_abacushf_cubic')
+logger = logging.getLogger('run_abacushf_box')
 
 
 @dataclass(frozen=True)

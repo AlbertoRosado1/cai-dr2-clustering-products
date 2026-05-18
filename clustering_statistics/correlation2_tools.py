@@ -1,328 +1,620 @@
+"""
+Configuration-space 2-point clustering measurements.
+
+Main functions
+--------------
+* `compute_particle2_correlation`: Measure the cutsky 2PCF from pair counts (includes jackknife utility).
+* `compute_particle2_angular_upweights`: Derive angular upweights for fiber-collision mitigation.
+* `compute_box_particle2_correlation`: Measure the 2PCF in cubic boxes.
+"""
+
 import logging
+import itertools
+from functools import partial
+import warnings
 
 import numpy as np
 import jax
+from jax import numpy as jnp
+from jax.sharding import PartitionSpec as P
 
 import lsstypes as types
 from .tools import _format_bitweights
 
 
-logger = logging.getLogger('correlation2')
+logger = logging.getLogger('particle2_correlation')
 
 
-def compute_angular_upweights(*get_data):
+def compute_particle2_angular_upweights(*get_data):
     """
     Compute angular upweights (AUW) from fibered and parent data catalogs.
 
     Parameters
     ----------
     get_data : callables
-        Functions that return dict of 'fibered_data', 'parent_data' catalogs. Each catalog must contain 'RA', 'DEC', 'INDWEIGHT', and optionally 'BITWEIGHT'.
+        Functions returning dicts with 'fibered_data' and 'parent_data'.
+        Catalogs must contain 'RA', 'DEC', 'INDWEIGHT', optionally 'BITWEIGHT'.
 
     Returns
     -------
     auw : ObservableTree
         Angular upweights as an ObservableTree with 'DD' leaf.
     """
-    from cucount.jax import Particles, BinAttrs, WeightAttrs, count2, setup_logging
+    from cucount.jax import BinAttrs, create_sharding_mesh
     from lsstypes import ObservableLeaf, ObservableTree
 
-    with jax.make_mesh((jax.device_count(),), axis_names=('x',), axis_types=(jax.sharding.AxisType.Auto,)):
-        all_fibered_data, all_parent_data = [], []
+    with create_sharding_mesh():
+        all_particles = prepare_cucount_particles(*get_data, positions_type='rd')
+        all_fibered_particles = [{'data': particles['fibered_data']} for particles in all_particles]
+        all_parent_particles = [{'data': particles['parent_data']} for particles in all_particles]
+        if jax.process_index() == 0:
+            logger.info('All particles on the device')
 
-        def get_rdw(catalog):
-            positions = (catalog['RA'], catalog['DEC'])
-            weights = [catalog['INDWEIGHT']] + _format_bitweights(catalog['BITWEIGHT'] if 'BITWEIGHT' in catalog else None)
-            return positions, weights
-
-        for _get_data in get_data:
-            _data = _get_data()
-            fibered_data = Particles(*get_rdw(_data['fibered_data']), positions_type='rd', exchange=True)
-            parent_data = Particles(*get_rdw(_data['parent_data']), positions_type='rd', exchange=True)
-            all_fibered_data.append(fibered_data)
-            all_parent_data.append(parent_data)
-
-        theta = 10**np.arange(-5, -1 + 0.1, 0.1)  # TODO: update
+        theta = 10**np.arange(-5, -1 + 0.1, 0.1)
         battrs = BinAttrs(theta=theta)
-        bitwise = None
-        if all_fibered_data[0].get('bitwise_weight'):
-            bitwise = dict(weights=all_fibered_data[0].get('bitwise_weight'))
-            if jax.process_index() == 0:
-                logger.info(f'Applying PIP weights {bitwise}.')
-        wattrs = WeightAttrs(bitwise=bitwise)
 
-        def get_counts(*particles):
-            #setup_logging('error')
-            autocorr = len(particles) == 1
-            weight = count2(*(particles * 2 if autocorr else particles), battrs=battrs, wattrs=wattrs)['weight']
-            if autocorr:
-                norm = wattrs(particles[0]).sum()**2 - wattrs(*(particles * 2)).sum()
-            else:
-                norm = wattrs(particles[0]).sum() * wattrs(particles[1]).sum()
-            # No need to remove auto-pairs, as edges[0] > 0
-            return weight / norm
-            #return Count2(counts=weight, norm=norm, theta=battrs.coords('theta'), theta_edges=battrs.edges('theta'), coords=['theta'])
-
-        DDfibered = get_counts(*all_fibered_data)
-        wattrs = WeightAttrs()
-        DDparent = get_counts(*all_parent_data)
+        counts_fibered = _compute_particle2_correlation_close_pair_correction(all_fibered_particles, battrs, auw=None, cut=None, normalize_randoms=False)
+        counts_parent = _compute_particle2_correlation_close_pair_correction(all_parent_particles, battrs, auw=None, cut=None, normalize_randoms=False)
 
     kw = dict(theta=battrs.coords('theta'), theta_edges=battrs.edges('theta'), coords=['theta'])
     auw = {}
-    auw['DD'] = ObservableLeaf(value=np.where(DDfibered == 0., 1., DDparent / DDfibered), **kw)
-    #auw['DR'] = ObservableLeaf(value=np.where(DRfibered == 0., 1., DRparent / DRfibered), **kw)
-    auw = ObservableTree(list(auw.values()), pairs=list(auw.keys()))
-    return auw
+    for combinations in counts_fibered:
+        auw[combinations] = ObservableLeaf(value=np.where(counts_fibered[combinations].value() == 0., 1., counts_parent[combinations].value() / counts_fibered[combinations].value()), **kw)
+        auw[combinations + 'parent'] = counts_parent[combinations]
+        auw[combinations + 'fibered'] = counts_fibered[combinations]
+
+    return ObservableTree(list(auw.values()), pairs=list(auw.keys()))
 
 
-def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs: dict=None, zeff: dict=None):
+def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsampler=None, jackknife=None, split_randoms=False, concatenate=False, wattrs=None):
     """
-    Compute two-point correlation function using :mod:`cucount.jax`.
+    Convert catalogs to :class:`cucount.Particles`.
 
     Parameters
     ----------
     get_data_randoms : callables
-        Functions that return dict of 'data', 'randoms' (optionally 'shifted') catalogs.
-        Each catalog must contain 'POSITION', 'INDWEIGHT', and optionally 'BITWEIGHT' for bitwise weights.
-        Randoms and shifted catalogs can be lists of catalogs (for multiple randoms/shifted).
-    auw : ObservableTree, optional
-        Angular upweights to apply. If None, no angular upweights are applied.
-    cut : bool, optional
-        If provided, apply a theta-cut of (0, 0.05) in degress.
-    battrs : dict, optional
-        Bin attributes for cucount.jax.BinAttrs. If None, default bins are used. See cucount.jax.BinAttrs.
-    zeff : dict, optional
-        Optional arguments for computing effective redshift.
-        Default is ``{'cellsize': 10.}`` (density computed with ``cellsize = 10.``)
+    positions_type : str, optional
+        'pos' (default, uses 'POSITION') or 'rd' (uses 'RA', 'DEC').
+    subsampler : optional
+        Optional object with a ``label(positions)`` method.
+    jackknife : dict, optional
+        Jackknife configuration, e.g. ``{'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42}``.
+        If provided, build a :class:`KMeansSubsampler`.
+    split_randoms : float, tuple
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
+    concatenate : bool
+        If ``True``, return concatenated randoms or shifted catalogs.
+    wattrs : WeightAttrs, optional
+        Weight attributes passed to :class:`KMeansSubsampler`.
 
     Returns
     -------
-    correlation : Count2Correlation
-        Two-point correlation function as a Count2Correlation object.
+    all_particles : list of dict
+    subsampler : optional
     """
-    from cucount.jax import Particles, BinAttrs, WeightAttrs, SelectionAttrs, MeshAttrs, count2, setup_logging
-    from lsstypes import Count2, Count2Correlation
+    import numpy as np
+    from cucount.jax import Particles
+
+    if jackknife is None: jackknife = {}
+    kw_jackknife = dict(jackknife)
+    if kw_jackknife: kw_jackknife = {'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42} | kw_jackknife
+
+    def get_pw(catalog):
+        catalog = catalog.all_to_all()  # loadbalance
+        if positions_type == 'rd':
+            positions = (catalog['RA'], catalog['DEC'])
+        else:
+            positions = catalog['POSITION']
+        weights = [catalog['INDWEIGHT']] + _format_bitweights(catalog['BITWEIGHT'] if 'BITWEIGHT' in catalog else None)
+        return positions, weights
+
+    def _is_list(catalog): return isinstance(catalog, (tuple, list))
+
+    if kw_jackknife and subsampler is None:
+        import cucount
+        from cucount.jax import SplitAttrs, WeightAttrs
+        from cucount.utils import KMeansSubsampler
+        if wattrs is None: wattrs = WeightAttrs()
+
+        jackknife_particles = []
+        for _get_data_randoms in get_data_randoms:
+            data = cucount.numpy.Particles(*get_pw(_get_data_randoms()['data'].gather(mpiroot=None)))
+            jackknife_particles.append(data)
+
+        jackknife_particles = cucount.numpy.Particles.concatenate(jackknife_particles)
+        subsampler = KMeansSubsampler(jackknife_particles, wattrs=wattrs, **kw_jackknife)
+
+    def _concatenate_catalog(catalog, collective=False):
+        if _is_list(catalog):
+            if len(catalog) == 1:
+                catalog = catalog[0]
+            else:
+                if collective:
+                    catalog = catalog[0].cconcatenate(catalog)
+                else:
+                    catalog = catalog[0].concatenate(catalog)
+        return catalog
+
+    def _split_catalog(catalog, split_randoms, data_size):
+        from mpytools.random import MPIRandomState
+        if data_size is None:
+            raise ValueError('split_randoms is in terms of data size, so provide data')
+        catalog = _concatenate_catalog(catalog, collective=True)
+        csize = catalog.csize
+        if isinstance(split_randoms, tuple):
+            split_size, nsplits = split_randoms[0] * data_size, split_randoms[1]
+            frac = (split_size * nsplits) / csize
+            if frac > 1.:
+                warnings.warn(f'catalog of randoms is {1. / frac:.2f} too small to perform {nsplits:d} nsplits with {split_randoms[0]:.2f} the data size')
+            frac = min(frac, 1.)
+        else:
+            split_size = split_randoms * data_size
+            nsplits = max(int(csize / split_size), 1)
+            frac = 1.
+        rng = MPIRandomState(seed=42, size=catalog.size)
+        x = rng.uniform(0., 1.)
+        toret = []
+        for isplit in range(nsplits):
+            mask = (x >= isplit * frac / nsplits) & (x < (isplit + 1) * frac / nsplits)
+            toret.append(catalog[mask])
+        return toret
+
+    def get_all_particles(catalog, as_list=False, data_size=None):
+        if as_list and not _is_list(catalog):
+            catalog = [catalog]
+        if as_list and split_randoms:
+            catalog = _split_catalog(catalog, split_randoms, data_size)
+        if _is_list(catalog):
+            if concatenate:
+                catalog = _concatenate_catalog(catalog)
+            else:
+                return [get_all_particles(c) for c in catalog]
+        positions, weights = get_pw(catalog)
+        splits = None if subsampler is None else subsampler.label(positions).astype('i8')
+        return Particles(positions, weights=weights, splits=splits, positions_type=positions_type, exchange=True)
+
+    all_particles = []
+    for _get_data_randoms in get_data_randoms:
+        catalogs = _get_data_randoms()
+        data_size = catalogs['data'].csize if 'data' in catalogs else None
+        particles = {}
+        for name, catalog in catalogs.items():
+            particles[name] = get_all_particles(catalog, as_list=name in ['randoms', 'shifted'], data_size=data_size)
+        all_particles.append(particles)
+
+    if subsampler is not None:
+        return all_particles, subsampler
+    return all_particles
+
+
+def _guess_wattrs(get_data_randoms, auw=None):
+    """Guess WeightAttrs from input catalogs (callable or Particles)."""
+    from cucount.jax import WeightAttrs
+    bitwise = angular = None
+    if callable(get_data_randoms):
+        catalogs = get_data_randoms()
+        if 'BITWEIGHT' in catalogs['data']:
+            bitwise = dict(weights=_format_bitweights(catalogs['data']['BITWEIGHT']))
+            if jax.process_index() == 0:
+                logger.info(f'Applying PIP weights {bitwise}.')
+    else:  # Particles
+        bitwise = get_data_randoms.get('bitwise_weight')
+
+    if auw is not None:
+        angular = dict(sep=auw.get('DD').coords('theta'), weight=auw.get('DD').value())
+        if jax.process_index() == 0:
+            logger.info(f'Applying AUW {angular}.')
+
+    wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
+    return wattrs
+
+
+def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs: dict=None, zeff: dict=None, jackknife: dict=None, split_randoms: float | tuple=False):
+    """
+    Compute 2-point correlation function using :mod:`cucount.jax`.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions returning dicts with 'data', 'randoms' (optionally 'shifted').
+        Catalogs must contain 'POSITION', 'INDWEIGHT', optionally 'BITWEIGHT'.
+    auw : ObservableTree, optional
+        Angular upweights to apply.
+    cut : bool, optional
+        If provided, apply a theta-cut of (0, 0.05) degrees.
+    battrs : dict, optional
+        Bin attributes for cucount.jax.BinAttrs.
+    zeff : dict, optional
+        Options to estimate the effective redshift, e.g. ``{'cellsize': 10.}``.
+    jackknife : dict, optional
+        Jackknife configuration, e.g. ``{'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42}``.
+    split_randoms : float, tuple
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
+
+    Returns
+    -------
+    correlation : Count2Correlation or Count2JackknifeCorrelation
+    """
+    from cucount.jax import BinAttrs, WeightAttrs, SelectionAttrs, SplitAttrs
+    from cucount.types import count2
+    from lsstypes import Count2Correlation, Count2JackknifeCorrelation
+    from jaxpower import create_sharding_mesh
+    from .spectrum2_tools import prepare_jaxpower_particles, compute_fkp_effective_redshift
 
     if zeff is None: zeff = {'boxpad': 1.1, 'cellsize': 10.}
     kw_zeff = dict(zeff)
 
-    # First: effective redshift
-    from .spectrum2_tools import prepare_jaxpower_particles, compute_fkp_effective_redshift
-    from jaxpower import create_sharding_mesh
+    if jackknife is None: jackknife = {}
+    kw_jackknife = dict(jackknife)
 
     def merge_randoms(catalog):
-        if not isinstance(catalog, (tuple, list)):
-            return catalog
+        if not isinstance(catalog, (tuple, list)): return catalog
         return catalog[0].concatenate(catalog)
 
-    get_randoms = [lambda: {'randoms': merge_randoms(_get_data_randoms()['randoms'])} for _get_data_randoms in get_data_randoms]
+    get_randoms = [lambda f=f: {'randoms': merge_randoms(f()['randoms'])} for f in get_data_randoms]
+
     with create_sharding_mesh(meshsize=kw_zeff.get('meshsize', None)):
         all_particles = prepare_jaxpower_particles(*get_randoms, mattrs=kw_zeff, add_randoms=['IDS'])
         all_randoms = [particles['randoms'] for particles in all_particles]
         seed = [(42, randoms.extra['IDS']) for randoms in all_randoms]
-        zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, split=seed, resampler='cic', return_fraction=True)
-        del all_particles, all_randoms
+        zeff, norm_zeff = compute_fkp_effective_redshift(*all_randoms, order=2, split=seed,
+                                                         resampler='cic', return_fraction=True)
 
-    with jax.make_mesh((jax.device_count(),), axis_names=('x',), axis_types=(jax.sharding.AxisType.Auto,)):
-
-        all_data, all_randoms, all_shifted = [], [], []
-
-        def get_pw(catalog):
-            positions = catalog['POSITION']
-            weights = [catalog['INDWEIGHT']] + _format_bitweights(catalog['BITWEIGHT'] if 'BITWEIGHT' in catalog else None)
-            return positions, weights
-
-        def get_all_particles(catalog):
-            if not isinstance(catalog, (tuple, list)):
-                catalog = [catalog]  # list of randoms
-            return [Particles(*get_pw(catalog), exchange=True) for catalog in catalog]
-
-        for _get_data_randoms in get_data_randoms:
-            # data, randoms (optionally shifted) are tuples (positions, weights)
-            _catalogs = _get_data_randoms()
-            data = get_all_particles(_catalogs['data'])[0]  # data is not a list of catalogs
-            randoms = get_all_particles(_catalogs['randoms'])
-            if _catalogs.get('shifted', None) is not None:
-                shifted = get_all_particles(_catalogs['shifted'])
-            else:
-                shifted = [None] * len(randoms)
-            all_data.append(data)
-            all_randoms.append(randoms)
-            all_shifted.append(shifted)
-        if jax.process_index() == 0:
-            logger.info(f'All particles on the device')
-
+    key = 'raw'
+    with create_sharding_mesh():
         if battrs is None:
             battrs = dict(s=np.linspace(0., 180., 181), mu=(np.linspace(-1., 1., 201), 'midpoint'))
-
         battrs = BinAttrs(**battrs)
+
         sattrs = None
         if cut is not None:
-            sattrs = SelectionAttrs(theta=(0., 0.05))
-            if jax.process_index() == 0:
-                logger.info(f'Applying theta-cut {sattrs}.')
-        bitwise = angular = None
-        if data.get('bitwise_weight'):
-            bitwise = dict(weights=data.get('bitwise_weight'))
-            if jax.process_index() == 0:
-                logger.info(f'Applying PIP weights {bitwise}.')
+            sattrs = SelectionAttrs(theta=(0.05, 180.))
+            if jax.process_index() == 0: logger.info(f'Applying theta-cut {sattrs}.')
+            key = 'cut'
         if auw is not None:
-            angular = dict(sep=auw.get('DD').coords('theta'), weight=auw.get('DD').value())
+            key = 'auw'
+
+        wattrs = _guess_wattrs(get_data_randoms[0], auw=auw)
+        mattrs = None
+
+        spattrs = None
+        all_particles = prepare_cucount_particles(*get_data_randoms, jackknife=kw_jackknife, split_randoms=split_randoms, wattrs=wattrs)
+        if isinstance(all_particles, tuple):
+            all_particles, subsampler = all_particles
+            spattrs = SplitAttrs(mode='jackknife', nsplits=subsampler.nsplits)
+
+        if jax.process_index() == 0: logger.info('All particles on the device')
+
+        def count2split(*particles, wattrs=None):
+            kw = dict(battrs=battrs, mattrs=mattrs, sattrs=sattrs, spattrs=spattrs, wattrs=wattrs)
+            nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
+            if any(nsplits):
+                nsplit = next(n for n in nsplits if n)
+                particles = list(particles)
+                for ip, particle in enumerate(particles):
+                    if isinstance(particle, list):
+                        assert len(particle) == nsplit
+                    else:
+                        particles[ip] = [particle] * nsplit
+                counts = [count2(*p, **kw)['weight'] for p in zip(*particles)]
+                return types.sum(counts)
+            return count2(*particles, **kw)['weight']
+
+        counts = {}
+
+        if jax.process_index() == 0: logger.info('Computing DD term.')
+        counts['DD'] = count2split(*[particles['data'] for particles in all_particles], wattrs=wattrs)
+
+        for particles in all_particles:
+            particles['data'] = particles['data'].clone(weights=wattrs(particles['data']))
+
+        for combinations in ['DS', 'SD', 'SS']:
+            particles, _combinations = _get_particle_combinations(combinations, all_particles, with_repeats=False)
             if jax.process_index() == 0:
-                logger.info(f'Applying AUW {angular}.')
-        wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
-        mattrs = None  # automatic setting for mesh
+                logger.info(f'Computing {_combinations} term.')
+            counts[combinations] = count2split(*particles)
 
-        # Helper to convert to lsstypes Count2
-        def to_lsstypes(battrs: BinAttrs, counts: np.ndarray, norm: np.ndarray, attrs: dict) -> Count2:
-            coords = battrs.coords()
-            edges = battrs.edges()
-            edges = {f'{k}_edges': v for k, v in edges.items()}
-            return Count2(counts=counts, norm=norm * np.ones_like(counts), **coords, **edges, coords=list(coords), attrs=attrs)
-
-        # Hepler to get counts as Count2
-        def get_counts(*particles: Particles, wattrs: WeightAttrs=None) -> Count2:
-            if wattrs is None: wattrs = WeightAttrs()
-            autocorr = len(particles) == 1
-            counts = count2(*(particles * 2 if autocorr else particles), battrs=battrs, wattrs=wattrs, mattrs=mattrs, sattrs=sattrs)['weight']
-            attrs = {'wsum': [wattrs(particles[0]).sum()]}
-            if autocorr:
-                auto_sum = wattrs(*(particles * 2)).sum()
-                norm = wattrs(particles[0]).sum()**2 - auto_sum
-                # Correct auto-pairs
-                zero_index = tuple(np.flatnonzero((0 >= edges[:, 0]) & (0 < edges[:, 1])) for edges in battrs.edges().values())
-                counts = counts.at[zero_index].add(-auto_sum)
+        if 'RR' not in counts:
+            if all(particles.get('shifted', None) is None for particles in all_particles):
+                counts['RR'] = counts['SS']
             else:
-                norm = wattrs(particles[0]).sum() * wattrs(particles[1]).sum()
-                attrs['wsum'].append(wattrs(particles[1]).sum())
-            return to_lsstypes(battrs, counts, norm, attrs=attrs)
+                if jax.process_index() == 0: logger.info('Computing RR term.')
+                counts['RR'] = count2split(*[particles['randoms'] for particles in all_particles])
 
-        DD = get_counts(*all_data, wattrs=wattrs)
-        data = data.clone(weights=wattrs(data))  # clone data, with IIP weights (in case we provided bitwise weights)
+    correlation = (Count2JackknifeCorrelation if kw_jackknife else Count2Correlation)(estimator='landyszalay', **counts)
+    correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)    
+    return {key: correlation}
 
-        DS, SD, SS, RR = [], [], [], []
-        iran = 0
-        for all_randoms_i, all_shifted_i in zip(zip(*all_randoms, strict=True), zip(*all_shifted, strict=True), strict=True):
-            if jax.process_index() == 0:
-                logger.info(f'Processing random {iran:d}.')
-            iran += 1
-            RR.append(get_counts(*all_randoms_i))
-            if all(shifted is not None for shifted in all_shifted_i):
-                SS.append(get_counts(*all_shifted_i))
+
+
+def _get_particle_combinations(combinations, all_particles, with_repeats=True):
+    particles, _combinations, keys = [], '', []
+    for icomb, comb in enumerate(combinations):
+        key = {'D': 'data', 'S': 'shifted'}[comb]
+        icomb = min(len(all_particles) - 1, icomb)
+        particle = all_particles[icomb].get(key, None)
+        if key == 'shifted':
+            if particle is None:
+                key, particle = 'randoms', all_particles[icomb]['randoms']
+                _combinations += 'R'
             else:
-                all_shifted_i = all_randoms_i
-                SS.append(RR[-1])
-            DS.append(get_counts(all_data[0], all_shifted_i[-1]))
-            SD.append(get_counts(all_shifted_i[0], all_data[-1]))
+                _combinations += 'S'
+        else:
+            _combinations += 'D'
+        key = (icomb, key)
+        if not with_repeats and key in keys:
+            continue
+        keys.append(key)
+        particles.append(particle)
+    return particles, _combinations
 
-    DS, SD, SS, RR = (types.sum(XX) for XX in [DS, SD, SS, RR])
-    correlation = Count2Correlation(estimator='landyszalay', DD=DD, DS=DS, SD=SD, SS=SS, RR=RR)
-    correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)
-    return correlation
 
-
-
-def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict=None, los='z'):
+def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict=None, split_randoms: bool | float=False):
     """
-    Compute two-point correlation function using :mod:`cucount.jax`.
+    Compute periodic-box 2-point correlation function using :mod:`cucount.jax`.
 
     Parameters
     ----------
-    get_data_randoms : callables
-        Functions that return dict of 'data' (optionally 'shifted') catalogs.
-        Each catalog must contain 'POSITION', 'INDWEIGHT'.
-        Shifted catalogs can be lists of catalogs (for multiple randoms/shifted).
+    get_data : callables
+        Functions returning dicts with 'data' and optionally 'shifted'.
     battrs : dict, optional
-        Bin attributes for cucount.jax.BinAttrs. If None, default bins are used. See cucount.jax.BinAttrs.
-    mattrs : dict, array, optional
-        Mesh attributes; typically a dictionary with 'boxsize' and 'boxcenter'.
-    los : {'x', 'y', 'z', array-like}, optional
-        Line-of-sight direction. If 'x', 'y', 'z' use fixed axes, or provide a 3-vector.
+        Bin attributes for cucount.jax.BinAttrs.
+    mattrs : dict, optional
+        Mesh attributes, typically with 'boxsize', 'meshsize'.
+    split_randoms : float, tuple
+        If provided, ratio of shifted randoms / data to split the (concatenated) shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
 
     Returns
     -------
     correlation : Count2Correlation
-        Two-point correlation function as a Count2Correlation object.
     """
-    from cucount.jax import Particles, BinAttrs, WeightAttrs, SelectionAttrs, MeshAttrs, count2, count2_analytic, setup_logging
-    from lsstypes import Count2, Count2Correlation
+    from cucount.jax import BinAttrs, WeightAttrs, MeshAttrs, create_sharding_mesh
+    from cucount.types import count2, count2_analytic
+    from lsstypes import Count2Correlation
 
-    with jax.make_mesh((jax.device_count(),), axis_names=('x',), axis_types=(jax.sharding.AxisType.Auto,)):
-        all_data, all_shifted = [], []
+    with create_sharding_mesh():
+        if battrs is None:
+            battrs = dict(s=np.linspace(0., 180., 181), mu=(np.linspace(-1., 1., 201), 'z'))
+        battrs = BinAttrs(**battrs)
 
-        def get_pw(catalog):
-            positions = catalog['POSITION']
-            weights = [catalog['INDWEIGHT']] + _format_bitweights(catalog['BITWEIGHT'] if 'BITWEIGHT' in catalog else None)
-            return positions, weights
+        mattrs = mattrs or {}
+        wattrs = WeightAttrs()
 
-        def get_all_particles(catalog):
-            if not isinstance(catalog, (tuple, list)):
-                catalog = [catalog]  # list of randoms
-            return [Particles(*get_pw(catalog), exchange=True) for catalog in catalog]
+        all_particles = prepare_cucount_particles(*get_data, split_randoms=split_randoms)
+        if jax.process_index() == 0: logger.info('All particles on the device')
 
-        for _get_data in get_data:
-            # data (optionally shifted) are tuples (positions, weights)
-            _catalogs = _get_data()
-            data = get_all_particles(_catalogs['data'])[0]  # data is not a list of catalogs
-            if _catalogs.get('shifted', None) is not None:
-                shifted = get_all_particles(_catalogs['shifted'])
-            else:
-                shifted = [None]
-            all_data.append(data)
-            all_shifted.append(shifted)
+        mattrs = MeshAttrs(*[particles['data'] for particles in all_particles], battrs=battrs, los=los, **mattrs)
+
+        def count2split(*particles, wattrs=None):
+            kw = dict(battrs=battrs, mattrs=mattrs, wattrs=wattrs)
+            nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
+            if any(nsplits):
+                nsplit = next(n for n in nsplits if n)
+                particles = list(particles)
+                for ip, particle in enumerate(particles):
+                    if isinstance(particle, list):
+                        assert len(particle) == nsplit
+                    else:
+                        particles[ip] = [particle] * nsplit
+                counts = [count2(*p, **kw)['weight'] for p in zip(*particles)]
+                return types.sum(counts)
+            return count2(*particles, **kw)['weight']
+
         if jax.process_index() == 0:
-            logger.info(f'All particles on the device')
+            logger.info('Computing DD term.')
+        DD = count2split(*[particles['data'] for particles in all_particles], wattrs=wattrs)
+
+        for particles in all_particles:
+            particles['data'] = particles['data'].clone(weights=wattrs(particles['data']))
+
+        if jax.process_index() == 0: logger.info('Computing analytic RR term.')
+        RR = count2_analytic(battrs=battrs, mattrs=mattrs)
+
+        counts = dict(DD=DD, RR=RR)
+
+        for combinations in ['DS', 'SD', 'SS']:
+            particles, _combinations = _get_particle_combinations(combinations, all_particles)
+            if not particles:
+                continue
+            if jax.process_index() == 0:
+                logger.info(f'Computing {combinations} term.')
+            counts[combinations] = count2split(*particles)
+
+    if all(name in counts for name in ['DS', 'SD', 'SS']):
+        return Count2Correlation(estimator='landyszalay', **counts)
+    return Count2Correlation(estimator='natural', DD=counts['DD'], RR=counts['RR'])
+
+
+def compute_particle2_correlation_close_pair_correction(*get_data_randoms, correlation, battrs=None, auw=None, cut=None, jackknife=None,  split_randoms: float | tuple=False, **kwargs):
+    """
+    Compute and apply close-pair corrections to 2-point correlation function.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions returning dicts with 'data', 'randoms' (optionally 'shifted').
+        Catalogs must contain 'POSITION', 'INDWEIGHT', optionally 'BITWEIGHT'.
+    correlation : Count2Correlation, Count2JackknifeCorrelation
+        Input correlation function to add close pair correction to.
+    battrs : dict, optional
+        Bin attributes for :class:`cucount.jax.BinAttrs`.
+    auw : ObservableTree, optional
+        Angular upweights to apply.
+    cut : bool, optional
+        If provided, apply a theta-cut of (0, 0.05) degrees.
+    jackknife : dict, optional
+        Jackknife configuration, e.g. ``{'mode': 'angular', 'nsplits': 60, 'nside': 512, 'random_state': 42}``.
+    split_randoms : float, tuple
+        If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
+        If a tuple, (ratio of randoms / data, number of random splits).
+
+    Returns
+    -------
+    correlation : Count2Correlation or Count2JackknifeCorrelation
+    """
+    from cucount.jax import create_sharding_mesh, BinAttrs
+
+    if jackknife is None: jackknife = {}
+    kw_jackknife = dict(jackknife)
+
+    with create_sharding_mesh() as sharding_mesh:
+        if callable(get_data_randoms[0]):
+            spattrs = None
+            wattrs = _guess_wattrs(get_data_randoms[0], auw=auw)
+            all_particles = prepare_cucount_particles(*get_data_randoms, jackknife=kw_jackknife, wattrs=wattrs, split_randoms=split_randoms)
+            if isinstance(all_particles, tuple):
+                all_particles, subsampler = all_particles
+                spattrs = SplitAttrs(mode='jackknife', nsplits=subsampler.nsplits)
+            if jax.process_index() == 0: logger.info('All particles on the device')
 
         if battrs is None:
-            battrs = dict(s=np.linspace(0., 180., 181), mu=(np.linspace(-1., 1., 201), 'midpoint'))
+            # Try to find battrs from lsstypes object
+            edges = correlation.edges()
+            ells = getattr(correlation.get('DD'), 'ells', [])
+            d = {}
+            los = 'midpoint'  # guessing line-of-sight
+            for coord_name in ['s', 'theta']:
+                coord_name = f'{name}{idim + 1}'
+                if coord_name in edges:
+                    edge = edges[coord_name]
+                    edge = np.append(edge[:, 0], edge[-1, 1])
+                    if name == 'mu':
+                        edge = (edge, los)
+                    d[name] = edge
+            if ells:
+                d['pole'] = (ells, los)
+            battrs = BinAttrs(**d)
+        else:
+            battrs = BinAttrs(**battrs)
+        results = {}
+        results['raw'] = correlation
+        corrections = {'auw': auw, 'cut': cut}
+        for correction_name in corrections:
+            if corrections[correction_name] is not None:
+                correction = _compute_particle2_correlation_close_pair_correction(all_particles, battrs, **{correction_name: corrections[correction_name]}, spattrs=spattrs, normalize_randoms=False)
+                results[correction_name] = _apply_particle2_correlation_close_pair_correction(correlation, correction)
 
-        battrs = BinAttrs(**battrs)
+    return results
+
+
+def _apply_particle2_correlation_close_pair_correction(correlation, correction):
+    """Apply additive corrections to a :class:`Count2Correlation`."""
+    out = correlation.copy()
+
+    def sum_counts(leaves):
+        return leaves[0].clone(counts=sum(leaf.values('counts') for leaf in leaves), norm=leaves[0].values('norm'))
+
+    _branches = []
+    for label, branch in correlation.items(level=1):
+        correction_count_name = label['count_names'].replace('S', 'R')
+        if correction_count_name in correction:
+            branch = types.tree_map(sum_counts, [branch, correction[correction_count_name]], level=None, is_leaf=lambda *args: False)
+        _branches.append(branch)
+
+    out._branches = _branches
+    return out
+
+
+_identity_fn = lambda x: x
+
+
+def _remove_phantom_particles(particles, sharding_mesh=None):
+    if sharding_mesh.axis_names:
+        particles = jax.jit(_identity_fn, out_shardings=jax.sharding.NamedSharding(sharding_mesh, spec=P(None)))(particles)
+    weights = particles.get('individual_weight')[0]
+    if weights is None:
+        return particles
+    return particles[weights != 0].clone(exchange=True)
+
+
+def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, spattrs=None, auw=None, cut=None, normalize_randoms: bool=True):
+    """
+    Compute close-pair corrections to 2-point counts.
+    Returns additive correction counts keyed by count name.
+    """
+    from cucount.jax import BinAttrs, SelectionAttrs, WeightAttrs, get_sharding_mesh
+    from cucount.types import count2
+
+    sharding_mesh = get_sharding_mesh()
+
+    input_all_particles = []
+    for particles in all_particles:
+        particles = dict(particles)
+        if 'shifted' in particles:
+            particles.pop('randoms')
+        input_all_particles.append(particles)
+    all_particles = input_all_particles
+
+    kw_battrs = dict(battrs=battrs)
+
+    sattrs = SelectionAttrs(theta=(0., 0.05))
+    wattrs = WeightAttrs()
+
+    if normalize_randoms:
+        def normalize_randoms(data, randoms, wattrs=WeightAttrs()):
+            data_weights, randoms_weights = wattrs(data), wattrs(randoms)
+            return randoms.clone(weights=data_weights.sum() / randoms_weights.sum() * randoms_weights)
+
+    for particles in all_particles:
+        #particles['data'] = _remove_phantom_particles(particles['data'], sharding_mesh=sharding_mesh)
+        if normalize_randoms:
+            for name in ['shifted', 'randoms']:
+                if name in particles:
+                    particles[name] = normalize_randoms(particles['data'], particles[name], wattrs=wattrs)
+
+    def count2split(*particles, wattrs=None, mattrs=None):
+        kw = dict(battrs=battrs, wattrs=wattrs, sattrs=sattrs, mattrs=mattrs, spattrs=spattrs, norm=1.)
+        nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
+        if any(nsplits):
+            for nsplit in nsplits:
+                if nsplit: break
+            particles = list(particles)
+            for ip, particle in enumerate(particles):
+                if isinstance(particle, list):
+                    assert len(particle) == nsplit
+                else:
+                    particles[ip] = [particle] * nsplit
+            counts = [count2(*p, **kw)['weight'] for p in zip(*particles)]
+            return types.sum(counts)
+        return count2(*particles, **kw)['weight']
+
+    correction = {}
+    if cut is not None:
         wattrs = WeightAttrs()
-        mattrs = mattrs or {}
-        mattrs = MeshAttrs(*all_data, battrs=battrs, **mattrs)
+        with_randoms = any(name in all_particles[0] for name in ['randoms', 'shifted'])
+        correction = {}
+        for combinations in itertools.product(['D'] + (['S'] if with_randoms else []), repeat=2):
+            particles, combinations = _get_particle_combinations(combinations, all_particles, with_repeats=False)
+            counts = count2split(*particles, wattrs=wattrs)
+            correction[combinations] = counts.clone(value=-counts.value())
+        return correction
 
-        # Helper to convert to lsstypes Count2
-        def to_lsstypes(battrs: BinAttrs, counts: np.ndarray, norm: np.ndarray, attrs: dict) -> Count2:
-            coords = battrs.coords()
-            edges = battrs.edges()
-            edges = {f'{k}_edges': v for k, v in edges.items()}
-            return Count2(counts=counts, norm=norm * np.ones_like(counts), **coords, **edges, coords=list(coords), attrs=attrs)
+    bitwise = angular = None
+    bitweights = all_particles[0]['data'].get('bitwise_weight')
+    if bitweights:
+        bitwise = dict(weights=bitweights)
 
-        # Hepler to get counts as Count2
-        def get_counts(*particles: Particles, wattrs: WeightAttrs=None) -> Count2:
-            if wattrs is None: wattrs = WeightAttrs()
-            autocorr = len(particles) == 1
-            counts = count2(*(particles * 2 if autocorr else particles), battrs=battrs, wattrs=wattrs, mattrs=mattrs)['weight']
-            attrs = {'wsum': [wattrs(particles[0]).sum()]}
-            if autocorr:
-                auto_sum = wattrs(*(particles * 2)).sum()
-                norm = wattrs(particles[0]).sum()**2 - auto_sum
-                # Correct auto-pairs
-                zero_index = tuple(np.flatnonzero((0 >= edges[:, 0]) & (0 < edges[:, 1])) for edges in battrs.edges().values())
-                counts = counts.at[zero_index].add(-auto_sum)
-            else:
-                norm = wattrs(particles[0]).sum() * wattrs(particles[1]).sum()
-                attrs['wsum'].append(wattrs(particles[1]).sum())
-            return to_lsstypes(battrs, counts, norm, attrs=attrs)
+    angular = None
+    if auw is not None:
+        combinations = 'DD'
+        angular = dict(edges=[np.append(edge[:, 0], edge[-1, 1]) for edge in auw.get(combinations).edges().values()],
+                       weight=auw.get(combinations).value())
+        if jax.process_index() == 0:
+            logger.info('Applying AUW.')
 
-        DD = get_counts(*all_data, wattrs=wattrs)
-        data = data.clone(weights=wattrs(data))  # clone data, with IIP weights (in case we provided bitwise weights)
-        RR = to_lsstypes(battrs, count2_analytic(battrs=battrs, mattrs=mattrs), norm=1., attrs={})
-
-        DS, SD, SS = [], [], []
-        iran = 0
-        for all_shifted in zip(*all_shifted, strict=True):
-            if jax.process_index() == 0:
-                logger.info(f'Processing random {iran:d}.')
-            if all(shifted is not None for shifted in all_shifted):
-                SS.append(get_counts(*all_shifted))
-                DS.append(get_counts(all_data[0], all_shifted[-1]))
-                SD.append(get_counts(all_shifted[0], all_data[-1]))
-                iran += 1
-
-    if iran:
-        DS, SD, SS = (types.sum(XX) for XX in [DS, SD, SS])
-        correlation = Count2Correlation(estimator='landyszalay', DD=DD, DS=DS, SD=SD, SS=SS, RR=RR)
-    else:
-        correlation = Count2Correlation(estimator='natural', DD=DD, RR=RR)
-    return correlation
+    if bitwise is not None or auw is not None:
+        wattrs = WeightAttrs(bitwise=bitwise)
+        # Set default negative_weight = individual_weight
+        for i, particles in enumerate(all_particles):
+            particles = particles['data']
+            if not particles.get('negative_weight'):
+                negative_weight = wattrs(particles)
+                all_particles[i]['data'] = particles.clone(weights=particles.get('weights') + [negative_weight], index_value=particles.index_value.clone(negative_weight=1))
+    
+    wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
+    particles, combinations = _get_particle_combinations('DD', all_particles, with_repeats=False)
+    correction['DD'] = count2split(*particles, wattrs=wattrs)
+    return correction
