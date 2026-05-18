@@ -31,9 +31,9 @@ kwargs = {}
 # environ = Environment('nersc-cosmodesi')
 environ = Environment('nersc-cosmodesi', command='export PYTHONPATH=$HOME/LSScode/dr2-clustering-analysis/:$PYTHONPATH')
 tm = TaskManager(queue=queue, environ=environ)
-tm = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time=reservation_time, mpiprocs_per_worker=4, output=output, error=error, 
-                                                            stop_after=1, constraint='gpu', kwargs={'reservation': reservation_name}))
-tm80 = tm.clone(provider=dict(provider='nersc', time=reservation_time, mpiprocs_per_worker=4, output=output, error=error, 
+tm = tm.clone(scheduler=dict(max_workers=30), provider=dict(provider='nersc', time=reservation_time, mpiprocs_per_worker=4, output=output, error=error,
+                                                           stop_after=1, constraint='gpu', live_jobids=False, kwargs={'reservation': reservation_name}))
+tm80 = tm.clone(provider=dict(provider='nersc', time=reservation_time, mpiprocs_per_worker=4, output=output, error=error,
                               stop_after=1, constraint='gpu&hbm80g', kwargs={'reservation': reservation_name}))
 
 combine_region_sources = {
@@ -65,15 +65,15 @@ def run_stats(tracer='LRG', project='', version='glam-uchuu-v2-altmtl', onthefly
         raise ValueError('Please provide zranges.')
     for imock in imocks:
         for region in regions:
-            mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
+            mesh2_spectrum = {'cut': True if 'shape' in analysis else None,
                               'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
             window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None}
-            
-            options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
+
+            options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock),
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
             options = fill_fiducial_options(options, analysis=analysis)
-            
+
             for itracer in options['catalog']:
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
                 options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
