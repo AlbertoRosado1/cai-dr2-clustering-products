@@ -2,6 +2,7 @@
 Script to create and spawn desipipe tasks to compute merged catalogs.
 To create and spawn the tasks on NERSC, use the following commands:
 ```bash
+salloc -N 1 -C cpu -t 04:00:00 --qos interactive 
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 python desipipe_merged_catalogs.py          # create the list of tasks
 desipipe tasks  -q merged_catalogs          # check the list of tasks
@@ -57,18 +58,29 @@ if __name__ == '__main__':
     #mode = 'slurm'
     mode = 'interactive'
 
-    version = 'glam-uchuu-v1-altmtl'
-    #out_dir = Path('/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe/') / version / 'merged'
-    out_dir = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' / version / 'merged' # / '{noric or ric}'
+    # version = 'glam-uchuu-v2-altmtl'
+    version = 'holi-v3-altmtl'
+    out_dir  = tools.base_stats_dir / 'merged_catalogs' / version
+    # out_dir = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' / 'merged_catalogs' / version
 
-    kinds = ['data', 'randoms']
-    tracers = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # tracers = ['QSO']
+    # kinds = ['data', 'randoms']
+    kinds = ['data']
+    tracers = ['LRG', 'ELG_LOPnotqso', 'ELGnotqso', 'QSO']
+    # tracers = ['ELGnotqso']
     regions = ['NGC', 'SGC']
-    imocks = np.arange(100, 150 + 1) # in this it is the number of mocks to merge
+    # imocks = 150 + np.arange(50) # number of mocks to merge
+    imocks = np.arange(100) # number of mocks to merge
+    # if version == 'holi-v3-altmtl':
+    #     # do not perform measurements on dubious mocks
+    #     bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
+    #     imocks = imocks[~np.isin(imocks,bad_imocks)]
     nran_list = np.arange(18) # randoms to process
-    factor = len(imocks)
-
+    fraction_to_keep = 0.1 # keep only ~10% of the catalogs
+    
+    def get_taskmanager(fun):
+        _tm = tm
+        return fun if mode == 'interactive' else _tm.python_app(fun)
+        
     for kind in kinds:
         for tracer in tracers:
             for region in regions:
@@ -78,8 +90,9 @@ if __name__ == '__main__':
                     # Merge data mock catalogs
                     input_data_fns,_ = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, kind=kind, **catalog_kws),
                                                                            test_if_readable=False, imock=imocks)[0]
+                    factor = len(input_data_fns) * fraction_to_keep
                     output_data_fn = tools.get_catalog_fn(kind=kind, cat_dir=out_dir, **catalog_kws)
-                    (tm.python_app(merge_data_catalogs) if mode == 'slurm' else merge_data_catalogs)(output_data_fn, input_data_fns, factor=factor)
+                    get_taskmanager(merge_data_catalogs)(output_data_fn, input_data_fns, factor=factor)
 
                 if 'randoms' in kind:
                     # Merge randoms catalogs
@@ -91,13 +104,10 @@ if __name__ == '__main__':
                                                                                       nran=nran_list)
                     rerun = [inran for inran in nran_list if (inran in unreadable[1]['nran']) or (inran not in exists[1]['nran'])]
                     for iran in rerun:
-                        if 'glam' in version:
-                            # 'glam-uchuu-v1-altmtl' randoms do not have RA and DEC columns so we use `expand_randoms`
-                            parent_randoms_fn = get_single_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=iran)
-                        else:
-                            expand = None
+                        parent_randoms_fn = get_single_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=iran)
                         input_randoms_fns, kw_fns = tools.checks_if_exists_and_readable(get_fn=functools.partial(get_single_fn, kind='randoms', nran=iran, **catalog_kws),
                                                                                   test_if_readable=False, imock=imocks)[0]
                         input_data_fns = [tools.get_catalog_fn(kind='data', **(catalog_kws | dict(region='ALL', imock=imock))) for imock in kw_fns['imock']]
+                        factor = len(input_data_fns) * fraction_to_keep
                         output_randoms_fn = get_single_fn(kind=kind, cat_dir=out_dir, nran=iran, **catalog_kws)
-                        (tm.python_app(merge_randoms_catalogs) if mode == 'slurm' else merge_randoms_catalogs)(output_randoms_fn, input_randoms_fns, parent_randoms_fn=parent_randoms_fn, input_data_fns=input_data_fns, factor=factor)
+                        get_taskmanager(merge_randoms_catalogs)(output_randoms_fn, input_randoms_fns, parent_randoms_fn=parent_randoms_fn, input_data_fns=input_data_fns, factor=factor)
