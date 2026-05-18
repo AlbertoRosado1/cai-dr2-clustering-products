@@ -1,9 +1,9 @@
 """
-salloc -N 1 -C "gpu&hbm80g" -t 01:00:00 --gpus 4 --qos interactive --account desi_g
-source /global/common/software/desi/users/adematti/cosmodesi_environment.sh new
+salloc -N 1 -C "gpu&hbm80g" -t 03:00:00 --gpus 4 --qos interactive --account desi_g
+source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 module unload desi-clustering
 cd ~/dev/desi-clustering/clustering_statistics
-srun -n 4 python tests/test-recon.py
+srun -n 4 python tests/test_recon.py
 """
 import os
 import sys
@@ -265,11 +265,11 @@ def test_recon_clustering(stat=['recon_particle2_correlation', 'recon_mesh2_spec
 def check_cellsize_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']):
     """Run recon measurements with varying reconstruction cell size to check stability."""
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    cellsizes = [4]#[]4,
-    nran = 18
+    cellsizes = [4]#6, 7.8, 10.
+    nran = 10
     boxsize = 6000.
     for tracer in ['ELG_LOPnotqso']:
-        zrange = tools.propose_fiducial('zranges', tracer)[0]
+        zrange = tools.propose_fiducial('zranges', tracer)
         for region in ['NGC', 'SGC']:
             for cellsize in cellsizes:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=451, nran=nran)
@@ -285,14 +285,14 @@ def check_boxsize_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectr
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     boxsizes = {'ELG_LOPnotqso': [6000., 7000., 8000., 9000., 10000.]}
     cellsize = 7.8  
-    nran = 18
+    nran = 10
     for tracer in boxsizes:
-        zrange = tools.propose_fiducial('zranges', tracer)[0]
+        zrange = tools.propose_fiducial('zranges', tracer)
         for region in ['NGC', 'SGC']:
             for boxsize in boxsizes[tracer]:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=451, nran=nran)
                 catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
-                extra = f'boxsize{boxsize:.0f}'
+                extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
                 compute_stats_from_options(stat, catalog=catalog_options, mattrs={'boxsize': boxsize, 'cellsize': cellsize},
                                            get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
                                            recon_mesh2_spectrum={}, recon_particle2_correlation={})
@@ -303,9 +303,9 @@ def get_sigma_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']
     boxsizes = {'ELG_LOPnotqso':[10000.]}#'LRG': [10000.], 
     cellsize = 7.8  
     nran = 18
-    imocks = range(451, 457)
+    imocks = range(451, 461)
     for tracer in boxsizes:
-        zrange = tools.propose_fiducial('zranges', tracer)[0]
+        zrange = tools.propose_fiducial('zranges', tracer)
         boxsize = boxsizes[tracer][0]
         for region in ['NGC','SGC']:# 
             for imock in imocks:
@@ -320,19 +320,21 @@ def get_sigma_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']
 def check_nran_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']):
     """Run recon measurements with varying number of randoms to check stability."""
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    nrans = [2, 4, 6, 8, 10, 12, 14, 16]#
+    nrans = {'ELG_LOPnotqso': [6, 10, 14]}
     cellsize = 7.8
     boxsize = 10000.
-    for tracer in ['ELG_LOPnotqso']:
-        zrange = tools.propose_fiducial('zranges', tracer)[0]
-        for region in ['NGC', 'SGC']:
-            for nran in nrans:
-                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=451, nran=nran)
-                catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
-                extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
-                compute_stats_from_options(stat, catalog=catalog_options, mattrs={'boxsize': boxsize, 'cellsize': cellsize},
-                                           get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
-                                           recon_mesh2_spectrum={}, recon_particle2_correlation={})
+    imocks = range(451, 461)
+    for imock in imocks:
+        for tracer in nrans:
+            zrange = tools.propose_fiducial('zranges', tracer)
+            for region in ['NGC', 'SGC']:
+                for nran in nrans:
+                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=imock, nran=nran)
+                    catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
+                    extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
+                    compute_stats_from_options(stat, catalog=catalog_options, mattrs={'boxsize': boxsize, 'cellsize': cellsize},
+                                            get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
+                                            recon_mesh2_spectrum={}, recon_particle2_correlation={})
 
 
 if __name__ == '__main__':
@@ -349,6 +351,6 @@ if __name__ == '__main__':
         os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
         jax.distributed.initialize()
         # data, randoms = test_recon_output()
-        test_recon_clustering(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum'], to_test=['cellsize'])#'boxsize', sigma']
+        test_recon_clustering(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum'], to_test=['sigma','nran'])#'boxsize','cellsize', sigma']
 
 
