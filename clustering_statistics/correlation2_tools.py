@@ -15,6 +15,8 @@ import warnings
 
 import numpy as np
 import jax
+from jax import numpy as jnp
+from jax.sharding import PartitionSpec as P
 
 import lsstypes as types
 from .tools import _format_bitweights
@@ -123,7 +125,7 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
         jackknife_particles = cucount.numpy.Particles.concatenate(jackknife_particles)
         subsampler = KMeansSubsampler(jackknife_particles, wattrs=wattrs, **kw_jackknife)
 
-    def _concatenate(catalog, collective=False):
+    def _concatenate_catalog(catalog, collective=False):
         if _is_list(catalog):
             if len(catalog) == 1:
                 catalog = catalog[0]
@@ -138,7 +140,7 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
         from mpytools.random import MPIRandomState
         if data_size is None:
             raise ValueError('split_randoms is in terms of data size, so provide data')
-        catalog = _concatenate(catalog, collective=True)
+        catalog = _concatenate_catalog(catalog, collective=True)
         csize = catalog.csize
         if isinstance(split_randoms, tuple):
             split_size, nsplits = split_randoms[0] * data_size, split_randoms[1]
@@ -516,6 +518,18 @@ def _apply_particle2_correlation_close_pair_correction(correlation, correction):
     return out
 
 
+_identity_fn = lambda x: x
+
+
+def _remove_phantom_particles(particles, sharding_mesh=None):
+    if sharding_mesh.axis_names:
+        particles = jax.jit(_identity_fn, out_shardings=jax.sharding.NamedSharding(sharding_mesh, spec=P(None)))(particles)
+    weights = particles.get('individual_weight')[0]
+    if weights is None:
+        return particles
+    return particles[weights != 0].clone(exchange=True)
+
+
 def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, spattrs=None, auw=None, cut=None, normalize_randoms: bool=True):
     """
     Compute close-pair corrections to 2-point counts.
@@ -544,16 +558,8 @@ def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, 
             data_weights, randoms_weights = wattrs(data), wattrs(randoms)
             return randoms.clone(weights=data_weights.sum() / randoms_weights.sum() * randoms_weights)
 
-    def remove_phantom_particles(particles):
-        if sharding_mesh.axis_names:
-            particles = jax.jit(_identity_fn, out_shardings=jax.sharding.NamedSharding(sharding_mesh, spec=P(None)))(particles)
-        weights = particles.get('individual_weight')[0]
-        if weights is None:
-            return particles
-        return particles[weights != 0].clone(exchange=True)
-
     for particles in all_particles:
-        #particles['data'] = remove_phantom_particles(particles['data'])
+        #particles['data'] = _remove_phantom_particles(particles['data'], sharding_mesh=sharding_mesh)
         if normalize_randoms:
             for name in ['shifted', 'randoms']:
                 if name in particles:

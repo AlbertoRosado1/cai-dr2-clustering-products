@@ -259,11 +259,11 @@ def test_window2(stats=['mesh2_spectrum']):
                         extra = f'{extra}_{method}' if extra else method
                         return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
 
-                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, nran=1, imock=451)
+                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451)
                     #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
                     options = {}
                     options['mesh2_spectrum'] = {'mattrs': {'meshsize': 250, 'boxsize': 6000.}}
-                    options['window_mesh2_spectrum'] = {'cut': True, 'method': method, 'split_randoms': None}
+                    options['window_mesh2_spectrum'] = {'cut': True, 'method': method, 'split_randoms': (50, 10)}
                     compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=get_stats_fn, **options)
         if 'mesh3' in stat: continue
         '''
@@ -285,7 +285,7 @@ def test_window3(stats=['mesh3_spectrum']):
         for tracer in ['LRG']:
             zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
-                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
+                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, nran=1, imock=451)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
                 options = {}
                 options['mesh3_spectrum'] = {'mattrs': {'meshsize': 250}}
@@ -295,7 +295,7 @@ def test_window3(stats=['mesh3_spectrum']):
                         extra = f'{extra}_{method}' if extra else method
                         return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
 
-                    options['window_mesh3_spectrum'] = {'buffer_size': 40, 'method': method, 'split_randoms': None}
+                    options['window_mesh3_spectrum'] = {'buffer_size': 40, 'method': method, 'split_randoms': (5, 1)}
                     compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, **options, get_stats_fn=get_stats_fn)
 
 
@@ -551,12 +551,13 @@ def test_particle_vs_fft():
     from cucount.types import count3, count3_analytic
     from lsstypes.types import convert_ells
 
-    catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer='LRG', zrange=(0.4, 0.6), region='NGC', weight='default-FKP', imock=1, nran=1)
-    catalog = tools.read_clustering_catalog(kind='data', **catalog_options)
+    catalog_options = dict(version='data-dr2-v2', tracer='LRG', zrange=(0.4, 0.6), region='NGC', weight='default-FKP', imock=1, nran=1)
+    catalog = tools.read_clustering_catalog(kind='randoms', **catalog_options)
 
     mattrs = MeshAttrs(meshsize=256, boxsize=4000.)
     particles = ParticleField(catalog['POSITION'], catalog['INDWEIGHT'], attrs=mattrs,  exchange=True, backend='mpi')
-    particles = split_particles([particles, None, None], seed=42)
+    #particles = split_particles([particles, None, None], seed=42)
+    particles = [particles] * 3
 
     los = 'local'
 
@@ -589,6 +590,7 @@ def test_particle_vs_fft():
     correlation_particle = correlation_particle.map(renormalize)
 
     if jax.process_index() == 0:
+        import matplotlib as mpl
         from matplotlib import pyplot as plt
         fig, lax = plt.subplots(len(ells) + 1, figsize=(8, 14))
         for ill, ell in enumerate(ells):
@@ -606,8 +608,38 @@ def test_particle_vs_fft():
         lax[-1].set_ylabel(r'$s$ [$\mathrm{Mpc}/h$]')
         lax[-1].set_xlabel(r'bin index')
         lax[-1].legend(frameon=False, ncol=s.shape[1])
-        plt.savefig('test_particle_vs_fft.png')
+        plt.savefig('test_particle_vs_fft_auto.png')
+        plt.close(plt.gcf())
 
+
+        s1_values = [40., 80., 150.]
+        ells = [(0, 0, 0), (1, 1, 0), (0, 2, 2)]
+        fig, lax = plt.subplots(len(ells), sharex=True, squeeze=False)
+        lax = lax.ravel()
+        # Colormap for s1
+        cmap = plt.get_cmap('viridis')
+        norm = mpl.colors.Normalize(vmin=min(s1_values), vmax=max(s1_values))
+
+        select = {'s1': (20., 400.), 's2': (20., 400.)}
+        for ill, ell in enumerate(ells):
+            label = {'ells': ell}
+            pole = correlation_mesh.get(**label).unravel().select(**select)
+            pole_particle = correlation_particle.get(**label).select(**select)
+            ax = lax[ill]
+            for s1 in s1_values:
+                is1 = np.argmin(np.abs(pole.coords('s1') - s1))
+                s1 = pole.coords('s1')[is1]
+                color = cmap(norm(s1))
+                ax.plot(s:=pole.coords('s2'), pole.value()[is1, :], color=color, linestyle='-', label=fr'$s_1 = {s1:.0f}$')
+                ax.plot(s:=pole_particle.coords('s2'), pole_particle.value()[is1, :], color=color, linestyle='--')
+            ax.grid(True)
+            ax.set_ylabel(rf'$Q_{{{ell[0]:d}{ell[1]:d}{ell[2]:d}}}$')
+        #lax[0].set_title(f'{tracer} {region} window correlation in {zrange[0]:.1f} < z < {zrange[1]:.1f}')
+        lax[0].legend(frameon=False)
+        lax[-1].set_xscale('log')
+        lax[-1].set_xlabel(r'$s_2$ [$\mathrm{Mpc}/h$]')
+        plt.savefig('test_particle_vs_fft_auto2.png')
+        plt.close(plt.gcf())
 
 
 if __name__ == '__main__':
@@ -623,7 +655,7 @@ if __name__ == '__main__':
 
     jax.distributed.initialize()
 
-    # test_particle_vs_fft()
+    test_particle_vs_fft()
     # test_window_fm('LRG')
     # test_close_pair_correction()
     # test_auw3()
@@ -646,7 +678,7 @@ if __name__ == '__main__':
     # test_optimal_weights()
     # test_cross()
     # test_window2()
-    test_window3()
+    # test_window3()
     # test_spectrum3()
     # test_norm()
     # test_recon()
