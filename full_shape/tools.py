@@ -908,6 +908,10 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     observables = []
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
+        suffix = 'x'.join(label.get('tracers', []))
+        if suffix:
+            suffix = '_' + suffix
+        observable_name = stat + suffix
         if 'mesh2_spectrum' in stat:
             cls = TracerSpectrum2PolesObservable
         elif 'mesh3_spectrum' in stat:
@@ -923,7 +927,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         namespace = _str_from_observable_options(
             observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
         theory_params = theory.init.params
-        observable = cls(data=data, window=window, theory=theory)
+        observable = cls(data=data, window=window, theory=theory, name=observable_name)
         observable()
         if observable_options['emulator']['name']:
             assert cache_dir is not None, 'cache_dir must be provided for emulator'
@@ -1098,7 +1102,7 @@ def fill_fiducial_options(options):
 
 
 def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'),
-                                       tracer='LRG', zrange=(0.4, 0.6), region='GCcomb',
+                                       tracer='LRG', zrange=None, region='GCcomb',
                                        version='abacus-2ndgen-complete',
                                        covariance='holi-v1-altmtl',
                                        stats_dir=Path('/dvs_ro/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe'),
@@ -1111,7 +1115,7 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     ----------
     stats : list
         List of statistics in the joint likelihood, from ['mesh2_spectrum', 'mesh3_spectrum']
-    tracer : str, tuple
+    tracer : str or tuple (for cross correlation), or list of str or tuple to account for cross-correlation between tracers
         Tracers to fit.
     zrange : tuple
         Redshift range.
@@ -1135,9 +1139,10 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     """
     if isinstance(stats, str):
         stats = [stats]
+    tracers = [tracer] if isinstance(tracer, (str, tuple)) else tracer
     observables = []
-    tracer, zrange = get_full_tracer_zrange(tracer)
-    for stat in stats:
+    for tracer, stat in itertools.product(tracers, stats):
+        tracer, zrange = get_full_tracer_zrange(tracer, zrange)
         catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir}
         if project:
             catalog['project'] = project
