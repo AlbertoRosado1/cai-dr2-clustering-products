@@ -8,6 +8,7 @@ import pytest
 from full_shape import tools
 from full_shape.run_fit import run_fit_from_options
 from full_shape.tools import generate_likelihood_options_helper, str_from_likelihood_options, str_from_options, get_likelihood, fill_fiducial_options, setup_logging
+from clustering_statistics import tools as clustering_tools
 from full_shape.job_scripts.validation_abacus_mocks import (
     KRANGES, LOCAL_SAFE_THREAD_ENV, _apply_local_safe_threads,
     _build_likelihoods_options, _build_run_options, _get_parser,
@@ -45,6 +46,24 @@ def test_str():
     options = fill_fiducial_options(options)
     s = str_from_options(options, level=None)
     assert s == 'cosmo-base_LRG3xELG1-S2+LRG3xELG1-S3', s
+
+
+def test_bgs1_abacus_altmtl_uses_any02_file_label():
+    assert clustering_tools.get_full_tracer('BGS', version='abacus-2ndgen-dr2-altmtl') == 'BGS_ANY-02'
+    assert clustering_tools.get_full_tracer('BGS', version='abacus-hf-dr2-v2-altmtl') == 'BGS_ANY-02'
+    assert clustering_tools.get_full_tracer('BGS', version='abacus-2ndgen-dr2-complete') == 'BGS_BRIGHT-21.35'
+
+    likelihood_options = generate_likelihood_options_helper(
+        stats=['mesh2_spectrum'],
+        tracer='BGS1',
+        version='abacus-2ndgen-dr2-altmtl',
+        stats_dir=Path('/measurements'),
+    )
+    catalog = dict(likelihood_options['observables'][0]['catalog'])
+    catalog['tracer'] = clustering_tools.get_full_tracer(catalog['tracer'], version=catalog['version'])
+    catalog['imock'] = 0
+    fn = clustering_tools.get_stats_fn(kind='mesh2_spectrum', **catalog)
+    assert 'mesh2_spectrum_poles_BGS_ANY-02_z0.1-0.4_GCcomb_weight-default-FKP' in str(fn)
 
 
 def test_likelihood_full_shape():

@@ -35,6 +35,7 @@ desi_dir = Path('/dvs_ro/cfs/cdirs/desi/')
 base_stats_dir = Path('/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/')
 # These are region splits that require loading NGC+SGC
 special_regions = ['S', 'ALL', 'SnoDES', 'noDES', 'ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [20, 40, 60, 70, 80, 90, 97, 99]]
+BGS_ANY_VERSIONS = {'abacus-2ndgen-dr2-altmtl', 'abacus-hf-dr2-v2-altmtl'}
 
 
 def mkdir(dirname):
@@ -104,7 +105,9 @@ def get_full_tracer(tracer, version=None):
         if 'LRG' in tracer or 'QSO' in tracer:
             return tracer
         if tracer == 'BGS':
-            if 'dr1' in version:
+            if version in BGS_ANY_VERSIONS:
+                return 'BGS_ANY-02'
+            if version is not None and 'dr1' in version:
                 return 'BGS_BRIGHT-21.5'
             return 'BGS_BRIGHT-21.35'
         if tracer == 'ELG':
