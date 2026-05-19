@@ -69,9 +69,11 @@ def get_cosmology(cosmology_options: dict=None):
     # n_s and tau_reio are fixed
     # A Gaussian prior on omega_b.
     params = {
-        'H0':       {'derived': True},
-        'Omega_m':  {'derived': True},
-        'sigma8_m': {'derived': True},
+        'H0':       {'derived': True, 'latex': 'H_0'},
+        'Omega_m':  {'derived': True, 'latex': R'\Omega_\mathrm{m}'},
+        'sigma8_m': {'derived': True, 'latex': R'\sigma_{8,\mathrm{m}}'},
+        'sigma8_cb': {'derived': True, 'latex': R'\sigma_{8,\mathrm{cb}}'},
+        'rs_drag': {'derived': True, 'latex': R'r_s'},
         'tau_reio': {'fixed': True},
         'n_s':      {'fixed': is_fixed_model or 'ns-fixed' in model},
         'omega_b':  {'fixed': is_fixed_model, 'prior': {'dist': 'norm', 'loc': 0.02237,  'scale': 0.00037}},
