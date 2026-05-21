@@ -257,7 +257,8 @@ def _get_default_theory_nuisance_priors(model, stat, prior_basis, b3_coev=True, 
     return params
 
 
-def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_attrs: dict=None, data=None):
+@default_mpicomm
+def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_attrs: dict=None, data=None, mpicomm=None):
     """
     Return a configured theory desilike calculator for the requested statistic.
 
@@ -266,7 +267,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     stat : str
         Statistic name, e.g. 'mesh2_spectrum' or 'mesh3_spectrum'.
     theory_options : dict
-        Theory options dict containing at least 'model' and possibly other keys.
+        Theory options dict containing at least 'model' and possibly other keys. If 'z' is provided, data attribute 'z' will be ignored.
     cosmology : Cosmoprimo
         Cosmology calculator.
     data_attrs : dict
@@ -285,6 +286,10 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     theory_options.setdefault('cosmology', {'template': 'direct'})
     cosmology_options = theory_options['cosmology']
     z = data_attrs['z']
+    if 'z' in theory_options:
+        z = theory_options['z']
+    if mpicomm.rank == 0:
+        logger.info(f'theory is evaluated at effective redshift {z:.3f}')
     if cosmology_options['template'] == 'direct':
         template = DirectPowerSpectrumTemplate(fiducial=fiducial, cosmo=cosmology, z=z)
     elif cosmology_options['template'] == 'shapefit':
@@ -733,6 +738,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     imock = file_kw.get('imock', None)
                     if imock is not None:  # FIXME
                         file_kw['imock'] = 0
+                    file_kw.pop('auw', None)  # auw stat has the same window as non-auw stat
                     fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
@@ -795,6 +801,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             file_kw = file_kw | {'imock': '*', 'project': ''} | covariance_options
             file_kw['tracer'] = get_full_tracer(get_simple_tracer(file_kw['tracer']), version=file_kw['version'])
             imocks = file_kw.pop('imock')
+            file_kw.pop('extra', None)  # XXX: ignore extra
             if imocks == '*':
                 imocks = list(range(2001))
             if all_imocks is None:
@@ -921,8 +928,10 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         else:
             raise NotImplementedError(stat)
         data_attrs = dict(data.attrs) | label
-        for label, pole in window.observable.items(level=None):
+        for _, pole in window.observable.items(level=None):
             data_attrs['z'] = pole.attrs['zeff']
+        if mpicomm.rank == 0:
+            logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
         theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
         namespace = _str_from_observable_options(
             observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
@@ -997,8 +1006,8 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
 
 def get_sampler_cls(name):
     """Return sampler class."""
-    from desilike.samplers import EmceeSampler, MCMCSampler
-    translate = {'emcee': EmceeSampler, 'mcmc': MCMCSampler}
+    from desilike.samplers import EmceeSampler, MCMCSampler, PocoMCSampler
+    translate = {'emcee': EmceeSampler, 'mcmc': MCMCSampler, 'pocomc': PocoMCSampler}
     return translate[name.lower()]
 
 
