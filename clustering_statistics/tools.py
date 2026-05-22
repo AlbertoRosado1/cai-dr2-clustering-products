@@ -1001,6 +1001,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummitBGS_v2'
                 if kind == 'full_data' and 'BGS_ANY' in tracer:
                     tracer = 'BGS_ANY'
+                if kind == 'full_data' and 'BGS_BRIGHT' in tracer:
+                    tracer = 'BGS_BRIGHT'
             else:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummit_v4_1'
             if kind == 'forfa_data':
@@ -1548,10 +1550,14 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
             nz = {region: np.loadtxt(get_catalog_fn(kind='nz', **(kwargs | dict(region=region))), unpack=True) for region in ['NGC', 'SGC']}
             full_data = read(full_data_fn, mpicomm=MPI.COMM_SELF)
             forfa_data = read(forfa_data_fn, mpicomm=MPI.COMM_SELF, backend='astropy')
+            if complete.get('altmtl', False):
+                return altmtl_from_full_data(forfa_data, full_data, nz=nz, tracer=tracer,
+                                            remove_contaminants=complete.get('remove_contaminants', True),
+                                            seed=complete.get('seed', 100 * imock))
             return complete_from_full_data(forfa_data, full_data, nz=nz, tracer=tracer,
+                                    remove_contaminants=complete.get('remove_contaminants', True),
                                     with_completeness=complete.get('with_completeness', True),
                                     with_tracer_cuts=complete.get('with_tracer_cuts', True),
-                                    downsample_nobj=complete.get('downsample_nobj', False),
                                     seed=complete.get('seed', 100 * imock))
 
         if kind == 'data':
@@ -1573,7 +1579,10 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
             reshuffle.setdefault('merged_data_fn', reshuffle['data_fn'])
             logger.info('Reshuffling randoms to match on-the-fly complete data.')
             if isinstance(expand, dict):
-                expand['data_fn'] = reshuffle['data_fn']
+                if complete.get('altmtl', False):
+                    expand['from_data'] = ['FRAC_TLOBS_TILES']
+                else:
+                    expand['data_fn'] = reshuffle['data_fn']
 
     if kind == 'randoms' and isinstance(expand, dict):
         # No need to import anything from data if reshuffling is performed
@@ -1599,7 +1608,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                 data_fn = get_catalog_fn(kind='data', **(kwargs | dict(region='ALL')))
             data = read(data_fn, mpicomm=MPI.COMM_SELF)
 
-        def expand(catalog, ifn):
+        def expand(catalog, ifn, data=data):
             return expand_randoms(catalog, parent_randoms=parent_randoms[ifn], data=data, from_randoms=from_randoms, from_data=from_data)
     else:
         expand = None
@@ -2416,7 +2425,7 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     tracer = get_simple_tracer(tracer)
     P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
     regions = ['N', 'S']
-    if tracer == 'QSO':
+    if tracer.startswith('QSO'):
         regions = ['N', 'SnoDES', 'DES']
 
     sum_data_weights, sum_randoms_weights = [], []
@@ -2501,7 +2510,7 @@ def _get_zedges_for_nbar(tracer):
     return np.linspace(zmin, zmax, nbin + 1)
 
 
-def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness=True, with_tracer_cuts=True, downsample_nobj=False, seed=42):
+def complete_from_full_data(forfa_data, full_data, nz, tracer, remove_contaminants=True, with_completeness=True, with_tracer_cuts=True, seed=42):
     """
     Create complete data catalog from For Fiber Assignment (FA) and Full catalogs.
 
@@ -2530,43 +2539,16 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
     tracer = get_simple_tracer(tracer)
     P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
     full_data = full_data[['TARGETID', 'RA', 'DEC', 'NTILE', 'ZWARN'] + (['R_MAG_ABS'] if 'BGS' in tracer else [])]
-    mask_contaminants = full_data['TARGETID'] < 419430400000000  # remove contaminants
-    full_data = full_data[mask_contaminants]
+    # 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES'
     _, full_index, forfa_index = np.intersect1d(full_data['TARGETID'], forfa_data['TARGETID'], return_indices=True)
     data = full_data[full_index]
     forfa_data = forfa_data[forfa_index]
     data['Z'] = forfa_data['Z']
-    if with_tracer_cuts:
-        if 'ELG' in tracer:
-            rng = np.random.RandomState(seed=seed)
-            r = rng.random(data.size)
-            downsample_z = np.where(data['Z'] < 1.49, r < 0.96, r < 0.76)
-            data = data[downsample_z]
-        if 'BGS' in tracer:
-            fit_a = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_a.dat"))
-            fit_b = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_b.dat"))
-            fit_zcut = 0.3
-            def fit(z):
-                ff = np.empty(len(z))
-                mask_a = z < fit_zcut
-                mask_b = ~mask_a
-                ff[mask_a] = fit_a(z[mask_a])
-                ff[mask_b] = fit_b(z[mask_b])
-                return ff + 0.078
-            mock_z_cut = fit(data['Z'])
-            downsample_mag = data['R_MAG_ABS'] < mock_z_cut
-            data = data[downsample_mag]
     _mask_assigned = data['ZWARN'] != 999999
     if with_completeness:
         mask_assigned = _mask_assigned
     else:
         mask_assigned = data.ones(dtype=bool)
-    if downsample_nobj:
-        rng = np.random.RandomState(seed=seed)
-        r = rng.random(data.size)
-        mask = r <= _mask_assigned.sum() / _mask_assigned.size
-        data = data[mask]
-        mask_assigned = mask_assigned[mask]
     for name in ['WEIGHT', 'WEIGHT_COMP', 'WEIGHT_SYS', 'WEIGHT_ZFAIL', 'FRAC_TLOBS_TILES']:
         data[name] = data.ones()
     for name in ['NZ', 'NX']:
@@ -2584,6 +2566,199 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, with_completeness
         data['NZ'][mask_region] = tmpnz
         data['NX'][mask_region] = weight_ntile[data_ntile] * tmpnz
         data['WEIGHT'][mask_region] = weight_ntile[data_ntile]  # just completeness-weighting
+    data['WEIGHT_FKP'] = 1 / (1 + P0 * data['NX'])
+    if with_tracer_cuts:
+        zfrac = 1.
+        zsplit = None
+        mask = data.trues()
+        if tracer.startswith('QSO'):
+            if remove_contaminants:
+                mask &= data['TARGETID'] < 419430400000000
+            zrange = (0.8, 2.1)
+
+        if tracer.startswith('ELG'):
+            if remove_contaminants:
+                mask &= data['TARGETID'] < 838860800000000  # remove contaminants
+            zfrac = [0.96, 0.76]
+            zsplit = 1.49
+            zrange = (0.8, 1.6)
+
+        if tracer.startswith('LRG') or tracer.startswith('LGE'):
+            if remove_contaminants:
+                mask &= data['Z'] < 1.5
+            zfrac = 0.966
+            zrange = (0.4, 1.1)
+            
+        if tracer.startswith('BGS'):
+            if True: #'ANY' in tracer:
+                fit_a = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_a.dat"))
+                fit_b = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_b.dat"))
+                fit_zcut = 0.3
+                def fit(z):
+                    ff = np.empty(len(z))
+                    mask_a = z < fit_zcut
+                    mask_b = ~mask_a
+                    ff[mask_a] = fit_a(z[mask_a])
+                    ff[mask_b] = fit_b(z[mask_b])
+                    return ff + 0.078
+                mock_z_cut = fit(data['Z'])
+                downsample_mag = data['R_MAG_ABS'] < mock_z_cut
+                data = data[downsample_mag]
+            else:
+                downsample_mag = data['R_MAG_ABS'] < -21.35
+                data = data[downsample_mag]
+            zfrac = 0.98
+            zrange = (0.1, 0.5)
+            mask = data.trues()
+
+        rng = np.random.RandomState(seed=seed)
+        x = rng.random(data.size)
+        xfrac = data.ones()
+        if zsplit is not None:
+            #subfrac = np.ones(len(ff))
+            mask_sub = data['Z'] < zsplit
+            xfrac[mask_sub] = zfrac[0]
+            xfrac[~mask_sub] = zfrac[1]
+        else:
+            xfrac *= zfrac
+        mask &= x < xfrac
+        mask &= (data['Z'] > zrange[0]) & (data['Z'] < zrange[1])
+        data = data[mask]
+    return data
+
+
+def altmtl_from_full_data(forfa_data, full_data, nz, tracer, seed=42, remove_contaminants=True):
+    """
+    Create altmtl data catalog from For Fiber Assignment (FA) and Full catalogs.
+
+    Parameters
+    ----------
+    forfa_data : Catalog
+        FA catalog.
+    full_data : Catalog
+        Full data catalog.
+    nz : dict
+        Dictionary of {region: nz array}, with nz[1] = lower edge, nz[2] = upper edge, nz[3] = comoving density
+    tracer : str
+        Tracer, for FKP and downsampling ELG (redshift failures).
+    seed : int, optional
+        Random seed.
+
+    Returns
+    -------
+    catalog : Catalog
+        altmtl data catalog; randoms should be reassigned redshifts (see :func:`reshuffle_randoms`).
+    """
+    assert forfa_data.mpicomm.size == 1
+    assert full_data.mpicomm.size == 1
+    forfa_data = forfa_data[['TARGETID', 'RSDZ']]
+    forfa_data['Z'] = forfa_data.pop('RSDZ')
+    tracer = get_simple_tracer(tracer)
+    P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
+    #full_data = full_data[['TARGETID', 'RA', 'DEC', 'NTILE', 'ZWARN', 'Z_not4clus'] + (['R_MAG_ABS'] if 'BGS' in tracer else [])]
+    _, full_index, forfa_index = np.intersect1d(full_data['TARGETID'], forfa_data['TARGETID'], return_indices=True)
+    data = full_data[full_index]
+    forfa_data = forfa_data[forfa_index]
+    data['Z'] = data.pop('Z_not4clus')
+
+    zsplit = None
+    zfrac = 1.
+    if tracer.startswith('QSO'):
+        #good redshifts are currently just the ones that should have been defined in the QSO file when merged in full
+        mask = data['Z'] * 0 == 0
+        mask &= data['Z'] != 999999
+        mask &= data['Z'] != 1.e20
+        mask &= data['ZWARN'] != 999999
+        if remove_contaminants:
+            mask &= data['TARGETID'] < 419430400000000
+        zrange = (0.8, 2.1)
+
+    if tracer.startswith('ELG'):
+        mask = data['ZWARN']*0 == 0
+        mask &= data['ZWARN'] != 999999
+        #if dchi2 is not None: mask &= data['o2c'] > dchi2
+        mask &= data['LOCATION_ASSIGNED'] == 1
+        if remove_contaminants:
+            mask &= data['TARGETID'] < 838860800000000
+        zfrac = [0.96, 0.76]
+        zsplit = 1.49
+        zrange = (0.8, 1.6)
+
+    if tracer.startswith('LRG') or tracer.startswith('LGE'):
+        # Custom DELTACHI2 vs z cut from Rongpu
+        mask = data['ZWARN'] == 0
+        mask &= data['ZWARN']*0 == 0
+        mask &= data['ZWARN'] != 999999
+        if remove_contaminants:
+            mask &= data['Z'] < 1.5
+        #if dchi2 is not None:
+        #    mask &= LRG_goodz(data)
+        zfrac = 0.966
+        zrange = (0.4, 1.1)
+
+    if tracer.startswith('BGS'):
+        if True: #'ANY' in tracer:
+            fit_a = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_a.dat"))
+            fit_b = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_b.dat"))
+            fit_zcut = 0.3
+            def fit(z):
+                ff = np.empty(len(z))
+                mask_a = z < fit_zcut
+                mask_b = ~mask_a
+                ff[mask_a] = fit_a(z[mask_a])
+                ff[mask_b] = fit_b(z[mask_b])
+                return ff + 0.078
+            mock_z_cut = fit(data['Z'])
+            downsample_mag = data['R_MAG_ABS'] < mock_z_cut
+            data = data[downsample_mag]
+        else:
+            downsample_mag = data['R_MAG_ABS'] < -21.35
+            data = data[downsample_mag]
+
+        mask = data['ZWARN'] == 0
+        mask &= data['ZWARN']*0 == 0
+        mask &= data['ZWARN'] != 999999
+        #if dchi2 is not None:
+        #    mask &= data['DELTACHI2'] > dchi2
+        zfrac = 0.98
+        zrange = (0.1, 0.5)
+
+    rng = np.random.RandomState(seed=seed)
+    x = rng.random(data.size)
+    xfrac = data.ones()
+    if zsplit is not None:
+        #subfrac = np.ones(len(ff))
+        mask_sub = data['Z'] < zsplit
+        xfrac[mask_sub] = zfrac[0]
+        xfrac[~mask_sub] = zfrac[1]
+    else:
+        xfrac *= zfrac
+    mask &= x < xfrac
+    mask &= (data['Z'] > zrange[0]) & (data['Z'] < zrange[1])
+    data = data[mask]
+
+    data['WEIGHT_ZFAIL'] = data.ones()
+    data['WEIGHT_COMP'] = 1. / data['FRACZ_TILELOCID']  # FRAC_TLOBS_TILES on the randoms
+    data['WEIGHT_SYS'] = data.ones()
+    data['WEIGHT'] = data['WEIGHT_ZFAIL'] * data['WEIGHT_COMP'] * data['WEIGHT_SYS']
+
+    for name in ['NZ', 'NX']:
+        data[name] = data.zeros()
+    for region in nz:  # NGC, SGC
+        mask_region = select_region(data['RA'], data['DEC'], region)
+        data_ntile = data['NTILE'][mask_region]
+        weight_ntile = _compute_binned_weight(data_ntile, data['WEIGHT_COMP'][mask_region])
+        # WARNING: approximate, in principle should be obtained from randoms: https://github.com/desihub/LSS/blob/65e75dcf26f4d0d1e7be302546728c389c280dfe/py/LSS/common_tools.py#L1008
+        comp_ntile = 1. / weight_ntile * _compute_binned_weight(data_ntile, data['FRAC_TLOBS_TILES'][mask_region])
+        nzregion = nz[region]
+        zedges = np.insert(nzregion[2], 0, nzregion[1][0])
+        idx = np.digitize(data['Z'][mask_region], zedges, right=False) - 1
+        mask = (idx >= 0) & (idx < nzregion[3].size)
+        tmpnz = np.zeros_like(idx, dtype=data['WEIGHT_COMP'].dtype)
+        tmpnz[mask] = nzregion[3][idx[mask]]
+        data['NZ'][mask_region] = tmpnz
+        data['NX'][mask_region] = comp_ntile[data_ntile] * tmpnz
+        data['WEIGHT'][mask_region] /= weight_ntile[data_ntile]  # just completeness-weighting
     data['WEIGHT_FKP'] = 1 / (1 + P0 * data['NX'])
     return data
 

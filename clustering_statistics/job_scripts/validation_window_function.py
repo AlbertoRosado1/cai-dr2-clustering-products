@@ -79,8 +79,8 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             window_mesh3_spectrum = {'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch}
             particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))}
             particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
-            method = 'smooth_particle'
-            window_mesh2_spectrum = {'method': method, 'split_randoms': (20, 2 if 'ELG' in tracer else 4)}
+            method = 'smooth_mesh'
+            window_mesh2_spectrum = {'cut': True if 'full_shape' in analysis else None, 'method': method, 'split_randoms': (20, 2 if 'ELG' in tracer else 4)}
             window_mesh3_spectrum = {'method': method, 'split_randoms': (20, 2 if 'ELG' in tracer else 4), 'computed_batches': None} #[None]}
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
@@ -90,11 +90,10 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
-                #options['catalog'][itracer]['nran'] = 1
                 options['catalog'][itracer]['zranges'] = zranges  # override fiducial zranges 
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
-                    options['catalog'][itracer]['complete'] = {'downsample_nobj': 'downsample' in onthefly, 'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
+                    options['catalog'][itracer]['complete'] = {'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
                 elif onthefly == 'reshuffle':
                     options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'][itracer] | dict(region='ALL')))}
 
@@ -106,9 +105,9 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     from clustering_statistics import postprocess_stats_from_options
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum']}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True}, mesh3_spectrum={'auw': True}, window_mesh3_spectrum={})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['window_mesh2_spectrum', 'window_mesh3_spectrum']}, mesh2_spectrum={}, window_mesh2_spectrum={}, mesh3_spectrum={}, window_mesh3_spectrum={})
     stats_dir_kws = dict(stats_dir=stats_dir, project=project)
-    _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly)
+    _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly, method='smooth_particle')
     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=_get_stats_fn, **options)
 
 
@@ -129,9 +128,9 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['LRG', 'ELG', 'QSO'][1:2]
-    #tracers = ['LRG', 'QSO']
+    tracers = ['LRG', 'ELG', 'QSO']
     #tracers = ['LRG']
+    #tracers = ['QSO']
 
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'
@@ -140,8 +139,8 @@ if __name__ == '__main__':
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
-    #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][1:]
-    stats = ['mesh3_spectrum', 'window_mesh3_spectrum']
+    stats = ['mesh2_spectrum', 'window_mesh2_spectrum']
+    #stats = ['mesh3_spectrum', 'window_mesh3_spectrum'][:0]
     #stats = ['particle3_correlation']
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
@@ -165,7 +164,7 @@ if __name__ == '__main__':
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
-            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[1:]
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
        
         def get_run_stats():
             if mode == 'interactive':

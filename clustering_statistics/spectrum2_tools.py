@@ -707,29 +707,41 @@ def compute_window_mesh2_spectrum(*get_data_randoms, spectrum: types.Mesh2Spectr
                 from jaxpower.particle2 import convert_particles
 
                 sattrs = {'theta': (0., 0.05)}
-                pbin = BinParticle2CorrelationPoles(mattrs, edges={'step': 0.1}, sattrs=sattrs, **kw_window)
+                sedges = np.arange(0., sum(mattrs.boxsize**2)**0.5, 0.1)
+                pbin = BinParticle2CorrelationPoles(mattrs, edges=sedges, sattrs=sattrs, **kw_window)
 
                 all_particles = []
-                for iran, randoms in enumerate(all_randoms):
+                #for iran, randoms in enumerate(all_randoms):
+                for iran, randoms in enumerate(split_particles(all_randoms + [None] * (2 - len(all_randoms)), seed=seed, fields=fields)):
                     alpha = wsum_data[min(iran, len(wsum_data) - 1)] / randoms.weights.sum()
                     all_particles.append(convert_particles(randoms.clone(weights=alpha * randoms.weights)))
 
                 correlation = compute_particle2(*all_particles, bin=pbin, los=los)
-                correlation = correlation.clone(
-                    num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields),
-                    norm=[np.mean(norm)] * len(pbin.ells),
-                )
 
-                coords = jnp.logspace(-3, 5, 4 * 1024)
-                correlation = interpolate_window_function(correlation, coords=coords, order=3)
-
-                results['window_mesh2_correlation_cut'] = types.ObservableTree(
+                from cucount.jax import BinAttrs, count2_analytic
+                battrs = BinAttrs(s=sedges)
+                RR0 = count2_analytic(mattrs=1., battrs=battrs)
+    
+                # Divide by volume factor and normalization
+                def renormalize(pole):
+                    return pole.clone(norm=np.mean(norm) * RR0)
+    
+                correlation = correlation.map(renormalize)
+                #correlation = correlation.clone(
+                #    num_shotnoise=compute_particle2_shotnoise(*all_particles, bin=pbin, fields=fields),
+                #    norm=[np.mean(norm)] * len(pbin.ells),
+                #)
+                results['window_smooth_particle2_correlation_cut'] = types.ObservableTree(
                     [correlation],
                     oells=[ells[0] if len(ells) == 1 else tuple(ells)],
                 )
-
-                window_cut = compute_smooth2_spectrum_window(correlation, edgesin=edgesin, ellsin=ellsin, bin=bin, flags=('fftlog',))
-                results['cut'] = results['raw'].clone(value=results['raw'].value() - window_cut.value() / (norm[..., None] / np.mean(norm)))
+                edgesin_extended = jnp.arange(edgesin.max(), 10., 0.02)
+                edgesin_extended = jnp.column_stack([edgesin_extended[:-1], edgesin_extended[1:]])
+                edgesin_extended = jnp.concatenate([edgesin, edgesin_extended], axis=0)
+                window_cut = compute_smooth2_spectrum_window(correlation, edgesin=edgesin_extended, ellsin=ellsin, bin=bin, flags=('rect',), batch_size=20)
+                #results['cut'] = window_cut
+                results['cut'] = results['raw'].at.theory.match(window_cut.theory).clone(theory=window_cut.theory)  # extend theory of raw to that of cut
+                results['cut'] = results['cut'].clone(value=results['cut'].value() - window_cut.value() / (norm[..., None] / np.mean(norm)))
 
             return results
 

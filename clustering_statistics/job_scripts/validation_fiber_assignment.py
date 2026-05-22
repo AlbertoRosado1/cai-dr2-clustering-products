@@ -96,10 +96,14 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             
             for itracer in options['catalog']:
                 #options['catalog'][itracer]['nran'] = 1
+                if 'BGS_BRIGHT' in itracer:
+                    options['catalog'][itracer]['tracer'] = 'BGS_BRIGHT'
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
-                    options['catalog'][itracer]['complete'] = {'downsample_nobj': 'downsample' in onthefly, 'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
+                    options['catalog'][itracer]['complete'] = {'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
+                elif onthefly is not None and onthefly.startswith('altmtl'):
+                    options['catalog'][itracer]['complete'] = {'altmtl': True}
                 elif onthefly == 'reshuffle':
                     options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'][itracer] | dict(region='ALL')))}
 
@@ -129,44 +133,51 @@ if __name__ == '__main__':
     imocks = np.arange(25)
     #imocks = np.arange(5, 25)
     #imocks = np.arange(5, 9)
-    imocks = np.arange(3, 9)
-    #imocks = np.arange(3)
+    #imocks = np.arange(9)
+    #imocks = np.arange(1)
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['LRG', 'ELG', 'QSO'][1:2]
+    tracers = ['LRG', 'ELG', 'QSO']
     #tracers = ['ELG', 'LRG']
     #tracers = ['ELG']
+    #tracers = ['QSO']
 
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'
-    #tracers = ['BGS']
+    #tracers = ['BGS_BRIGHT']
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
     #stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
-    stats = ['particle2_correlation']
+    #stats = ['particle2_correlation']
     #stats = ['mesh2_spectrum', 'close_pair_correction'][:1]
-    #stats = ['particle3_correlation']
-    postprocess = ['combine_regions'][:0]
+    #stats = ['particle3_correlation'][:0]
+    #postprocess = ['combine_regions']
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics_tests'
-    #weight = 'default-FKP-noimsys'
+    #project = f'{analysis}/fiber_assignment_systematics'
+    #weight = 'default-FKP'
+    weight = 'default-FKP-noimsys'
     #weight = 'default-noimsys'
-    weight = 'default'
+    #weight = 'default'
     regions = ['NGC', 'SGC']
+    #regions = ['SGCnoDES', 'DES']
     max_mocks_per_batch = 5
 
-    #onthefly = None
+    onthefly = None
     #onthefly = 'complete-nozfail'
     #onthefly = 'complete-renorm'
     #onthefly = 'complete-downsample'
     #onthefly = 'complete-samenz'
     #onthefly = 'complete-fixnz'
-    onthefly = 'complete-nocomp'
+    #onthefly = 'complete-fibered'
+    #onthefly = 'complete'
+    #onthefly = 'altmtl'
     
     for tracer in tracers:
         tracer = tools.get_full_tracer(tracer, version=version)
@@ -175,7 +186,7 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-       
+
         def get_run_stats():
             if mode == 'interactive':
                 return run_stats
