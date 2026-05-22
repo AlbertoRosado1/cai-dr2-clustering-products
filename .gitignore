@@ -19,8 +19,18 @@ doc/_build/
 **/*.png
 **/bak
 **/_plots/*
-
+**/desipipe_data_splits_unblinded.py
+**/auw3.ipynb
+**/check_complete.ipynb
+**/**Copy*.ipynb
+**/validation2.ipynb
+**/*.pdf
+**/*.zip
 **/log
+**/tmp
+**/tmp.py
+
+.vscode/
 
 # Unit test / coverage reports
 **/.coverage

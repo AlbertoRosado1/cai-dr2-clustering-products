@@ -16,7 +16,6 @@ observable (data, theory, window): ``{'stat': {'kind': ..., 'basis': ..., 'selec
 'catalog': {'version':, ...}, 'theory': {'model': ...}, 'window': {}}``.
 """
 
-
 import os
 import re
 import json
@@ -70,9 +69,11 @@ def get_cosmology(cosmology_options: dict=None):
     # n_s and tau_reio are fixed
     # A Gaussian prior on omega_b.
     params = {
-        'H0':       {'derived': True},
-        'Omega_m':  {'derived': True},
-        'sigma8_m': {'derived': True},
+        'H0':       {'derived': True, 'latex': 'H_0'},
+        'Omega_m':  {'derived': True, 'latex': R'\Omega_\mathrm{m}'},
+        'sigma8_m': {'derived': True, 'latex': R'\sigma_{8,\mathrm{m}}'},
+        'sigma8_cb': {'derived': True, 'latex': R'\sigma_{8,\mathrm{cb}}'},
+        'rs_drag': {'derived': True, 'latex': R'r_s'},
         'tau_reio': {'fixed': True},
         'n_s':      {'fixed': is_fixed_model or 'ns-fixed' in model},
         'omega_b':  {'fixed': is_fixed_model, 'prior': {'dist': 'norm', 'loc': 0.02237,  'scale': 0.00037}},
@@ -256,7 +257,8 @@ def _get_default_theory_nuisance_priors(model, stat, prior_basis, b3_coev=True, 
     return params
 
 
-def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_attrs: dict=None, data=None):
+@default_mpicomm
+def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_attrs: dict=None, data=None, mpicomm=None):
     """
     Return a configured theory desilike calculator for the requested statistic.
 
@@ -265,7 +267,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     stat : str
         Statistic name, e.g. 'mesh2_spectrum' or 'mesh3_spectrum'.
     theory_options : dict
-        Theory options dict containing at least 'model' and possibly other keys.
+        Theory options dict containing at least 'model' and possibly other keys. If 'z' is provided, data attribute 'z' will be ignored.
     cosmology : Cosmoprimo
         Cosmology calculator.
     data_attrs : dict
@@ -284,6 +286,10 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     theory_options.setdefault('cosmology', {'template': 'direct'})
     cosmology_options = theory_options['cosmology']
     z = data_attrs['z']
+    if 'z' in theory_options:
+        z = theory_options['z']
+    if mpicomm.rank == 0:
+        logger.info(f'theory is evaluated at effective redshift {z:.3f}')
     if cosmology_options['template'] == 'direct':
         template = DirectPowerSpectrumTemplate(fiducial=fiducial, cosmo=cosmology, z=z)
     elif cosmology_options['template'] == 'shapefit':
@@ -682,6 +688,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     def _get_mock_stats_fn(stat, file_kw):
         stats_dir = Path(file_kw.pop('stats_dir'))
         version = file_kw.pop('version', None)
+        project = file_kw.pop('project', '')
         if isinstance(version, str) and version.startswith('ezmock'):
             tracer = get_simple_tracer(_make_tuple(file_kw['tracer']))
             tracer = tracer[0] if isinstance(tracer, tuple) else tracer
@@ -697,11 +704,11 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             if isinstance(fn, list):
                 return len(fn) > 0
             return fn.exists()
-        base_fn = get_stats_fn(kind=stat, stats_dir=stats_dir, version=version, **file_kw)
+        base_fn = get_stats_fn(kind=stat, stats_dir=stats_dir, project=project, version=version, **file_kw)
         if _has_existing(base_fn):
             return base_fn
         project_fn = None
-        if version is not None and file_kw.get('imock', None) is not None:
+        if not project and version is not None and file_kw.get('imock', None) is not None:
             project_fn = get_stats_fn(kind=stat, stats_dir=stats_dir, project=version, **file_kw)
             if _has_existing(project_fn):
                 return project_fn
@@ -785,6 +792,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     imock = file_kw.get('imock', None)
                     if imock is not None:  # FIXME
                         file_kw['imock'] = 0
+                    file_kw.pop('auw', None)  # auw stat has the same window as non-auw stat
                     fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
@@ -967,6 +975,10 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     observables = []
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
+        suffix = 'x'.join(label.get('tracers', []))
+        if suffix:
+            suffix = '_' + suffix
+        observable_name = stat + suffix
         if 'mesh2_spectrum' in stat:
             cls = TracerSpectrum2PolesObservable
         elif 'mesh3_spectrum' in stat:
@@ -976,13 +988,15 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         else:
             raise NotImplementedError(stat)
         data_attrs = dict(data.attrs) | label
-        for label, pole in window.observable.items(level=None):
+        for _, pole in window.observable.items(level=None):
             data_attrs['z'] = pole.attrs['zeff']
+        if mpicomm.rank == 0:
+            logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
         theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
         namespace = _str_from_observable_options(
             observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
         theory_params = theory.init.params
-        observable = cls(data=data, window=window, theory=theory)
+        observable = cls(data=data, window=window, theory=theory, name=observable_name)
         observable()
         if observable_options['emulator']['name']:
             assert cache_dir is not None, 'cache_dir must be provided for emulator'
@@ -1052,8 +1066,8 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
 
 def get_sampler_cls(name):
     """Return sampler class."""
-    from desilike.samplers import EmceeSampler, MCMCSampler
-    translate = {'emcee': EmceeSampler, 'mcmc': MCMCSampler}
+    from desilike.samplers import EmceeSampler, MCMCSampler, PocoMCSampler
+    translate = {'emcee': EmceeSampler, 'mcmc': MCMCSampler, 'pocomc': PocoMCSampler}
     return translate[name.lower()]
 
 
@@ -1157,10 +1171,11 @@ def fill_fiducial_options(options):
 
 
 def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'),
-                                       tracer='LRG', zrange=(0.4, 0.6), region='GCcomb',
+                                       tracer='LRG', zrange=None, region='GCcomb',
                                        version='abacus-2ndgen-complete',
                                        covariance='holi-v1-altmtl',
                                        stats_dir=Path('/dvs_ro/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe'),
+                                       project='',
                                        emulator=True):
     """
     Convenience helper that builds a minimal dictionary of likelihood options.
@@ -1169,7 +1184,7 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     ----------
     stats : list
         List of statistics in the joint likelihood, from ['mesh2_spectrum', 'mesh3_spectrum']
-    tracer : str, tuple
+    tracer : str or tuple (for cross correlation), or list of str or tuple to account for cross-correlation between tracers
         Tracers to fit.
     zrange : tuple
         Redshift range.
@@ -1179,6 +1194,8 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
         Version of data to use.
     covariance : str
         Version of covariance mocks to use.
+    project : str, optional
+        Optional project subdirectory passed through to the measurement path builder.
 
     Returns
     -------
@@ -1191,10 +1208,13 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     """
     if isinstance(stats, str):
         stats = [stats]
+    tracers = [tracer] if isinstance(tracer, (str, tuple)) else tracer
     observables = []
-    tracer, zrange = get_full_tracer_zrange(tracer)
-    for stat in stats:
+    for tracer, stat in itertools.product(tracers, stats):
+        tracer, zrange = get_full_tracer_zrange(tracer, zrange)
         catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir}
+        if project:
+            catalog['project'] = project
         if 'data' not in version:
             catalog['imock'] = '*'  # read all available mocks
         observable_options = {'stat': {'kind': stat}, 'catalog': catalog}
@@ -1205,7 +1225,6 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
         observables.append(observable_options)
     covariance = {'version': covariance, 'stats_dir': stats_dir}
     return fill_fiducial_likelihood_options({'observables': observables, 'covariance': covariance})
-
 
 def generate_box_likelihood_options_helper(
         stats=('mesh2_spectrum',),
@@ -1536,7 +1555,7 @@ def str_from_options(options: dict, level: int | dict=None):
     return '_'.join(out_str)
 
 
-def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits', kind='chain', likelihoods: list=None,
+def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', kind='chain', likelihoods: list=None,
                 sampler: dict=None, profiler: dict=None, cosmology: dict=None, ichain: int=None,
                 level=None, extra='', ext='npy'):
     """
@@ -1546,6 +1565,8 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits', kind='chain',
     ----------
     fits_dir : str, Path
         Base directory for fit outputs.
+    project : str
+        KP analysis to which the measurement corresponds. For example: 'full_shape/base', 'local_png/base', 'bao/base', etc.
     kind : str
         Fitting product. Options are 'chain', 'profiles', etc.
     likelihoods : list
@@ -1563,6 +1584,7 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits', kind='chain',
         Fit file name.
     """
     fits_dir = Path(fits_dir)
+    fits_dir = fits_dir / project
     options = {'likelihoods': likelihoods, 'cosmology': cosmology}
     _str_from_options = str_from_options(options, level=level)
     _hash = _hash_options(options)

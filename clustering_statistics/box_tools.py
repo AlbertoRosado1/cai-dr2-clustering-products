@@ -1,11 +1,15 @@
 import os
 from pathlib import Path
+import logging
+import functools
 
 import numpy as np
 from mpi4py import MPI
 
 from .tools import (default_mpicomm, Catalog, join_tracers, _unzip_catalog_options, _merge_catalog_options, _zip_catalog_options,
 _read_catalog, get_simple_tracer, _merge_options, _make_tuple, desi_dir, write_stats, float2str, setup_logging)
+
+logger = logging.getLogger('box_tools')
 
 
 def get_zrange_from_snap(tracer, zsnap=None, version='abacus-2ndgen'):
@@ -15,7 +19,7 @@ def get_zrange_from_snap(tracer, zsnap=None, version='abacus-2ndgen'):
     """
     tracer = get_simple_tracer(tracer)
     zrange = {}
-    if version in ['abacus-2ndgen', 'ezmock-dr1']:
+    if version in ['abacus-2ndgen', 'ezmock']:
         if tracer == 'BGS':
             zrange[0.200] = (0.1, 0.4)
         elif tracer == 'LRG':
@@ -117,6 +121,10 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
     propose_fiducial['catalog'] = {'hod': '', 'los': 'z'}
     if 'abacus' in version:
         propose_fiducial['catalog'].update({'cosmo': '000'})
+        propose_meshsizes = {'meshsize': 512}
+    if 'ezmock' in version:
+        propose_fiducial['catalog'].update({'cosmo': '000', 'boxsize': 6000.})
+        propose_meshsizes = {'meshsize': 800}
     if 'abacus-hf' in version:
         hod = 'base'
         if 'BGS' in tracer or 'LRG' in tracer:
@@ -126,7 +134,7 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
         propose_fiducial['catalog'].update({'hod': hod})
     propose_fiducial['zsnaps'] = list(get_zrange_from_snap(tracer, zsnap=None, version=version))
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
-        propose_fiducial[stat]['mattrs'] = {'meshsize': 512}
+        propose_fiducial[stat]['mattrs'] = propose_meshsizes
     propose_fiducial['mesh2_spectrum'].update(ells=(0, 2, 4))
     propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal')
     for stat in ['recon']:
@@ -205,6 +213,10 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
     fn : Path
         Catalog file name(s).
     """
+    if version == 'ezmock':
+        stracer = get_simple_tracer(tracer)
+        cat_dir = desi_dir / f'cosmosim/SecondGenMocks/EZmock/CubicBox_6Gpc/{stracer}/z{zsnap:.3f}/'
+        return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]
     if version == 'abacus-2ndgen':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/CubicBox/{stracer}/z{zsnap:.3f}/AbacusSummit_base_c000_ph{imock:03d}/'
@@ -229,7 +241,7 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
 
 
 @default_mpicomm
-def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_catalog_fn=get_box_catalog_fn, **kwargs):
+def read_box_catalog(kind='data', los='z', mpicomm=None, get_box_catalog_fn=get_box_catalog_fn, **kwargs):
     """
     Read data clustering catalog with given parameters.
 
@@ -251,37 +263,78 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
     """
     mpiroot = 0
     catalog = None
-    boxsize, scalev = None, None
+    scalev = None
     zsnap = kwargs.get('zsnap', None)
     version = kwargs.get('version', '')
     tracer = get_simple_tracer(kwargs.get('tracer', ''))
     cosmo = kwargs.get('cosmo', '000')
+    boxsize = kwargs.get('boxsize', None)
+    nprocesses = kwargs.get('nprocesses', None)
 
-    def read_catalog(fn):
+    def barrier_idle(mpicomm, tag=0, sleep=1.):
+        """
+        MPI barrier fonction that solves the problem that idle processes occupy 100% CPU.
+        See: https://goo.gl/NofOO9.
+        """
+        import time
+        size = mpicomm.size
+        if size == 1: return
+        rank = mpicomm.rank
+        mask = 1
+        while mask < size:
+            dst = (rank + mask) % size
+            src = (rank - mask + size) % size
+            req = mpicomm.isend(None, dst, tag)
+            while not mpicomm.Iprobe(src, tag):
+                time.sleep(sleep)
+            mpicomm.recv(None, src, tag)
+            req.Wait()
+            mask <<= 1
+
+    def read_catalog(fn, nprocesses=nprocesses):
         kwargs = {}
         if 'uchuu' in version:
             if 'LRG' in tracer: kwargs['group'] = 'galaxies'
             elif 'QSO' in tracer: kwargs['group'] = '/'
             else: kwargs['group'] = 'df'
-        return _read_catalog(fn, mpicomm=MPI.COMM_SELF, **kwargs)
+        is_list = isinstance(fn, (tuple, list))
+        if is_list and nprocesses is not None:
+            # Not faster than MPI
+            fns = list(fn)
+            nprocesses = min(len(fns), nprocesses)
+            catalog = None
+            from concurrent.futures import ProcessPoolExecutor
+            if mpicomm.rank == 0:
+                with ProcessPoolExecutor(max_workers=nprocesses) as pool:
+                    catalogs = list(pool.map(functools.partial(_read_catalog, mpicomm=MPI.COMM_SELF, **kwargs), fns))
+                    for catalog in catalogs:
+                        # Attach manually, as not propagated by pickle
+                        catalog.mpicomm = MPI.COMM_SELF
+                    catalog = Catalog.concatenate(catalogs)
+                    del catalogs
+            barrier_idle(mpicomm=mpicomm, tag=0, sleep=0.2)
+            catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=0)
+        else:
+            catalog = _read_catalog(fn, mpicomm=mpicomm, **kwargs)
+        return catalog
 
     def recenter(positions, boxsize):
         if 'uchuu-hf' in version:
             return positions - boxsize / 2.
         return positions
 
+    fn = get_box_catalog_fn(kind=kind, los=los, **kwargs)
+    catalog = read_catalog(fn)
+
+    if boxsize is None:
+        boxsize = catalog.attrs.get('BOXSIZE', None)
+    scalev = catalog.attrs.get('VELZ2KMS', None)
+
     if mpicomm.rank == mpiroot:
-        fn = get_box_catalog_fn(kind=kind, los=los, **kwargs)
-        catalog = read_catalog(fn)
-        boxsize = catalog.header.get('BOXSIZE', 2000.)
-        scalev = catalog.header.get('VELZ2KMS', None)
+        logger.info(f'Finished reading catalogs.')
 
-    if mpicomm.size > 1:
-        catalog = Catalog.scatter(catalog, mpicomm=mpicomm, mpiroot=mpiroot)
-    for name in catalog.columns():
-        catalog[name.upper()] = catalog.pop(name)
-
-    boxsize, scalev = mpicomm.bcast((boxsize, scalev), root=mpiroot)
+    if boxsize is None:
+        raise ValueError('provide boxsize in options["catalog"]')
 
     if scalev is None:
         from cosmoprimo.fiducial import AbacusSummit
@@ -289,6 +342,9 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
         a = 1.0 / (1.0 + zsnap)
         E = cosmo.efunc(zsnap)
         scalev = 100.0 * a * E
+
+    for name in catalog.columns():
+        catalog[name.upper()] = catalog.pop(name)
 
     positions = np.column_stack([catalog[name] for name in ['X', 'Y', 'Z']])
     positions = recenter(positions, boxsize)
@@ -311,7 +367,7 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
 
 
 def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
-                     kind='mesh2_spectrum', extra='', ext='h5', **kwargs):
+                     kind='mesh2_spectrum', project='', extra='', ext='h5', **kwargs):
     """
     Return measurement filename for box mocks with given parameters.
 
@@ -319,6 +375,8 @@ def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
     ----------
     stats_dir : str, Path
         Directory containing the measurements.
+    project : str
+        KP analysis to which the measurement corresponds. For example: 'mock_challenge', 'full_shape/base', 'local_png/base', 'bao/base', etc.
     version : str, optional
         Measurement version. Default is 'v2'.
     kind : str
@@ -362,7 +420,7 @@ def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
         fns = [get_box_stats_fn(stats_dir=stats_dir, kind=kind, ext=ext, catalog=catalog_options | dict(imock=(imock,)), **kwargs) for imock in range(1000)]
         return [fn for fn in fns if os.path.exists(fn)]
 
-    stats_dir = Path(stats_dir)
+    stats_dir = Path(stats_dir) / project
 
     def join_if_not_none(f, key):
         items = catalog_options[key]
