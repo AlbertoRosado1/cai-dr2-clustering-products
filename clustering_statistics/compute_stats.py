@@ -30,19 +30,14 @@ import jax.experimental.multihost_utils
 import lsstypes as types
 
 from . import tools
-from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, setup_logging
-from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation
+from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, _compute_binned_weight, setup_logging
 
-from .spectrum2_tools import (
-    compute_mesh2_spectrum,
-    compute_window_mesh2_spectrum,
-    compute_covariance_mesh2_spectrum,
-    run_preliminary_fit_mesh2_spectrum,
-    compute_rotation_mesh2_spectrum,
-    compute_window_mesh2_spectrum_fm,
-)
-from .correlation3_tools import compute_particle3_angular_upweights
-from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum
+from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction
+from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
+
+from .correlation3_tools import compute_particle3_angular_upweights, compute_particle3_correlation, compute_particle3_correlation_close_pair_correction
+from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction
+
 from .recon_tools import compute_reconstruction
 
 
@@ -52,7 +47,7 @@ logger = logging.getLogger('summary-statistics')
 def _expand_cut_auw_options(stat, options):
     # Helper to generate separate option dictionaries for raw, theta-cut, and angular upweight variants
     # For spectrum measurements, create variants with different options
-    if 'spectrum' in stat:
+    if 'spectrum' in stat or 'correlation' in stat:
         keys = ['cut', 'auw']
         kw = dict(options)
         for key in keys: kw.pop(key, None)
@@ -83,8 +78,9 @@ def _make_list_zrange(zranges):
 def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                get_stats_fn=tools.get_stats_fn,
                                get_catalog_fn=None,
-                               read_clustering_catalog=tools.read_clustering_catalog,
-                               read_full_catalog=tools.read_full_catalog,
+                               read_catalog=tools.read_catalog,
+                               prepare_catalog=tools.prepare_catalog,
+                               mask_catalog=tools.mask_catalog,
                                **kwargs):
     """
     Compute summary statistics based on the provided options.
@@ -93,7 +89,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     ----------
     stats : str or list of str
         Summary statistics to compute.
-        Choices: ['mesh2_spectrum', 'mesh3_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'window_mesh2_spectrum_fm', 'covariance_mesh2_spectrum']
+        Choices: ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'close_pair_correction', 'window_mesh2_spectrum', 'window_mesh3_spectrum'].
+        If 'close_pair_correction', add angular upweight or theta-cut correction to pre-computed standard 'mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'particle3_correlation'.
     analysis : str, optional
         Type of analysis, 'full_shape' or 'png_local', to set fiducial options.
     cache : dict, optional
@@ -105,10 +102,10 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     get_catalog_fn : callable, optional
         Function to get the filename for reading the catalog.
         If provided, it is given to ``read_clustering_catalog`` and ``read_full_catalog``.
-    read_clustering_catalog : callable, optional
-        Function to read the clustering catalog.
-    read_full_catalog : callable, optional
-        Function to read the full catalog.
+    read_catalog : callable, optional
+        Function to read the catalog.
+    prepare_catalog : callable, optional
+        Function to prepare the clustering ('data', 'randoms') or 'full' ('fibered_data', 'parent_data', 'fibered_randoms', 'parent_randoms') catalogs.
     **kwargs : dict
         Options for catalog, reconstruction, and summary statistics.
     """
@@ -124,37 +121,41 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     tracers = list(catalog_options.keys())
 
     # Create redshift range lists for each tracer (support multiple z-bins)
-    zranges = {tracer: _make_list_zrange(catalog_options[tracer]['zrange']) for tracer in tracers}
+    zranges = {tracer: _make_list_zrange(catalog_options[tracer].pop('zrange')) for tracer in tracers}
+    region = {tracer: catalog_options[tracer].get('region') for tracer in tracers}
 
     # Wrap catalog readers with catalog filename lookup function
     if get_catalog_fn is not None:
-        read_clustering_catalog = functools.partial(read_clustering_catalog, get_catalog_fn=get_catalog_fn)
-        read_full_catalog = functools.partial(read_full_catalog, get_catalog_fn=get_catalog_fn)
+        read_catalog = functools.partial(read_catalog, get_catalog_fn=get_catalog_fn)
+        prepare_catalog = functools.partial(prepare_catalog, mask_catalog=mask_catalog)
 
     # Check if any statistic requires reconstruction
     with_recon = any('recon' in stat for stat in stats)
     with_catalogs = True
 
     # Initialize catalogs and randoms dictionaries
-    data, randoms = {}, {}
+    data, randoms, raw_randoms, raw_full_data = {}, {}, {}, {}
     with_stats_blinding = False
     if with_catalogs:
         # Load data and random catalogs for each tracer
         for tracer in tracers:
             _catalog_options = dict(catalog_options[tracer])
+            _catalog_options['region'] = 'ALL'
             # Expand redshift range to cover all requested z-bins
-            _catalog_options['zrange'] = (min(zrange[0] for zrange in zranges[tracer]), max(zrange[1] for zrange in zranges[tracer]))
 
             # Add bitwise weight information (PIP, completeness) if needed
+            binned_weight = {}
             if any(name in _catalog_options.get('weight', '') for name in ['bitwise', 'compntile']):
                 # sets NTILE-MISSING-POWER (missing_power) and per-tile completeness (completeness)
-                _catalog_options['binned_weight'] = read_full_catalog(kind='parent_data', **_catalog_options, attrs_only=True)
+                raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options)
+                binned_weight.update(raw_full_data[tracer].attrs)
+            _catalog_options['binned_weight'] = binned_weight
 
             # Add reconstruction options if needed
             if with_recon:
                 recon_options = options['recon'][tracer]
                 # pop as we don't need it anymore
-                _catalog_options |= {key: recon_options.pop(key) for key in list(recon_options) if key in ['nran', 'zrange']}
+                _catalog_options |= {key: recon_options.pop(key) for key in list(recon_options) if key in ['nran']}
 
             # Check if analysis requires blinding (e.g., protected samples)
             with_stats_blinding |= tools.check_if_stats_requires_blinding(analysis=analysis, **_catalog_options)
@@ -163,10 +164,13 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 _catalog_options.setdefault('reshuffle', {})  # to pass on complete data
 
             # Read data and random catalogs
-            data[tracer] = read_clustering_catalog(kind='data', **_catalog_options, concatenate=True)
+            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=True), kind='data', **_catalog_options)
+            binned_weight.update(data[tracer].attrs)  # update with any additional info from prepared data catalog
             #_catalog_options.pop('complete', None)
             #_catalog_options.pop('reshuffle', None)
-            randoms[tracer] = read_clustering_catalog(kind='randoms', **_catalog_options, cache=cache, concatenate=False)
+            raw_randoms[tracer] = read_catalog(kind='randoms', **_catalog_options, concatenate=False)
+            randoms[tracer] = prepare_catalog(raw_randoms[tracer], kind='randoms', **_catalog_options)
+            catalog_options[tracer]['binned_weight'] = binned_weight  # store binned weight info in catalog options for later use in stats computation
 
     # Warn user if blinding will be applied
     if with_stats_blinding:
@@ -179,9 +183,10 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         stat_recon_attrs = {'recon_mode': [], 'recon_smoothing_radius': []}
         for tracer in tracers:
             recon_options = dict(options['recon'][tracer])
+            recon_options.pop('zrange', None)  # not a kwarg of compute_reconstruction
             # Store reconstruction mode and radius for each tracer
-            for name in stat_recon_attrs: stat_recon_attrs[name].append(recon_options[name[len('recon_'):]])
-
+            for name in stat_recon_attrs:
+                stat_recon_attrs[name].append(recon_options[name[len('recon_'):]])
             # Run reconstruction to get shifted positions
             data[tracer]['POSITION_REC'], randoms_rec_positions = compute_reconstruction(lambda: {'data': data[tracer], 'randoms': Catalog.concatenate(randoms[tracer])}, **recon_options)
 
@@ -194,46 +199,60 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             # Keep only the requested number of random files (for reduced memory footprint)
             randoms[tracer] = randoms[tracer][:catalog_options[tracer]['nran']]  # keep only relevant random files
 
-    # Compute angular upweights for fiber collision corrections if requested
-    if with_catalogs:
-
-        def get_data(tracer):
-            # Load full parent catalogs (before any selection) for AUW computation
-            _catalog_options = catalog_options[tracer] | dict(zrange=None)
-            return {kind: read_full_catalog(kind=kind, **_catalog_options) for kind in ['fibered_data', 'parent_data']}
-
-        funcs = {2: compute_particle2_angular_upweights, 3: compute_particle3_angular_upweights}
-
-        for npt, func in funcs.items():
-            stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}'])]
-            if any(options[stat].get('auw', False) for stat in stats_npt):
-                # Compute angular upweights from fibered vs parent catalogs
-                auw = func(*[functools.partial(get_data, tracer) for tracer in tracers])
-                fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=None) for tracer in tracers}
-                fn = get_stats_fn(kind=f'particle{npt:d}_angular_upweights', catalog=fn_catalog_options)
-                #auw = types.read(fn)
-                # Write computed angular upweights to disk
-                tools.write_stats(fn, auw)
-                # Update all statistics options with computed angular upweights
-                for stat in stats_npt:
-                    if options[stat].get('auw', False): options[stat]['auw'] = auw  # update with angular upweights
-
     # Loop over all requested redshift bins
     for zvals in zip(*(zranges[tracer] for tracer in tracers)):
         zrange = dict(zip(tracers, zvals))
-
-        def get_zcatalog(catalog, zrange):
-            # Extract redshift slice from catalog
-            mask = (catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])
-            return catalog[mask]
-
         zdata, zrandoms = {}, {}
         if with_catalogs:
             # Slice catalogs to current redshift bin
             for tracer in tracers:
-                zdata[tracer] = get_zcatalog(data[tracer], zrange[tracer])
-                zrandoms[tracer] = [get_zcatalog(random, zrange[tracer]) for random in randoms[tracer]]
+                zdata[tracer] = mask_catalog(data[tracer], 'data', region=region[tracer], zrange=zrange[tracer])
+                zrandoms[tracer] = [mask_catalog(random, 'randoms', region=region[tracer], zrange=zrange[tracer]) for random in randoms[tracer]]
         fn_catalog_options = {tracer: catalog_options[tracer] | dict(zrange=zrange[tracer]) for tracer in tracers}
+
+        # Compute angular upweights for fiber collision corrections if requested
+        auw_options = {}
+        funcs = {2: compute_particle2_angular_upweights, 3: compute_particle3_angular_upweights}
+        for npt, func in funcs.items():
+            # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
+            # FIXME: how to generalize to any stat (correlation) or OQE weights?
+            spectrum_options = options[f'mesh{npt:d}_spectrum']
+            selection_weights = spectrum_options.get('selection_weights', None)
+            _cache_auw = {}
+
+            def get_data(tracer):
+                # Load full parent catalogs (before any selection) for AUW computation
+                _catalog_options = dict(fn_catalog_options[tracer])
+                _zdata = zdata[tracer]
+                if selection_weights:
+                    _zdata = selection_weights[tracer](_zdata)
+
+                _catalog_options['binned_weight']['weight_ntile'] = {column: _compute_binned_weight(_zdata[column], _zdata['INDWEIGHT'] / _zdata['WEIGHT_COMP'], mpicomm=_zdata.mpicomm) for column in ['NTILE']}
+                del _zdata
+                toret = {}
+                for kind in ['fibered_data', 'parent_data'] + (['fibered_randoms', 'parent_randoms'] if npt > 2 else []):
+                    if kind not in _cache_auw:
+                        if tracer not in raw_full_data:
+                            raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=True)
+                            #_catalog_options['binned_weight'].update(raw_full_data[tracer].attrs)  # update binned weight info for AUW computation
+                        _cache_auw[kind] = prepare_catalog(raw_randoms[tracer] if 'randoms' in kind else raw_full_data[tracer], kind=kind, **_catalog_options)
+                    toret[kind] = _cache_auw[kind]
+                return toret
+
+            stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}']) and options[stat].get('auw', False)]
+            if any(stats_npt):
+                # Compute angular upweights from fibered vs parent catalogs
+                fn = get_stats_fn(kind=f'particle{npt:d}_angular_upweights', catalog=fn_catalog_options)
+                if False: #fn.exists():
+                    auw = types.read(fn)
+                else:
+                    auw = func(*[functools.partial(get_data, tracer) for tracer in tracers])
+                    # Write computed angular upweights to disk
+                    tools.write_stats(fn, auw)
+                # Update all statistics options with computed angular upweights
+                for stat in stats_npt:
+                    auw_options[stat] = auw  # update with angular upweight
+            del _cache_auw
 
         def get_catalog_recon(catalog):
             # Replace positions with reconstructed positions
@@ -241,39 +260,74 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
         # Summary statistics computation loop
         for recon in ['', 'recon_']:
-            stat = f'{recon}particle2_correlation'
-            if stat in stats:
-                correlation_options = dict(options[stat])
+            funcs = {f'{recon}particle2_correlation': (compute_particle2_correlation, compute_particle2_correlation_close_pair_correction), f'{recon}particle3_correlation': (compute_particle3_correlation, compute_particle3_correlation_close_pair_correction)}
+            for stat, func in funcs.items():
+                if stat in stats:
+                    correlation_options = dict(options[stat]) | dict(auw=auw_options.get(stat, None))
+                    # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
+                    selection_weights = correlation_options.pop('selection_weights', None)
+                    # Optional per-tracer number of random files for this statistic (subset of the loaded randoms),
+                    # e.g. recon_particle2_correlation uses fewer randoms than the catalog/recon nran.
+                    correlation_nran = correlation_options.pop('nran', None)
+                    if correlation_nran is not None and jax.process_index() == 0:
+                        logger.info(f'{stat}: using {correlation_nran} random file(s) per tracer '
+                                    f'(out of {{{", ".join(f"{t!r}: {len(zrandoms[t])}" for t in tracers)}}} loaded).')
 
-                def get_data(tracer):
-                    # Prepare data structure for correlation function measurement
-                    if recon:
-                        # Use reconstructed positions as primary, randoms for random catalogs
-                        return {'data': get_catalog_recon(zdata[tracer]),
-                                'randoms': zrandoms[tracer],
-                                'shifted': [get_catalog_recon(zrandom) for zrandom in zrandoms[tracer]]}
-                    # Default: use original positions
-                    return {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
+                    def get_data(tracer):
+                        # Prepare data for spectrum measurement
+                        # Optionally restrict to a reduced number of random files for this statistic
+                        _zrandoms = zrandoms[tracer]
+                        if correlation_nran is not None:
+                            nran = correlation_nran[tracer] if isinstance(correlation_nran, dict) else correlation_nran
+                            _zrandoms = _zrandoms[:nran]
+                        if recon:
+                            # Use reconstructed positions, with same shifts applied to randoms
+                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': _zrandoms,
+                                    'shifted': [get_catalog_recon(zrandom) for zrandom in _zrandoms]}
+                        else:
+                            # Default: use original positions
+                            toret = {'data': zdata[tracer], 'randoms': _zrandoms}
+                        # Apply selection weights if provided (for bispectrum, NX**(-1. / 3.) weighting, etc.)
+                        if selection_weights:
+                            toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
+                        return toret
 
-                # Compute 2-point correlation function
-                correlation = compute_particle2_correlation(*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
-                # Apply blinding if requested (only for raw measurements, not reconstruction)
-                if with_stats_blinding and not recon:  # FIXME
-                    correlation = tools.apply_blinding(correlation, tracers, zrange=sum(zrange.values(), start=tuple()))
-                # Store reconstruction metadata
-                if recon:
-                    correlation.attrs.update(stat_recon_attrs)
-                # Write correlation to disk
-                fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **correlation_options)
-                tools.write_stats(fn, correlation)
+                    # Compute 2 or 3-point correlation function
+                    if 'close_pair_correction' in stats:
+                        # Add close pair correction (angular upweighting or theta-cut)
+                        _correlation_options = correlation_options | dict(auw=False, cut=False)
+                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **_correlation_options)
+                        correlation = types.read(fn)
+                        correlation = func[1](*[functools.partial(get_data, tracer) for tracer in tracers], correlation=correlation, **correlation_options)
+
+                        # Write all correlation variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, correlation_options).items():
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            if key != 'raw':
+                                tools.write_stats(fn, correlation[key])
+                    else:
+                        # Base calculation
+                        correlation = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], **correlation_options)
+
+                        # Write all spectrum variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, correlation_options).items():
+                            if key not in correlation: continue
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            # Apply blinding if requested
+                            if with_stats_blinding:
+                                correlation[key] = tools.apply_blinding(correlation[key], tracers, zrange=sum(zrange.values(), start=tuple()))
+                            # Store reconstruction metadata
+                            if recon:
+                                correlation[key].attrs.update(stat_recon_attrs)
+                            tools.write_stats(fn, correlation[key])
 
             # Map of spectrum statistics to computation functions
-            funcs = {f'{recon}mesh2_spectrum': compute_mesh2_spectrum, f'{recon}mesh3_spectrum': compute_mesh3_spectrum}
+            funcs = {f'{recon}mesh2_spectrum': (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction), f'{recon}mesh3_spectrum': (compute_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction)}
 
             for stat, func in funcs.items():
                 if stat in stats:
-                    spectrum_options = dict(options[stat])
-                    # Extract selection weights if provided (e.g., angular selection weights)
+                    spectrum_options = dict(options[stat]) | dict(auw=auw_options.get(stat, None))
+                    # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
                     selection_weights = spectrum_options.pop('selection_weights', None)
 
                     def get_data(tracer):
@@ -282,32 +336,44 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         czrandoms = Catalog.concatenate(zrandoms[tracer])
                         if recon:
                             # Use reconstructed positions, with same shifts applied to randoms
-                            toret = {'data': get_catalog_recon(zdata[tracer]),
-                                     'randoms': czrandoms,
+                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': czrandoms,
                                      'shifted': get_catalog_recon(czrandoms)}
                         else:
                             # Default: use original positions
                             toret = {'data': zdata[tracer], 'randoms': czrandoms}
-                        # Apply selection weights if provided (for bispectrum, NZ**(1. / 3.) weighting, etc.)
+                        # Apply selection weights if provided (for bispectrum, NX**(-1. / 3.) weighting, etc.)
                         if selection_weights:
                             toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
                         return toret
 
-                    # Compute power spectrum or bispectrum
-                    spectrum = func(*[functools.partial(get_data, tracer) for tracer in tracers], cache=cache, **spectrum_options)
-                    # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
-                    if not isinstance(spectrum, dict): spectrum = {'raw': spectrum}
+                    if 'close_pair_correction' in stats:
+                        # Add close pair correction (angular upweighting or theta-cut)
+                        _spectrum_options = spectrum_options | dict(auw=False, cut=False)
+                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **_spectrum_options)
+                        spectrum = types.read(fn)
+                        spectrum = func[1](*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, **spectrum_options)
 
-                    # Write all spectrum variants to disk
-                    for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
-                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
-                        # Apply blinding if requested
-                        if with_stats_blinding:
-                            spectrum[key] = tools.apply_blinding(spectrum[key], tracers, zrange=sum(zrange.values(), start=tuple()))
-                        # Store reconstruction metadata
-                        if recon:
-                            spectrum.attrs.update(stat_recon_attrs)
-                        tools.write_stats(fn, spectrum[key])
+                        # Write all spectrum variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            if key != 'raw':
+                                tools.write_stats(fn, spectrum[key])
+                    else:
+                        # Compute power spectrum or bispectrum
+                        spectrum = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], cache=cache, **spectrum_options)
+                        # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
+                        if not isinstance(spectrum, dict): spectrum = {'raw': spectrum}
+    
+                        # Write all spectrum variants to disk
+                        for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
+                            fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                            # Apply blinding if requested
+                            if with_stats_blinding:
+                                spectrum[key] = tools.apply_blinding(spectrum[key], tracers, zrange=sum(zrange.values(), start=tuple()))
+                            # Store reconstruction metadata
+                            if recon:
+                                spectrum[key].attrs.update(stat_recon_attrs)
+                            tools.write_stats(fn, spectrum[key])
 
         # Synchronize across all processes before proceeding to windows
         jax.experimental.multihost_utils.sync_global_devices('spectrum')  # wait for the writer
@@ -333,7 +399,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
                 # Load measured spectrum (or compute if not provided)
                 spectrum_fn = window_options.pop('spectrum', None)
-                fn_window_options = window_options | dict(auw=False, cut=False)
+                fn_window_options = window_options | dict(auw=False)
                 if spectrum_fn is None:
                     # Auto-detect spectrum filename from options
                     spectrum_stat = stat.replace("window_", "")
@@ -341,23 +407,29 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     spectrum_fn = get_stats_fn(kind=spectrum_stat, catalog=fn_catalog_options, **(options[spectrum_stat] | dict(auw=False, cut=False)))
                 spectrum = types.read(spectrum_fn)
 
-                def get_extra(ibatch, nbatch):
+                def get_extra(ibatch):
                     # Generate batch identifier string for window correlation functions
+                    if ibatch is None:
+                        return ''
+                    ibatch, nbatch = ibatch
                     return f'batch-{ibatch:d}-{nbatch:d}'
 
                 # Check if computing window in batches (for memory efficiency)
                 ibatch = window_options.get('ibatch', None)
-                extra = get_extra(*ibatch) if ibatch is not None else None
+                extra = get_extra(ibatch)
 
                 # Load previously computed batch windows if continuing
-                nbatch = window_options.get('computed_batches', False)
-                if nbatch:
+                batches = window_options.get('computed_batches', [])
+                if batches:
+                    if not isinstance(batches, (tuple, list)):
+                        batches = [(ibatch, batches) for ibatch in np.arange(batches)]
                     # Load window multipole batches computed in previous runs
-                    fns = [get_stats_fn(kind=f'{stat.replace("_spectrum", "")}_correlation_raw', catalog=fn_catalog_options, **(fn_window_options | dict(extra=get_extra(ibatch, nbatch)))) for ibatch in range(nbatch)]
+                    method = window_options.get('method', 'smooth_mesh')
+                    npt = {'window_mesh2_spectrum': 2, 'window_mesh3_spectrum': 3}[stat]
+                    fns = [get_stats_fn(kind=f'window_{method}{npt:d}_correlation_raw', catalog=fn_catalog_options, **(fn_window_options | dict(battrs={'s': None, 'pole': None}, extra=get_extra(ibatch)))) for ibatch in batches]
                     window_options['computed_batches'] = [types.read(fn) for fn in fns]
                 # Remove basis from options (will be extracted from spectrum)
                 window_options.pop('basis', None)
-
                 # Compute window function
                 window = func(*[functools.partial(get_data, tracer) for tracer in tracers], spectrum=spectrum, **window_options)
 
@@ -375,7 +447,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 # Write raw correlation functions (intermediate products) to disk
                 for key in window:
                     if 'correlation' in key:  # window functions
-                        fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(extra=extra)))
+                        fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(fn_window_options | dict(battrs={'s': None, 'pole': None}, cut=False, extra=extra)))
                         tools.write_stats(fn, window[key])
         # Synchronize before window forward model computation
         jax.experimental.multihost_utils.sync_global_devices('window')  # wait for the writer
@@ -384,34 +456,16 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         funcs = {"window_mesh2_spectrum_fm": compute_window_mesh2_spectrum_fm}
         for stat, func in funcs.items():
             if stat in stats:
-                # if autocorr set tracers = [tracer, tracer], else keep order for cross-corr
-                if len(tracers) == 1:
-                    tracers = [tracers[0], tracers[0]]
-
+                # len(tracers) == 1 if autocorr, else 2
                 window_options = dict(options[stat])
                 selection_weights = window_options.pop("selection_weights", None)
 
                 def get_data(tracer):
                     # Prepare randoms for forward model window computation
-                    czrandoms = Catalog.concatenate(zrandoms[tracer])
-                    toret = {"data": zdata[tracer], "randoms": czrandoms}
+                    toret = {"data": data[tracer], "randoms": Catalog.concatenate(randoms[tracer])}
                     if selection_weights:
                         toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
                     return toret
-
-                def _check_fn(fn, tracers, name=""):
-                    # Convert single filename to dictionary for tracer indexing
-                    if len(tracers) == 1:
-                        fn = {(tracer, tracer): fn for tracer in tracers}
-                    else:
-                        raise ValueError(f"provide a dictionary of (tracer1, tracer2): {name} for tracer1, tracer2 in {tracers}")
-                    return fn
-
-                def _read_tracer(fns, tracers2):
-                    # Read spectrum/window for specific tracer pair (handle ordering)
-                    if tracers2 not in fns:
-                        tracers2 = tracers2[::-1]
-                    return types.read(fns[tracers2])
 
                 # Get fiducial theory for computing forward model derivatives
                 theory_stat = stat.replace("window_", "theory_").replace("_fm", "")
@@ -432,7 +486,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 kw = options[kind_stat] | {"auw": False, "cut": False}
                                 fn = get_stats_fn(
                                     kind=kind_stat,
-                                    catalog=fn_catalog_options[tracers[0]] if tracers[1] == tracers[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                                    catalog={tracer: fn_catalog_options[tracer] for tracer in tracers},
                                     **kw | {"region": _region, "zrange": _zrange},
                                 )
                             products_fn[(_region, _zrange)][name] = fn
@@ -449,43 +503,13 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     )
                     theory_fn = get_stats_fn(
                         kind=theory_stat,
-                        catalog=fn_catalog_options[tracers[0]]
-                        if tracers[1] == tracers[0]
-                        else {tracer: fn_catalog_options[tracer] for tracer in tracers},
+                        catalog={tracer: fn_catalog_options[tracer] for tracer in tracers},
                     )
                     tools.write_stats(theory_fn, theory)
 
                 # Synchronize before reading theory
                 jax.experimental.multihost_utils.sync_global_devices("theory")  # such that theory ready for window
                 theory = types.read(theory_fn)
-
-                # Check that theory respects the conditions to be able to generate gaussian mocks in the window
-                c0v = theory.get(0).value() - 7 / 18 * theory.get(4).value()
-                if (c0v <= 0).any():
-                    raise ValueError('Theory (P_0 - 7/18 * P_4) has negative values and cannot be used to generate gaussian mocks for the window function.')
-                c2v = 35 * theory.get(4).value() / 18
-                rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
-                if (c0v * c2v - rec0vc2v**2 <= 0).any():
-                    # Rescale c2
-                    logger.warning(
-                        'Theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Rescaling P_2 by a global factor to enforce this condition.'
-                    )
-                    # Assume P_2 is positive
-                    rescale = np.min((5 * theory.get(4).value() / 9 + 2 * np.sqrt(c0v * c2v)) / theory.get(2).value()) - 1e-6
-                    if np.abs(rescale - 1) > 0.1:
-                        logger.warning(
-                            'Rescaling factor for P_2 is %f, which is quite far from 1. Check that the input theory is reasonable.',
-                            rescale,
-                        )
-                    else:
-                        logger.info('Rescaling factor for P_2 is %f.', rescale)
-                    theory = types.Mesh2SpectrumPoles([theory.get(ell).clone(value=theory.get(ell).value() * rescale) if ell == 2 else theory.get(ell) for ell in theory.ells])
-                    # Check that rescaled theory satisfies the condition
-                    rec0vc2v = 0.5 * theory.get(2).value() - 5 / 18 * theory.get(4).value()
-                    if (c0v * c2v - rec0vc2v**2 <= 0).any():
-                        raise ValueError(
-                            'Even after rescaling P_2, theory does not satisfy the condition c0 * c2 - Re(c0c2*)^2 > 0 for generating gaussian mocks for the window function. Some P_2 values may be negative. Check input theory.'
-                        )
 
                 theory_rebin = window_options.pop('theory_rebin', None)
                 if theory_rebin is not None:
@@ -672,7 +696,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
 
     imocks = kwargs.pop('imocks', None)
     extra = kwargs.pop('extra', None)
-    
+
     # Fill fiducial defaults
     options = fill_fiducial_options(kwargs, analysis=analysis)
     catalog_options = options['catalog']
@@ -766,7 +790,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                     downscale = np.kron(np.eye(len(window_geometry.theory.ells)), block)
                     # use it to "interpolate" the forward-modeled window to the geometry of the base window
                     window_fm = window_fm.clone(value=window_fm.value().dot(downscale))
-                
+
                 fn = get_stats_fn(kind=stat, **(kw | {"extra": effect}))
                 # Adding all effects
                 window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
@@ -877,7 +901,7 @@ def main(**kwargs):
     """
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
+    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'recon_mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'close_pair_correction', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
     parser.add_argument('--version', help='catalog version; e.g. holi-v1-altmtl', type=str, default=None)
     parser.add_argument('--cat_dir', help='where to find catalogs', type=str, default=None)
     parser.add_argument('--tracer', help='tracer(s) to be selected - e.g. LRG ELG for cross-correlation', nargs='*', type=str, default='LRG')
@@ -896,7 +920,7 @@ def main(**kwargs):
     meas_dir = Path(os.getenv('SCRATCH')) / 'measurements'
     parser.add_argument('--stats_dir',  help=f'base directory for measurements, default is {meas_dir}', type=str, default=meas_dir)
     parser.add_argument('--stats_extra',  help='extra string to include in measurement filename', type=str, default='')
-    parser.add_argument('--combine', help='combine measurements in two regions', type=str, nargs='*', default=None, choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'])
+    parser.add_argument('--combine', help='combine measurements in two regions', type=str, nargs='*', default=None, choices=['mesh2_spectrum', 'recon_mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'])
 
     args = parser.parse_args()
     # Set JAX to use 90% of GPU memory (leave 10% for overhead)

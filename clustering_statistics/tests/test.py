@@ -42,10 +42,10 @@ def test_stats_fn(stats=['mesh2_spectrum']):
             assert fn2 == fn1, f'{fn2} != {fn1}'
 
 
-def test_auw2(stats=['mesh2_spectrum', 'particle2_correlation']):
+def test_auw2(stats=['mesh2_spectrum', 'particle2_correlation'][:1]):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in ['LRG']:
-        zranges = tools.propose_fiducial('zranges', tracer)
+        zranges = tools.propose_fiducial('zranges', tracer)[:1]
         for region in ['NGC', 'SGC']:
             catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451)
             #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
@@ -118,17 +118,18 @@ def test_recon(stat='recon_particle2_correlation'):
             assert np.allclose(types.read(fn).attrs['zeff'], 0.5095347497074821)
 
 
-def test_correlation():
+def test_correlation2():
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     stats = ['particle2_correlation']
 
-    for jackknife in [{}, {'nsplits': 60}]:
+    for jackknife in [{}, {'nsplits': 60}][:1]:
         for tracer in ['LRG']:
             zrange = tools.propose_fiducial('zranges', tracer)[0]
             for region in ['NGC', 'SGC']:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, weight='default-FKP', imock=451, nran=2)
                 catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
-                #compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), particle2_correlation={'jackknife': jackknife})
+                compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), particle2_correlation={'jackknife': jackknife})
+                exit()
 
         options = dict(catalog=catalog_options, combine_regions={'stats': ['particle2_correlation']}, particle2_correlation={'jackknife': jackknife})
         postprocess_stats_from_options(['combine_regions'], get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **options)
@@ -214,12 +215,12 @@ def test_expand_randoms_stats(stat='mesh2_spectrum'):
 
 def test_optimal_weights(stats=['mesh2_spectrum']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    for tracer in ['LRG']:
-        zranges = tools.propose_fiducial('zranges', tracer)[0]
+    for tracer in [('LRG', 'ELG_LOPnotqso')]:
+        zranges = (0.8, 1.1)
         for region in ['NGC', 'SGC'][:1]:
             #catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451)
             catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-            compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True}, analysis='png_local')
+            #compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True}, analysis='png_local')
             catalog_options_oqe = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP-oqe', nran=1)
             compute_stats_from_options(stats, catalog=catalog_options_oqe, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True}, analysis='png_local')
             for stat in stats:
@@ -235,12 +236,12 @@ def test_cross(stats=['mesh2_spectrum']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for tracer in [('LRG', 'ELG_LOPnotqso')]:
         zranges = [(0.8, 1.1)]
-        for region in ['NGC', 'SGC']:
-            catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
+        for region in ['NGC', 'SGC'][:1]:
+            catalog_options = dict(version='data-dr2-v2', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
             compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'auw': True, 'cut': True}, particle2_correlation={}, analysis='png_local')
 
 
-def test_window(stats=['mesh2_spectrum']):
+def test_window2(stats=['mesh2_spectrum']):
     from jaxpower import get_mesh_attrs
     from clustering_statistics.tools import propose_fiducial
     from clustering_statistics.spectrum3_tools import _get_window_edges
@@ -252,19 +253,27 @@ def test_window(stats=['mesh2_spectrum']):
         for tracer in ['LRG']:
             zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
-                for method in ['smooth', 'exact'][1:]:
-                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
+                for method in ['smooth_mesh', 'smooth_particle', 'exact'][1:2]:
+
+                    def get_stats_fn(*args, extra='', **kwargs):
+                        extra = f'{extra}_{method}' if extra else method
+                        return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
+
+                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451)
                     #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-                    compute_stats_from_options([stat, f'window_{stat}'], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={'mattrs': {'meshsize': 250, 'boxsize': 6000.}}, window_mesh2_spectrum={'cut': True, 'method': method})
+                    options = {}
+                    options['mesh2_spectrum'] = {'mattrs': {'meshsize': 250, 'boxsize': 6000.}}
+                    options['window_mesh2_spectrum'] = {'cut': True, 'method': method, 'split_randoms': (50, 10)}
+                    compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=get_stats_fn, **options)
         if 'mesh3' in stat: continue
-        """
-        for tracer in [('LRG', 'ELG_LOPnotqso')]:
+        '''
+        for tracer in ['LRG', ('LRG', 'ELG_LOPnotqso')][1:]:
             zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-                compute_stats_from_options([stat, f'window_{stat}'], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={}, window_mesh2_spectrum={'cut': True}, analysis='png_local')
-        """
+                compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mattrs={'meshsize': 400}, mesh2_spectrum={}, window_mesh2_spectrum={'cut': True}, analysis='png_local')
+        '''
 
 
 def test_window3(stats=['mesh3_spectrum']):
@@ -273,12 +282,21 @@ def test_window3(stats=['mesh3_spectrum']):
     from clustering_statistics.spectrum3_tools import _get_window_edges
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
     for stat in stats:
-        for tracer in ['QSO']:
-            zranges = [(0.8, 2.1)]
+        for tracer in ['LRG']:
+            zranges = [(0.8, 1.1)]
             for region in ['NGC', 'SGC'][:1]:
-                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, imock=451, nran=1)
+                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zranges, region=region, nran=1, imock=451)
                 #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
-                compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir))
+                options = {}
+                options['mesh3_spectrum'] = {'mattrs': {'meshsize': 250}}
+                for method in ['smooth_mesh', 'smooth_particle'][1:]:
+
+                    def get_stats_fn(*args, extra='', **kwargs):
+                        extra = f'{extra}_{method}' if extra else method
+                        return tools.get_stats_fn(*args, stats_dir=stats_dir, extra=extra, **kwargs)
+
+                    options['window_mesh3_spectrum'] = {'buffer_size': 40, 'method': method, 'split_randoms': (5, 1)}
+                    compute_stats_from_options([stat, f'window_{stat}'][1:], catalog=catalog_options, **options, get_stats_fn=get_stats_fn)
 
 
 def test_covariance():
@@ -475,13 +493,153 @@ def test_count3close():
 
 def test_auw3(stats=['mesh3_spectrum']):
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    for tracer in ['LRG', 'ELG_LOPnotqso'][:1]:
+    for tracer in ['LRG', 'ELG_LOPnotqso'][1:]:
         zranges = tools.propose_fiducial('zranges', tracer)[-1:]
         for region in ['NGC', 'SGC'][:1]:
-            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zranges, region=region, imock=1, nran=2)
+            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zranges, region=region, imock=1, nran=1)
             #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zranges, region=region, weight='default-FKP', nran=1)
             catalog_options['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
             compute_stats_from_options(stats, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh3_spectrum={'ells': [(0, 0, 0), (2, 0, 2)], 'auw': True})
+
+
+
+def test_correlation3():
+    stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
+    stats = ['particle3_correlation']
+
+    for tracer in ['LRG']:
+        zrange = tools.propose_fiducial('zranges', tracer)[0]
+        zrange = (0.4, 1.1)
+        for region in ['NGC', 'SGC'][:1]:
+            catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, weight='default-FKP', imock=451, nran=5)
+            catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
+            #particle3_correlation = {'battrs': dict(s=np.linspace(0., 180., 181), pole=(list(range(2)), 'firstpoint'))}
+            particle3_correlation = {'split_randoms': (1.5, 7), 'battrs': dict(s=np.linspace(0., 160., 21), pole=(list(range(6)), 'firstpoint'))}
+            compute_stats_from_options(stats, catalog=catalog_options, particle3_correlation=particle3_correlation, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir))
+
+    #options = dict(catalog=catalog_options, combine_regions={'stats': ['particle3_correlation']})
+    #postprocess_stats_from_options(['combine_regions'], get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), **options)
+
+
+def test_close_pair_correction():
+    stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-close-pairs'
+    stats = ['mesh2_spectrum', 'particle2_correlation', 'mesh3_spectrum', 'particle3_correlation']
+
+    for tracer in ['LRG']:
+        zrange = tools.propose_fiducial('zranges', tracer)[-1]
+        for region in ['NGC', 'SGC'][:1]:
+            catalog_options = dict(version='abacus-hf-dr2-v2-altmtl', tracer=tracer, zrange=zrange, region=region, imock=1, nran=1)
+            #catalog_options = dict(version='data-dr1-v1.5', tracer=tracer, zrange=zrange, region=region, weight='default-FKP', nran=1)
+            catalog_options['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])}
+            get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir)
+            kw = dict(mesh2_spectrum={}, mesh3_spectrum={},
+                      particle2_correlation={'battrs': dict(s=np.linspace(0., 80., 81), mu=(np.linspace(-1., 1., 51), 'midpoint'))},
+                      particle3_correlation={'battrs': dict(s=np.linspace(0., 40., 41), pole=(list(range(2)), 'firstpoint'))})
+            compute_stats_from_options(stats, catalog=catalog_options, **kw, get_stats_fn=get_stats_fn)
+
+            for name in kw:
+                kw[name]['auw'] = True
+                if '3' not in name:
+                    kw[name]['cut'] = True
+            compute_stats_from_options(stats + ['close_pair_correction'], catalog=catalog_options, **kw, get_stats_fn=get_stats_fn)
+
+
+def test_particle_vs_fft():
+    from jaxpower import ParticleField, split_particles, MeshAttrs, BinMesh3CorrelationPoles, compute_mesh3_correlation, get_smooth3_window_bin_attrs
+    from jaxpower.particle3 import convert_particles
+    from cucount.jax import BinAttrs, WeightAttrs
+    from cucount.types import count3, count3_analytic
+    from lsstypes.types import convert_ells
+
+    catalog_options = dict(version='data-dr2-v2', tracer='LRG', zrange=(0.4, 0.6), region='NGC', weight='default-FKP', imock=1, nran=1)
+    catalog = tools.read_clustering_catalog(kind='randoms', **catalog_options)
+
+    mattrs = MeshAttrs(meshsize=256, boxsize=4000.)
+    particles = ParticleField(catalog['POSITION'], catalog['INDWEIGHT'], attrs=mattrs,  exchange=True, backend='mpi')
+    #particles = split_particles([particles, None, None], seed=42)
+    particles = [particles] * 3
+
+    los = 'local'
+
+    ells = [(0, 0, 0), (2, 0, 2)]
+    # Get window basis attributes (e.g., which multipoles to compute)
+    kw, ellsin = get_smooth3_window_bin_attrs(ells, ellsin=2, return_ellsin=True)
+    # Filter to low multipoles only (reduce computational cost)
+    ells = kw['ells'] = [ell for ell in kw['ells'] if all(ell <= 2 for ell in ell)]
+    edges = np.linspace(0., 200., 20)
+
+    sbin = BinMesh3CorrelationPoles(mattrs, edges=edges, **kw, buffer_size=20)
+    kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+    meshes = [particle.paint(**kw_paint) for particle in particles]
+    correlation_mesh = compute_mesh3_correlation(meshes, bin=sbin, los=los)
+
+    _ells = convert_ells(ells, 'sugiyama', 'slepian')
+    ells12, ells13 = [tuple(np.unique([ell[idim] for ell in _ells])) for idim in range(2)]
+    battrs12, battrs13 = [BinAttrs(s=edges, pole=(ell, 'firstpoint')) for ell in [ells12, ells13]]
+    RRR0 = count3_analytic(mattrs=1., battrs12=battrs12, battrs13=battrs13)
+
+    particles = [convert_particles(particle) for particle in particles]
+    wattrs = WeightAttrs()
+    counts = count3(*particles, battrs12=battrs12, battrs13=battrs13, wattrs=wattrs)['weight']
+    correlation_particle = counts.to_basis('sugiyama', ells=ells)
+    norm = next(iter(correlation_mesh)).values('norm').mean()
+
+    def renormalize(pole):
+        return pole.clone(counts=pole.values('counts'), norm=norm * RRR0.get((0, 0, 0)).value())
+
+    correlation_particle = correlation_particle.map(renormalize)
+
+    if jax.process_index() == 0:
+        import matplotlib as mpl
+        from matplotlib import pyplot as plt
+        fig, lax = plt.subplots(len(ells) + 1, figsize=(8, 14))
+        for ill, ell in enumerate(ells):
+            color = f'C{ill:d}'
+            pole = correlation_mesh.get(ell)
+            s = pole.coords('s')
+            mask = (s[..., 1] > s[..., 0])
+            idx = np.arange(mask.sum())
+            lax[ill].plot(idx, s.prod(axis=-1)[mask] * pole.value()[mask], color=color, label=str(ell))
+            pole_particle = correlation_particle.get(ell).ravel()
+            lax[ill].plot(idx, s.prod(axis=-1)[mask] * pole_particle.value()[mask], color=color, linestyle='--')
+            lax[ill].legend(frameon=False)
+        for idim in range(s.shape[1]):
+            lax[-1].plot(idx, s[mask, idim], color=f'C{idim:d}', label=f'$s_{idim + 1:d}$')
+        lax[-1].set_ylabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        lax[-1].set_xlabel(r'bin index')
+        lax[-1].legend(frameon=False, ncol=s.shape[1])
+        plt.savefig('test_particle_vs_fft_auto.png')
+        plt.close(plt.gcf())
+
+
+        s1_values = [40., 80., 150.]
+        ells = [(0, 0, 0), (1, 1, 0), (0, 2, 2)]
+        fig, lax = plt.subplots(len(ells), sharex=True, squeeze=False)
+        lax = lax.ravel()
+        # Colormap for s1
+        cmap = plt.get_cmap('viridis')
+        norm = mpl.colors.Normalize(vmin=min(s1_values), vmax=max(s1_values))
+
+        select = {'s1': (20., 400.), 's2': (20., 400.)}
+        for ill, ell in enumerate(ells):
+            label = {'ells': ell}
+            pole = correlation_mesh.get(**label).unravel().select(**select)
+            pole_particle = correlation_particle.get(**label).select(**select)
+            ax = lax[ill]
+            for s1 in s1_values:
+                is1 = np.argmin(np.abs(pole.coords('s1') - s1))
+                s1 = pole.coords('s1')[is1]
+                color = cmap(norm(s1))
+                ax.plot(s:=pole.coords('s2'), pole.value()[is1, :], color=color, linestyle='-', label=fr'$s_1 = {s1:.0f}$')
+                ax.plot(s:=pole_particle.coords('s2'), pole_particle.value()[is1, :], color=color, linestyle='--')
+            ax.grid(True)
+            ax.set_ylabel(rf'$Q_{{{ell[0]:d}{ell[1]:d}{ell[2]:d}}}$')
+        #lax[0].set_title(f'{tracer} {region} window correlation in {zrange[0]:.1f} < z < {zrange[1]:.1f}')
+        lax[0].legend(frameon=False)
+        lax[-1].set_xscale('log')
+        lax[-1].set_xlabel(r'$s_2$ [$\mathrm{Mpc}/h$]')
+        plt.savefig('test_particle_vs_fft_auto2.png')
+        plt.close(plt.gcf())
 
 
 if __name__ == '__main__':
@@ -496,11 +654,14 @@ if __name__ == '__main__':
     setup_logging()
 
     jax.distributed.initialize()
-    #test_window_fm('LRG')
 
+    test_particle_vs_fft()
+    # test_window_fm('LRG')
+    # test_close_pair_correction()
     # test_auw3()
     # test_window_fm('LRG')
-    # test_correlation()
+    # test_correlation2()
+    # test_correlation3()
     # test_covariance()
     # test_stats_fn()
     # test_complete_catalog()
@@ -510,17 +671,17 @@ if __name__ == '__main__':
     # test_blinding()
     # test_covariance()
     # test_rotation()
-    # test_window3()
     # test_stats_fn()
     # test_auw2()
-    test_bitwise()
+    # test_bitwise()
     # test_expand_randoms_stats()
     # test_optimal_weights()
     # test_cross()
-    # test_window()
+    # test_window2()
+    # test_window3()
     # test_spectrum3()
     # test_norm()
     # test_recon()
-    # test_covariance()t
+    # test_covariance()
     # test_interp_window()
     # jax.distributed.shutdown()

@@ -69,9 +69,11 @@ def get_cosmology(cosmology_options: dict=None):
     # n_s and tau_reio are fixed
     # A Gaussian prior on omega_b.
     params = {
-        'H0':       {'derived': True},
-        'Omega_m':  {'derived': True},
-        'sigma8_m': {'derived': True},
+        'H0':       {'derived': True, 'latex': 'H_0'},
+        'Omega_m':  {'derived': True, 'latex': R'\Omega_\mathrm{m}'},
+        'sigma8_m': {'derived': True, 'latex': R'\sigma_{8,\mathrm{m}}'},
+        'sigma8_cb': {'derived': True, 'latex': R'\sigma_{8,\mathrm{cb}}'},
+        'rs_drag': {'derived': True, 'latex': R'r_s'},
         'tau_reio': {'fixed': True},
         'n_s':      {'fixed': is_fixed_model or 'ns-fixed' in model},
         'omega_b':  {'fixed': is_fixed_model, 'prior': {'dist': 'norm', 'loc': 0.02237,  'scale': 0.00037}},
@@ -255,7 +257,8 @@ def _get_default_theory_nuisance_priors(model, stat, prior_basis, b3_coev=True, 
     return params
 
 
-def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_attrs: dict=None, data=None):
+@default_mpicomm
+def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_attrs: dict=None, data=None, mpicomm=None):
     """
     Return a configured theory desilike calculator for the requested statistic.
 
@@ -264,7 +267,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     stat : str
         Statistic name, e.g. 'mesh2_spectrum' or 'mesh3_spectrum'.
     theory_options : dict
-        Theory options dict containing at least 'model' and possibly other keys.
+        Theory options dict containing at least 'model' and possibly other keys. If 'z' is provided, data attribute 'z' will be ignored.
     cosmology : Cosmoprimo
         Cosmology calculator.
     data_attrs : dict
@@ -283,6 +286,10 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     theory_options.setdefault('cosmology', {'template': 'direct'})
     cosmology_options = theory_options['cosmology']
     z = data_attrs['z']
+    if 'z' in theory_options:
+        z = theory_options['z']
+    if mpicomm.rank == 0:
+        logger.info(f'theory is evaluated at effective redshift {z:.3f}')
     if cosmology_options['template'] == 'direct':
         template = DirectPowerSpectrumTemplate(fiducial=fiducial, cosmo=cosmology, z=z)
     elif cosmology_options['template'] == 'shapefit':
@@ -479,6 +486,13 @@ def _get_covariance_correction_factor(covariance: types.CovarianceMatrix,
     return factor, metadata
 
 
+def _get_prepared_cache_options(observables_options: list[dict], covariance_options: dict=None, kind: str=None):
+    options = {'observables': [{name: dict(observable_options[name]) for name in ['stat', 'catalog']} for observable_options in observables_options]}
+    if kind == 'covariance':
+        options['covariance'] = covariance_options or {}
+    return options
+
+
 @default_mpicomm
 def get_stats(observables_options: list[dict], covariance_options: dict=None, unpack: bool=False,
               get_stats_fn=clustering_tools.get_stats_fn, cache_dir: str | Path=None, cache_mode: str='rw', mpicomm=None):
@@ -520,14 +534,61 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     def get_cache_fn(kind, kwargs):
         if cache_dir is None:
             return None
-        _full_options = {'observables': [{name: dict(observable_options[name]) for name in ['stat', 'catalog']} for observable_options in observables_options]}
+        _full_options = _get_prepared_cache_options(observables_options, covariance_options, kind=kind)
         _level = {'stat': 1, 'catalog': 2, 'covariance': 0}
         if kind == 'covariance':
-            _full_options['covariance'] = covariance_options
             _level['covariance'] = 1
         _str_from_options = str_from_likelihood_options(_full_options, level=_level)
         _hash = _hash_options(_full_options | kwargs)
         return cache_dir / f'{kind}_{_str_from_options}-{_hash}.h5'
+
+    def get_covariance_manifest_key():
+        options = _get_prepared_cache_options(observables_options, covariance_options, kind='covariance')
+        return _hash_options(options, length=32)
+
+    def get_covariance_manifest_fn():
+        if cache_dir is None:
+            return None
+        return cache_dir / 'covariance_manifest.json'
+
+    def read_covariance_manifest():
+        manifest_fn = get_covariance_manifest_fn()
+        if manifest_fn is None or not read_cache:
+            return {}
+        manifest = {}
+        if mpicomm.rank == 0 and manifest_fn.exists():
+            with open(manifest_fn, 'r') as file:
+                manifest = json.load(file)
+        return mpicomm.bcast(manifest, root=0)
+
+    def write_covariance_manifest_entry(cache_fn, imocks):
+        manifest_fn = get_covariance_manifest_fn()
+        if manifest_fn is None or not write_cache or mpicomm.rank != 0:
+            return
+        mkdir(manifest_fn.parent)
+        if manifest_fn.exists():
+            with open(manifest_fn, 'r') as file:
+                manifest = json.load(file)
+        else:
+            manifest = {}
+        key = get_covariance_manifest_key()
+        try:
+            filename = str(cache_fn.relative_to(cache_dir))
+        except ValueError:
+            filename = str(cache_fn)
+        manifest[key] = {'filename': filename, 'imocks': list(imocks)}
+        with open(manifest_fn, 'w') as file:
+            json.dump(manifest, file, indent=2, sort_keys=True)
+
+    def get_covariance_cache_fn_from_manifest():
+        manifest = read_covariance_manifest()
+        entry = manifest.get(get_covariance_manifest_key(), None)
+        if not entry:
+            return None, None
+        cache_fn = Path(entry['filename'])
+        if not cache_fn.is_absolute():
+            cache_fn = cache_dir / cache_fn
+        return cache_fn, entry.get('imocks', None)
 
     def get_from_cache(cache_fn):
         if cache_fn is None or not read_cache:
@@ -731,6 +792,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     imock = file_kw.get('imock', None)
                     if imock is not None:  # FIXME
                         file_kw['imock'] = 0
+                    file_kw.pop('auw', None)  # auw stat has the same window as non-auw stat
                     fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
@@ -784,41 +846,46 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         covariance.attrs['nobs'] = None
     elif covariance_options['source'] == 'mock':
         # Mock-based covariance
-        cache_fn = None
+        cache_fn, imocks_exists = get_covariance_cache_fn_from_manifest()
         covariance_cache_hit = False
-        all_fns = []
-        covariance_log_patterns = []
-        all_imocks = None
-        for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
-            file_kw = file_kw | {'imock': '*', 'project': ''} | covariance_options
-            file_kw['tracer'] = get_full_tracer(get_simple_tracer(file_kw['tracer']), version=file_kw['version'])
-            imocks = file_kw.pop('imock')
-            if imocks == '*':
-                imocks = list(range(2001))
-            if all_imocks is None:
-                all_imocks = list(imocks)
-            else:
-                all_imocks = [imock for imock in all_imocks if imock in imocks]
-            stat_fns = [_get_mock_stats_fn(stat, file_kw | {'imock': imock}) for imock in imocks]
-            all_fns.append(stat_fns)
-            covariance_log_patterns.append((stat, _format_log_fns(stat_fns)))
-        all_fns = list(zip(*all_fns, strict=True))  # get a list of list of file names
-        ifns_exists = []
-        if mpicomm.rank == 0:
-            for stat, pattern in covariance_log_patterns:
-                logger.info(f"Looking for covariance mocks for {stat} at {pattern}")
-            for ifn, fns in enumerate(all_fns):
-                if all(fn.exists() for fn in fns):
-                    ifns_exists.append(ifn)
-        ifns_exists = mpicomm.bcast(ifns_exists, root=0)
-        if not ifns_exists:
-            raise FileNotFoundError(
-                _format_missing_covariance_context(covariance_options, covariance_log_patterns, observables_options)
-            )
-        imocks_exists = [all_imocks[ifn] for ifn in ifns_exists]
-        cache_fn = get_cache_fn('covariance', dict(imocks=imocks_exists))
         covariance = get_from_cache(cache_fn)
         covariance_cache_hit = covariance is not None
+        if covariance is not None and mpicomm.rank == 0:
+            logger.info(f"Reading covariance cache {cache_fn} from manifest {get_covariance_manifest_fn()}.")
+        if covariance is None:
+            all_fns = []
+            covariance_log_patterns = []
+            all_imocks = None
+            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
+                file_kw = file_kw | {'imock': '*'} | covariance_options
+                file_kw['tracer'] = get_full_tracer(get_simple_tracer(file_kw['tracer']), version=file_kw['version'])
+                imocks = file_kw.pop('imock')
+                if imocks == '*':
+                    imocks = list(range(2001))
+                if all_imocks is None:
+                    all_imocks = list(imocks)
+                else:
+                    all_imocks = [imock for imock in all_imocks if imock in imocks]
+                stat_fns = [_get_mock_stats_fn(stat, file_kw | {'imock': imock}) for imock in imocks]
+                all_fns.append(stat_fns)
+                covariance_log_patterns.append((stat, _format_log_fns(stat_fns)))
+            all_fns = list(zip(*all_fns, strict=True))  # get a list of list of file names
+            ifns_exists = []
+            if mpicomm.rank == 0:
+                for stat, pattern in covariance_log_patterns:
+                    logger.info(f"Looking for covariance mocks for {stat} at {pattern}")
+                for ifn, fns in enumerate(all_fns):
+                    if all(fn.exists() for fn in fns):
+                        ifns_exists.append(ifn)
+            ifns_exists = mpicomm.bcast(ifns_exists, root=0)
+            if not ifns_exists:
+                raise FileNotFoundError(
+                    _format_missing_covariance_context(covariance_options, covariance_log_patterns, observables_options)
+                )
+            imocks_exists = [all_imocks[ifn] for ifn in ifns_exists]
+            cache_fn = get_cache_fn('covariance', dict(imocks=imocks_exists))
+            covariance = get_from_cache(cache_fn)
+            covariance_cache_hit = covariance is not None
         if covariance is None:
             mocks = []
             if mpicomm.rank == 0:
@@ -838,6 +905,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             covariance_cache_hit = False
         if write_cache and cache_fn is not None and not covariance_cache_hit:
             write_stats(cache_fn, covariance)
+        if cache_fn is not None:
+            write_covariance_manifest_entry(cache_fn, imocks_exists)
 
     covariance = covariance.at.observable.match(data)
 
@@ -906,6 +975,10 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     observables = []
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
+        suffix = 'x'.join(label.get('tracers', []))
+        if suffix:
+            suffix = '_' + suffix
+        observable_name = stat + suffix
         if 'mesh2_spectrum' in stat:
             cls = TracerSpectrum2PolesObservable
         elif 'mesh3_spectrum' in stat:
@@ -915,13 +988,15 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         else:
             raise NotImplementedError(stat)
         data_attrs = dict(data.attrs) | label
-        for label, pole in window.observable.items(level=None):
+        for _, pole in window.observable.items(level=None):
             data_attrs['z'] = pole.attrs['zeff']
+        if mpicomm.rank == 0:
+            logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
         theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
         namespace = _str_from_observable_options(
             observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
         theory_params = theory.init.params
-        observable = cls(data=data, window=window, theory=theory)
+        observable = cls(data=data, window=window, theory=theory, name=observable_name)
         observable()
         if observable_options['emulator']['name']:
             assert cache_dir is not None, 'cache_dir must be provided for emulator'
@@ -991,8 +1066,8 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
 
 def get_sampler_cls(name):
     """Return sampler class."""
-    from desilike.samplers import EmceeSampler, MCMCSampler
-    translate = {'emcee': EmceeSampler, 'mcmc': MCMCSampler}
+    from desilike.samplers import EmceeSampler, MCMCSampler, PocoMCSampler
+    translate = {'emcee': EmceeSampler, 'mcmc': MCMCSampler, 'pocomc': PocoMCSampler}
     return translate[name.lower()]
 
 
@@ -1096,7 +1171,7 @@ def fill_fiducial_options(options):
 
 
 def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'),
-                                       tracer='LRG', zrange=(0.4, 0.6), region='GCcomb',
+                                       tracer='LRG', zrange=None, region='GCcomb',
                                        version='abacus-2ndgen-complete',
                                        covariance='holi-v1-altmtl',
                                        stats_dir=Path('/dvs_ro/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe'),
@@ -1109,7 +1184,7 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     ----------
     stats : list
         List of statistics in the joint likelihood, from ['mesh2_spectrum', 'mesh3_spectrum']
-    tracer : str, tuple
+    tracer : str or tuple (for cross correlation), or list of str or tuple to account for cross-correlation between tracers
         Tracers to fit.
     zrange : tuple
         Redshift range.
@@ -1133,9 +1208,10 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     """
     if isinstance(stats, str):
         stats = [stats]
+    tracers = [tracer] if isinstance(tracer, (str, tuple)) else tracer
     observables = []
-    tracer, zrange = get_full_tracer_zrange(tracer)
-    for stat in stats:
+    for tracer, stat in itertools.product(tracers, stats):
+        tracer, zrange = get_full_tracer_zrange(tracer, zrange)
         catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir}
         if project:
             catalog['project'] = project

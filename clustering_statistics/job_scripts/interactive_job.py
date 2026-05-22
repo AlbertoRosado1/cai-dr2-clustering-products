@@ -18,13 +18,17 @@ from clustering_statistics import tools
 
 setup_logging()
 
-def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', do_jackknife=False, regions=['NGC','SGC'], ibatch=None, postprocess=None, zranges=None, **kwargs):
+def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', do_jackknife=False, regions=['NGC','SGC'], ibatch=None, postprocess=None, zranges=None, profile_time=True, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
     import sys
+    from time import time
     import functools
+    import logging
     from pathlib import Path
+    from mpi4py import MPI
+    
     import jax
     from jax import config
     config.update('jax_enable_x64', True)
@@ -34,12 +38,15 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
     else: print('Initializing distributed environment')
     from clustering_statistics import tools, setup_logging, compute_stats_from_options, fill_fiducial_options, postprocess_stats_from_options
     setup_logging()
-
+    
+    logger = logging.getLogger('timer')
+    
     cache = {}
     if zranges is None:
         raise ValueError('Please provide zranges.')
     for imock in imocks:
         for region in regions:
+            t0 = time()
             mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
                               'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
             window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None}
@@ -52,7 +59,8 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             
             for itracer in options['catalog']:
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
-                options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
+                if version != 'uchuu-hf-reference':
+                    options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
                 if onthefly == 'complete':
                     options['catalog'][itracer]['complete'] = {}
                 elif onthefly == 'reshuffle':
@@ -61,12 +69,21 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             
             get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project, extra=onthefly if onthefly else '')
             compute_stats_from_options(stats, analysis=analysis, get_stats_fn=get_stats_fn, cache=cache, **options)
+            _time = time() - t0
+            if profile_time: 
+                _tracer = tools.join_tracers(tracer)
+                logger.info(f"For {_tracer} of {version} we computed {stats} for {region} in {_time:.2f} seconds.")
+                # Creates file to log times
+                mpicomm = MPI.COMM_WORLD
+                if mpicomm.rank == 0:
+                    with open(f"../helper_scripts/profiling_{analysis}_stats.txt", "a") as file:
+                        file.write(f"For {_tracer} of {version} we computed {stats} for {region} in {_time:.2f} seconds.\n")
 
     # postprocess
-    if postprocess:
-        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, 
-                                   combine_regions={'stats': stats}, mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum)
-        postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **postprocess_options)
+    # if postprocess:
+    #     postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, 
+    #                                combine_regions={'stats': stats}, mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum)
+    #     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
 def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', postprocess=['combine_regions'], zranges=None, **kwargs):
@@ -91,8 +108,10 @@ if __name__ == '__main__':
 
     stats, postprocess = [], []
     # version  = 'glam-uchuu-v2-altmtl'
-    # version  = 'holi-v3-altmtl'
-    version  = 'abacus-hf-dr2-v2-altmtl'
+    version  = 'holi-v3-altmtl'
+    # version  = 'holi-bgs-altmtl'
+    # version  = 'abacus-hf-dr2-v2-altmtl'
+    # version = 'uchuu-hf-reference'
     check_for_existing_measurements = False # True
     
     # test run 
@@ -113,15 +132,17 @@ if __name__ == '__main__':
     # run fiducial full_shape
     # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
     # stats       = ['mesh3_spectrum', 'window_mesh3_spectrum']
-    stats = ['mesh2_spectrum']
-    postprocess = ['combine_regions']
-    analysis = 'full_shape'
-    project  = f'{analysis}/base'
-    weight   = 'default-FKP'
-    regions  = ['NGC','SGC']
-    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    tracers  = ['QSO']
-    max_mocks_per_batch = 1
+    # stats = ['mesh2_spectrum','mesh3_spectrum']
+    # postprocess = ['combine_regions']
+    # analysis = 'full_shape'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-FKP'
+    # # regions  = ['NGC','SGC']
+    # regions = ['NGC','SGC','N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
+    # # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
+    # # tracers  = ['QSO']
+    # tracers  = ['BGS_BRIGHT-21.35']
+    # max_mocks_per_batch = 1
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
@@ -133,19 +154,20 @@ if __name__ == '__main__':
     # max_mocks_per_batch = 1 
 
     # run fiducial local_png
-    # stats       = ['mesh2_spectrum']
-    # postprocess = ['combine_regions']
-    # analysis = 'local_png'
-    # project  = f'{analysis}/base'
+    stats       = ['mesh2_spectrum']
+    postprocess = ['combine_regions']
+    analysis = 'local_png'
+    project  = f'{analysis}/base'
     # weight   = 'default-noimsys-fkp-oqe'
-    # regions  = ['NGC','SGC']
-    # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
+    weight   = 'default-fkp'
+    regions  = ['NGC','SGC']
+    tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
     # tracers = ['ELGnotqso']
-    # max_mocks_per_batch = 1
+    max_mocks_per_batch = 1
 
-    onthefly = 'complete'
+    # onthefly = 'complete'
     # onthefly = 'reshuffle'
-    # onthefly = None
+    onthefly = None
     do_jackknife = False
     
     for tracer in tracers:

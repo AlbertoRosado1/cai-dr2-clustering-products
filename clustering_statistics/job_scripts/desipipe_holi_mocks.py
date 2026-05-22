@@ -9,6 +9,7 @@ python desipipe_holi_mocks.py         # create the list of tasks
 desipipe tasks -q holi_mocks          # check the list of tasks
 desipipe spawn -q holi_mocks --spawn  # spawn the jobs
 desipipe queues -q holi_mocks         # check the queue
+desipipe spawn  -q holi_mocks --spawn --mode no_stream # add --mode no_stream if running >40 jobs in parallel
 ```
 """
 import os
@@ -27,9 +28,10 @@ queue.clear(kill=False)
 
 output, error = 'slurm_outputs/holi_mocks/slurm-%j.out', 'slurm_outputs/holi_mocks/slurm-%j.err'
 kwargs = {}
-environ = Environment('nersc-cosmodesi')
+# environ = Environment('nersc-cosmodesi')
+environ = Environment('nersc-cosmodesi', command='export PYTHONPATH=$HOME/LSScode/dr2-clustering-analysis/:$PYTHONPATH')
 tm = TaskManager(queue=queue, environ=environ)
-tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
+tm = tm.clone(scheduler=dict(max_workers=30), provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu'))
 tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
@@ -115,19 +117,21 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 if __name__ == '__main__':
 
     stats, postprocess = [], []
-    version  = 'holi-v3-altmtl'
+    # version  = 'holi-v3-altmtl'
+    version = 'holi-bgs-altmtl'
     check_for_existing_measurements = True
+    postprocess_only = False # If True, no measurements are performed and only postprocessing of existing measurements is handled.
     
     # run on interactive node
     # mode = 'interactive'
-    # imocks2run = [1] # np.arange(1)
+    # imocks2run = np.arange(1)
     # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
     # check_for_existing_measurements = False
     
     # to run job
-    # mode = 'slurm'
-    mode = 'interactive'
-    imocks2run = np.arange(0,199)
+    mode = 'slurm'
+    # mode = 'interactive'
+    imocks2run = np.arange(0,1000)
     if version == 'holi-v3-altmtl':
         # do not perform measurements on dubious mocks
         bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
@@ -141,20 +145,25 @@ if __name__ == '__main__':
     # project  = f'{analysis}/base'
     # weight   = 'default-FKP'
     # regions  = ['NGC','SGC']
-    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # max_mocks_per_batch = 10
+    # # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    # tracers = ['BGS_BRIGHT-21.35']
+    # max_mocks_per_batch_qso = 20
+    # max_mocks_per_batch_others = 10
 
     # run data_splits for lensing group with full_shape setup 
-    stats   = ['mesh2_spectrum']
+    stats   = ['mesh2_spectrum', 'mesh3_spectrum']
     analysis = 'full_shape'
     project = f'{analysis}/data_splits'
     weight  = 'default-FKP'
-    regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'] #galactic and imaging regions
-    # regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
-    tracers = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    max_mocks_per_batch = 5 
-    postprocess = ['combine_regions']
-    postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:]
+    # regions = ['NGC', 'SGC'] # already computed under full_shape/base/
+    regions = ['N', 'NGCnoN', 'S', 'SGCnoDES'] # galactic and imaging regions
+    regions = regions + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]] # lensing regions
+    # tracers = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    tracers = ['BGS_BRIGHT-21.35']
+    max_mocks_per_batch_qso = 30
+    max_mocks_per_batch_others = 30
+    # postprocess = ['combine_regions']
+    # postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][1:]
 
     # run fiducial local_png
     # stats       = ['mesh2_spectrum']
@@ -164,11 +173,15 @@ if __name__ == '__main__':
     # weight   = 'default-fkp-oqe'
     # regions  = ['NGC','SGC']
     # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
-    # max_mocks_per_batch = 10
+    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 50
 
     onthefly = None
     
     for tracer in tracers:
+        if tracer == 'QSO':
+             max_mocks_per_batch = max_mocks_per_batch_qso # allow mocks to be processed since QSOs only have one zbin
+        else:
+             max_mocks_per_batch = max_mocks_per_batch_others
         if 'png' in analysis:
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
@@ -179,7 +192,7 @@ if __name__ == '__main__':
                                                                                            region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
             catalog_imocks = exists[1]['imock']
             rerun_by_region = {region: [] for region in regions}
-            for zrange in zranges:
+            for zrange in zranges[-1:]: # only check last zrange to speed up this step.
                 for kind in stats:
                     for region in regions:
                         stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
@@ -195,16 +208,16 @@ if __name__ == '__main__':
        
         def get_run_stats():
             _tm = tm80
-            if tracer in ['LRG']:
+            if tracer in ['LRG','BGS_BRIGHT-21.35']:
                 _tm = tm
             if any('window_mesh3' in stat for stat in stats):
                 _tm = tmw
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
 
         run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
-        if True:
+        if not postprocess_only:
             if any('window' in stat for stat in stats):
-                _imocks = [201]
+                _imocks = [0]
                 nbatches = 1
                 tasks = []
                 for ibatch in range(nbatches):
@@ -214,14 +227,14 @@ if __name__ == '__main__':
                     # Add dependence on other tasks
                     get_run_stats()(imocks=_imocks, ibatch=nbatches, tasks=tasks, **run_stats_kws)
             elif any('covariance' in stat for stat in stats):
-                get_run_stats()(imocks=[201], **run_stats_kws)
+                get_run_stats()(imocks=[0], **run_stats_kws)
             elif stats:
                 for region, region_imocks in rerun_by_region.items():
                     batch_imocks = np.array_split(region_imocks, max(len(region_imocks) // max_mocks_per_batch, 1)) if len(region_imocks) else []
                     for _imocks in batch_imocks:
                         get_run_stats()(imocks=_imocks, **(run_stats_kws | dict(regions=[region])))
-
-        if postprocess:
+        else:
+            # this handles the combination of measurements by region
             if check_for_existing_measurements:
                 postprocess_rerun = []
                 for zrange in zranges:

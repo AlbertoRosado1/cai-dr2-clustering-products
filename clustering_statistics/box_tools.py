@@ -11,6 +11,7 @@ _read_catalog, get_simple_tracer, _merge_options, _make_tuple, desi_dir, write_s
 
 logger = logging.getLogger('box_tools')
 
+
 def get_zrange_from_snap(tracer, zsnap=None, version='abacus-2ndgen'):
     """
     Return redshift range from snapshot for given tracer and version.
@@ -120,8 +121,10 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
     propose_fiducial['catalog'] = {'hod': '', 'los': 'z'}
     if 'abacus' in version:
         propose_fiducial['catalog'].update({'cosmo': '000'})
+        propose_meshsizes = {'meshsize': 512}
     if 'ezmock' in version:
         propose_fiducial['catalog'].update({'cosmo': '000', 'boxsize': 6000.})
+        propose_meshsizes = {'meshsize': 800}
     if 'abacus-hf' in version:
         hod = 'base'
         if 'BGS' in tracer or 'LRG' in tracer:
@@ -131,7 +134,7 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
         propose_fiducial['catalog'].update({'hod': hod})
     propose_fiducial['zsnaps'] = list(get_zrange_from_snap(tracer, zsnap=None, version=version))
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
-        propose_fiducial[stat]['mattrs'] = {'meshsize': 512}
+        propose_fiducial[stat]['mattrs'] = propose_meshsizes
     propose_fiducial['mesh2_spectrum'].update(ells=(0, 2, 4))
     propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0), (2, 0, 2)], basis='sugiyama-diagonal')
     for stat in ['recon']:
@@ -213,7 +216,7 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
     if version == 'ezmock':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/EZmock/CubicBox_6Gpc/{stracer}/z{zsnap:.3f}/'
-        return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]   
+        return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]
     if version == 'abacus-2ndgen':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/CubicBox/{stracer}/z{zsnap:.3f}/AbacusSummit_base_c000_ph{imock:03d}/'
@@ -238,7 +241,7 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
 
 
 @default_mpicomm
-def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_catalog_fn=get_box_catalog_fn, **kwargs):
+def read_box_catalog(kind='data', los='z', mpicomm=None, get_box_catalog_fn=get_box_catalog_fn, **kwargs):
     """
     Read data clustering catalog with given parameters.
 
@@ -322,6 +325,7 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
 
     fn = get_box_catalog_fn(kind=kind, los=los, **kwargs)
     catalog = read_catalog(fn)
+
     if boxsize is None:
         boxsize = catalog.attrs.get('BOXSIZE', None)
     scalev = catalog.attrs.get('VELZ2KMS', None)
@@ -360,6 +364,7 @@ def read_clustering_box_catalog(kind='data', los='z', mpicomm=None, get_box_cata
     catalog = Catalog({'POSITION': positions, 'INDWEIGHT': np.ones_like(positions[..., 0])},
                       attrs=attrs, mpicomm=mpicomm)
     return catalog
+
 
 def get_box_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements',
                      kind='mesh2_spectrum', project='', extra='', ext='h5', **kwargs):

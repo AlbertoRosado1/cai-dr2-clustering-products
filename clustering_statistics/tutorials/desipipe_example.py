@@ -188,9 +188,9 @@ if __name__ == '__main__':
                 _tm = tm
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
 
+        # group all the arguments required by `run_stats`.
+        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
         if not postprocess_only:
-            # group all the arguments required by `run_stats`.
-            run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
             for region, region_imocks in rerun_by_region.items():
                 batch_imocks = np.array_split(region_imocks, max(len(region_imocks) // max_mocks_per_batch, 1)) if len(region_imocks) else []
                 for _imocks in batch_imocks:

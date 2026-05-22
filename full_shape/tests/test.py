@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import types
 
 import numpy as np
@@ -7,7 +8,11 @@ import pytest
 from full_shape import tools
 from full_shape.run_fit import run_fit_from_options
 from full_shape.tools import generate_likelihood_options_helper, str_from_likelihood_options, str_from_options, get_likelihood, fill_fiducial_options, setup_logging
-from full_shape.job_scripts.validation_abacus_mocks import KRANGES, _build_likelihoods_options, _build_run_options, _get_parser
+from clustering_statistics import tools as clustering_tools
+from full_shape.job_scripts.validation_abacus_mocks import (
+    KRANGES, LOCAL_SAFE_THREAD_ENV, _apply_local_safe_threads,
+    _build_likelihoods_options, _build_run_options, _get_parser,
+)
 
 
 def test_str():
@@ -41,6 +46,24 @@ def test_str():
     options = fill_fiducial_options(options)
     s = str_from_options(options, level=None)
     assert s == 'cosmo-base_LRG3xELG1-S2+LRG3xELG1-S3', s
+
+
+def test_bgs1_abacus_altmtl_uses_any02_file_label():
+    assert clustering_tools.get_full_tracer('BGS', version='abacus-2ndgen-dr2-altmtl') == 'BGS_ANY-02'
+    assert clustering_tools.get_full_tracer('BGS', version='abacus-hf-dr2-v2-altmtl') == 'BGS_ANY-02'
+    assert clustering_tools.get_full_tracer('BGS', version='abacus-2ndgen-dr2-complete') == 'BGS_BRIGHT-21.35'
+
+    likelihood_options = generate_likelihood_options_helper(
+        stats=['mesh2_spectrum'],
+        tracer='BGS1',
+        version='abacus-2ndgen-dr2-altmtl',
+        stats_dir=Path('/measurements'),
+    )
+    catalog = dict(likelihood_options['observables'][0]['catalog'])
+    catalog['tracer'] = clustering_tools.get_full_tracer(catalog['tracer'], version=catalog['version'])
+    catalog['imock'] = 0
+    fn = clustering_tools.get_stats_fn(kind='mesh2_spectrum', **catalog)
+    assert 'mesh2_spectrum_poles_BGS_ANY-02_z0.1-0.4_GCcomb_weight-default-FKP' in str(fn)
 
 
 def test_likelihood_full_shape():
@@ -354,6 +377,12 @@ def test_validation_abacus_mocks_parser_accepts_resume():
     assert args.resume is True
 
 
+def test_validation_abacus_mocks_parser_accepts_local_safe_threads():
+    parser = _get_parser()
+    args = parser.parse_args(['--local_safe_threads'])
+    assert args.local_safe_threads is True
+
+
 def test_validation_abacus_mocks_parser_defaults_thin_by_to_one():
     parser = _get_parser()
     args = parser.parse_args([])
@@ -364,6 +393,20 @@ def test_validation_abacus_mocks_parser_defaults_resume_to_false():
     parser = _get_parser()
     args = parser.parse_args([])
     assert args.resume is False
+
+
+def test_validation_abacus_mocks_parser_defaults_local_safe_threads_to_false():
+    parser = _get_parser()
+    args = parser.parse_args([])
+    assert args.local_safe_threads is False
+
+
+def test_apply_local_safe_threads_sets_missing_values_only():
+    environ = {'OMP_NUM_THREADS': '4'}
+    _apply_local_safe_threads(environ)
+    assert environ['OMP_NUM_THREADS'] == '4'
+    for name, value in LOCAL_SAFE_THREAD_ENV.items():
+        assert environ[name] == ('4' if name == 'OMP_NUM_THREADS' else value)
 
 
 def test_validation_abacus_mocks_parser_accepts_cosmo_params():
@@ -382,6 +425,13 @@ def test_validation_abacus_mocks_parser_accepts_prior_basis():
     parser = _get_parser()
     args = parser.parse_args(['--prior_basis', 'standard'])
     assert args.prior_basis == 'standard'
+
+
+def test_validation_abacus_mocks_parser_accepts_stats_and_cache_dirs():
+    parser = _get_parser()
+    args = parser.parse_args(['--stats_dir', '/tmp/stats', '--cache_dir', '/tmp/cache'])
+    assert args.stats_dir == '/tmp/stats'
+    assert args.cache_dir == '/tmp/cache'
 
 
 def test_validation_abacus_mocks_parser_defaults_prior_basis_to_physical_aap():
@@ -518,6 +568,21 @@ def _make_prepared_cache_fn(cache_dir, kind, observables_options, covariance_opt
     return Path(cache_dir) / 'prepared_stats' / f'{kind}_{str_from_options}-{hash_options}.h5'
 
 
+def _write_covariance_manifest(cache_dir, observables_options, covariance_options, covariance_cache_fn, imocks):
+    prepared_cache_dir = Path(cache_dir) / 'prepared_stats'
+    manifest_fn = prepared_cache_dir / 'covariance_manifest.json'
+    full_options = tools._get_prepared_cache_options(observables_options, covariance_options, kind='covariance')
+    key = tools._hash_options(full_options, length=32)
+    manifest = {
+        key: {
+            'filename': covariance_cache_fn.name,
+            'imocks': list(imocks),
+        },
+    }
+    manifest_fn.write_text(json.dumps(manifest))
+    return manifest_fn
+
+
 def test_get_stats_ignores_stale_covariance_cache_prefix(monkeypatch, tmp_path):
     cache_dir = tmp_path / 'cache'
     prepared_cache_dir = cache_dir / 'prepared_stats'
@@ -562,6 +627,87 @@ def test_get_stats_ignores_stale_covariance_cache_prefix(monkeypatch, tmp_path):
     )
 
     assert covariance.source == 'built-covariance'
+
+
+def test_get_stats_reuses_manifest_covariance_cache_without_raw_mocks(monkeypatch, tmp_path):
+    cache_dir = tmp_path / 'cache'
+    prepared_cache_dir = cache_dir / 'prepared_stats'
+    prepared_cache_dir.mkdir(parents=True)
+    observables_options = _make_cache_test_observables(tmp_path, 0.30)
+    covariance_options = _make_cache_test_covariance_options(tmp_path)
+
+    data_cache_fn = _make_prepared_cache_fn(cache_dir, 'data', observables_options, covariance_options, {'imocks': [None]})
+    window_cache_fn = _make_prepared_cache_fn(cache_dir, 'window', observables_options, covariance_options, {'imocks': [None]})
+    covariance_cache_fn = _make_prepared_cache_fn(cache_dir, 'covariance', observables_options, covariance_options, {'imocks': [0, 1]})
+    for fn in [data_cache_fn, window_cache_fn, covariance_cache_fn]:
+        fn.touch()
+    _write_covariance_manifest(cache_dir, observables_options, covariance_options, covariance_cache_fn, [0, 1])
+
+    def fake_read(path):
+        path = Path(path)
+        if path == data_cache_fn:
+            return _FakeStatsObject('data-cache')
+        if path == window_cache_fn:
+            return _FakeStatsObject('window-cache')
+        if path == covariance_cache_fn:
+            return _FakeStatsObject('manifest-covariance-cache')
+        raise AssertionError(f'raw mock path should not be read: {path}')
+
+    monkeypatch.setattr(tools.types, 'read', fake_read)
+    monkeypatch.setattr(tools.types, 'GaussianLikelihood', _FakeGaussianLikelihood)
+    monkeypatch.setattr(tools, 'unpack_stats', lambda likelihood: likelihood.payload)
+    monkeypatch.setattr(tools, '_get_covariance_correction_factor', lambda covariance, observables, options: (1., {'corrections': []}))
+
+    data, window, covariance = tools.get_stats(
+        observables_options,
+        covariance_options=covariance_options,
+        unpack=True,
+        get_stats_fn=lambda kind, stats_dir, imock=None, **kwargs: Path(stats_dir) / f'missing_{kind}_{imock}.h5',
+        cache_dir=cache_dir,
+        cache_mode='r',
+        mpicomm=_FakeMPICOMM(),
+    )
+
+    assert data.source == 'data-cache'
+    assert window.source == 'window-cache'
+    assert covariance.source == 'manifest-covariance-cache'
+
+
+def test_get_stats_missing_covariance_manifest_requires_raw_mocks(monkeypatch, tmp_path):
+    cache_dir = tmp_path / 'cache'
+    prepared_cache_dir = cache_dir / 'prepared_stats'
+    prepared_cache_dir.mkdir(parents=True)
+    observables_options = _make_cache_test_observables(tmp_path, 0.30)
+    covariance_options = _make_cache_test_covariance_options(tmp_path)
+
+    data_cache_fn = _make_prepared_cache_fn(cache_dir, 'data', observables_options, covariance_options, {'imocks': [None]})
+    window_cache_fn = _make_prepared_cache_fn(cache_dir, 'window', observables_options, covariance_options, {'imocks': [None]})
+    covariance_cache_fn = _make_prepared_cache_fn(cache_dir, 'covariance', observables_options, covariance_options, {'imocks': [0, 1]})
+    for fn in [data_cache_fn, window_cache_fn, covariance_cache_fn]:
+        fn.touch()
+
+    def fake_read(path):
+        path = Path(path)
+        if path == data_cache_fn:
+            return _FakeStatsObject('data-cache')
+        if path == window_cache_fn:
+            return _FakeStatsObject('window-cache')
+        if path == covariance_cache_fn:
+            raise AssertionError('covariance cache should require a manifest or raw mock discovery')
+        return _FakeStatsObject(f'mock-{path.name}')
+
+    monkeypatch.setattr(tools.types, 'read', fake_read)
+
+    with pytest.raises(FileNotFoundError, match='No covariance mock realizations found'):
+        tools.get_stats(
+            observables_options,
+            covariance_options=covariance_options,
+            unpack=True,
+            get_stats_fn=lambda kind, stats_dir, imock=None, **kwargs: Path(stats_dir) / f'missing_{kind}_{imock}.h5',
+            cache_dir=cache_dir,
+            cache_mode='r',
+            mpicomm=_FakeMPICOMM(),
+        )
 
 
 def test_get_stats_reuses_exact_covariance_cache(monkeypatch, tmp_path):
