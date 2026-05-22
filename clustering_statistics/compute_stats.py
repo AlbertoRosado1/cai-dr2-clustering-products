@@ -183,6 +183,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         stat_recon_attrs = {'recon_mode': [], 'recon_smoothing_radius': []}
         for tracer in tracers:
             recon_options = dict(options['recon'][tracer])
+            recon_options.pop('zrange', None)  # not a kwarg of compute_reconstruction
             # Store reconstruction mode and radius for each tracer
             for name in stat_recon_attrs:
                 stat_recon_attrs[name].append(recon_options[name[len('recon_'):]])
@@ -265,16 +266,27 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     correlation_options = dict(options[stat]) | dict(auw=auw_options.get(stat, None))
                     # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
                     selection_weights = correlation_options.pop('selection_weights', None)
+                    # Optional per-tracer number of random files for this statistic (subset of the loaded randoms),
+                    # e.g. recon_particle2_correlation uses fewer randoms than the catalog/recon nran.
+                    correlation_nran = correlation_options.pop('nran', None)
+                    if correlation_nran is not None and jax.process_index() == 0:
+                        logger.info(f'{stat}: using {correlation_nran} random file(s) per tracer '
+                                    f'(out of {{{", ".join(f"{t!r}: {len(zrandoms[t])}" for t in tracers)}}} loaded).')
 
                     def get_data(tracer):
                         # Prepare data for spectrum measurement
+                        # Optionally restrict to a reduced number of random files for this statistic
+                        _zrandoms = zrandoms[tracer]
+                        if correlation_nran is not None:
+                            nran = correlation_nran[tracer] if isinstance(correlation_nran, dict) else correlation_nran
+                            _zrandoms = _zrandoms[:nran]
                         if recon:
                             # Use reconstructed positions, with same shifts applied to randoms
-                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': zrandoms[tracer],
-                                    'shifted': [get_catalog_recon(zrandom) for zrandom in zrandoms[tracer]]}
+                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': _zrandoms,
+                                    'shifted': [get_catalog_recon(zrandom) for zrandom in _zrandoms]}
                         else:
                             # Default: use original positions
-                            toret = {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
+                            toret = {'data': zdata[tracer], 'randoms': _zrandoms}
                         # Apply selection weights if provided (for bispectrum, NX**(-1. / 3.) weighting, etc.)
                         if selection_weights:
                             toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
@@ -306,7 +318,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 correlation[key] = tools.apply_blinding(correlation[key], tracers, zrange=sum(zrange.values(), start=tuple()))
                             # Store reconstruction metadata
                             if recon:
-                                correlation.attrs.update(stat_recon_attrs)
+                                correlation[key].attrs.update(stat_recon_attrs)
                             tools.write_stats(fn, correlation[key])
 
             # Map of spectrum statistics to computation functions
@@ -360,7 +372,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                 spectrum[key] = tools.apply_blinding(spectrum[key], tracers, zrange=sum(zrange.values(), start=tuple()))
                             # Store reconstruction metadata
                             if recon:
-                                spectrum.attrs.update(stat_recon_attrs)
+                                spectrum[key].attrs.update(stat_recon_attrs)
                             tools.write_stats(fn, spectrum[key])
 
         # Synchronize across all processes before proceeding to windows
@@ -889,7 +901,7 @@ def main(**kwargs):
     """
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'close_pair_correction', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
+    parser.add_argument('--stats', help='what do you want to compute?', type=str, nargs='*', choices=['mesh2_spectrum', 'recon_mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'particle3_correlation', 'recon_particle3_correlation', 'close_pair_correction', 'window_mesh2_spectrum', 'window_mesh3_spectrum'], default=['mesh2_spectrum'])
     parser.add_argument('--version', help='catalog version; e.g. holi-v1-altmtl', type=str, default=None)
     parser.add_argument('--cat_dir', help='where to find catalogs', type=str, default=None)
     parser.add_argument('--tracer', help='tracer(s) to be selected - e.g. LRG ELG for cross-correlation', nargs='*', type=str, default='LRG')
@@ -908,7 +920,7 @@ def main(**kwargs):
     meas_dir = Path(os.getenv('SCRATCH')) / 'measurements'
     parser.add_argument('--stats_dir',  help=f'base directory for measurements, default is {meas_dir}', type=str, default=meas_dir)
     parser.add_argument('--stats_extra',  help='extra string to include in measurement filename', type=str, default='')
-    parser.add_argument('--combine', help='combine measurements in two regions', type=str, nargs='*', default=None, choices=['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'])
+    parser.add_argument('--combine', help='combine measurements in two regions', type=str, nargs='*', default=None, choices=['mesh2_spectrum', 'recon_mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'window_mesh2_spectrum', 'window_mesh3_spectrum'])
 
     args = parser.parse_args()
     # Set JAX to use 90% of GPU memory (leave 10% for overhead)
