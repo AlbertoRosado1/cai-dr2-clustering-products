@@ -9,6 +9,7 @@ python desipipe_holi_mocks.py         # create the list of tasks
 desipipe tasks -q holi_mocks          # check the list of tasks
 desipipe spawn -q holi_mocks --spawn  # spawn the jobs
 desipipe queues -q holi_mocks         # check the queue
+desipipe spawn  -q holi_mocks --spawn --mode no_stream # add --mode no_stream if running >40 jobs in parallel
 ```
 """
 import os
@@ -30,7 +31,7 @@ kwargs = {}
 # environ = Environment('nersc-cosmodesi')
 environ = Environment('nersc-cosmodesi', command='export PYTHONPATH=$HOME/LSScode/dr2-clustering-analysis/:$PYTHONPATH')
 tm = TaskManager(queue=queue, environ=environ)
-tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
+tm = tm.clone(scheduler=dict(max_workers=30), provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu'))
 tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
@@ -119,6 +120,7 @@ if __name__ == '__main__':
     # version  = 'holi-v3-altmtl'
     version = 'holi-bgs-altmtl'
     check_for_existing_measurements = True
+    postprocess_only = False # If True, no measurements are performed and only postprocessing of existing measurements is handled.
     
     # run on interactive node
     # mode = 'interactive'
@@ -137,28 +139,31 @@ if __name__ == '__main__':
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
-    postprocess = ['combine_regions']
-    analysis = 'full_shape'
-    project  = f'{analysis}/base'
-    weight   = 'default-FKP'
-    regions  = ['NGC','SGC']
-    # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
-    tracers = ['BGS_BRIGHT-21.35']
-    max_mocks_per_batch_qso = 20
-    max_mocks_per_batch_others = 10
+    # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
+    # postprocess = ['combine_regions']
+    # analysis = 'full_shape'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-FKP'
+    # regions  = ['NGC','SGC']
+    # # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    # tracers = ['BGS_BRIGHT-21.35']
+    # max_mocks_per_batch_qso = 20
+    # max_mocks_per_batch_others = 10
 
     # run data_splits for lensing group with full_shape setup 
-    # stats   = ['mesh2_spectrum']
-    # analysis = 'full_shape'
-    # project = f'{analysis}/data_splits'
-    # weight  = 'default-FKP'
-    # regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'] #galactic and imaging regions
-    # # regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
-    # tracers = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 5
+    stats   = ['mesh2_spectrum', 'mesh3_spectrum']
+    analysis = 'full_shape'
+    project = f'{analysis}/data_splits'
+    weight  = 'default-FKP'
+    # regions = ['NGC', 'SGC'] # already computed under full_shape/base/
+    regions = ['N', 'NGCnoN', 'S', 'SGCnoDES'] # galactic and imaging regions
+    regions = regions + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]] # lensing regions
+    # tracers = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    tracers = ['BGS_BRIGHT-21.35']
+    max_mocks_per_batch_qso = 30
+    max_mocks_per_batch_others = 30
     # postprocess = ['combine_regions']
-    # postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:]
+    # postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][1:]
 
     # run fiducial local_png
     # stats       = ['mesh2_spectrum']
@@ -203,16 +208,16 @@ if __name__ == '__main__':
        
         def get_run_stats():
             _tm = tm80
-            if tracer in ['LRG']:
+            if tracer in ['LRG','BGS_BRIGHT-21.35']:
                 _tm = tm
             if any('window_mesh3' in stat for stat in stats):
                 _tm = tmw
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
 
         run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
-        if True:
+        if not postprocess_only:
             if any('window' in stat for stat in stats):
-                _imocks = [201]
+                _imocks = [0]
                 nbatches = 1
                 tasks = []
                 for ibatch in range(nbatches):
@@ -222,25 +227,25 @@ if __name__ == '__main__':
                     # Add dependence on other tasks
                     get_run_stats()(imocks=_imocks, ibatch=nbatches, tasks=tasks, **run_stats_kws)
             elif any('covariance' in stat for stat in stats):
-                get_run_stats()(imocks=[201], **run_stats_kws)
+                get_run_stats()(imocks=[0], **run_stats_kws)
             elif stats:
                 for region, region_imocks in rerun_by_region.items():
                     batch_imocks = np.array_split(region_imocks, max(len(region_imocks) // max_mocks_per_batch, 1)) if len(region_imocks) else []
                     for _imocks in batch_imocks:
                         get_run_stats()(imocks=_imocks, **(run_stats_kws | dict(regions=[region])))
-
-        # if postprocess:
-        #     if check_for_existing_measurements:
-        #         postprocess_rerun = []
-        #         for zrange in zranges:
-        #             for kind in stats:
-        #                 for region in postregions:
-        #                     stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
-        #                                      tracer=tracer, region=region, weight=weight, zrange=zrange, version=version, project=project,
-        #                                      extra=onthefly if onthefly else '')
-        #                     rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
-        #                     postprocess_rerun += [imock for imock in imocks2run if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
-        #         imocks = sorted(set(postprocess_rerun))
-        #     else:
-        #         imocks = imocks2run
-        #     postprocess_stats(imocks=imocks, **(run_stats_kws | dict(regions=postregions)))
+        else:
+            # this handles the combination of measurements by region
+            if check_for_existing_measurements:
+                postprocess_rerun = []
+                for zrange in zranges:
+                    for kind in stats:
+                        for region in postregions:
+                            stats_kws = dict(basis='sugiyama-diagonal', kind=kind, stats_dir=Path(str(stats_dir).replace('global','dvs_ro')),
+                                             tracer=tracer, region=region, weight=weight, zrange=zrange, version=version, project=project,
+                                             extra=onthefly if onthefly else '')
+                            rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, **stats_kws), test_if_readable=True, imock=imocks2run)
+                            postprocess_rerun += [imock for imock in imocks2run if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
+                imocks = sorted(set(postprocess_rerun))
+            else:
+                imocks = imocks2run
+            postprocess_stats(imocks=imocks, **(run_stats_kws | dict(regions=postregions)))

@@ -8,6 +8,12 @@ from full_shape import tools
 from clustering_statistics import tools as clustering_tools
 
 
+def print_priors(calculator, varied=True, **kwargs):
+    print(f"{'param':20} {'prior':50} {'reference':50} derived")
+    for p in calculator.all_params.select(varied=varied, **kwargs):
+        print(f"{p.name:20} {str(p.prior):50} {str(p.ref):50} {p.derived}")
+
+
 def run_fit_from_options(actions,
                          get_stats_fn=clustering_tools.get_stats_fn,
                          get_fits_fn=tools.get_fits_fn,
@@ -42,8 +48,11 @@ def run_fit_from_options(actions,
     options = fill_fiducial_options(kwargs)
     likelihood = get_likelihood(likelihoods_options=options['likelihoods'],
                                 cosmology_options=options['cosmology'],
-                                get_stats_fn=get_stats_fn, cache_dir=cache_dir)
+                                get_stats_fn=get_stats_fn, cache_dir=cache_dir, cache_mode=cache_mode)
     likelihood()
+    if likelihood.mpicomm.rank == 0:
+        print('likelihood priors:')
+        print_priors(likelihood)
     fn = get_fits_fn(kind='config', **options, ext='yaml')
     tools.write_options(fn, options)
     for action in actions:

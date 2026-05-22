@@ -1,0 +1,12 @@
+For LRG of holi-v3-altmtl we computed ['mesh2_spectrum'] for NGC in 54.32 seconds.
+For LRG of holi-v3-altmtl we computed ['mesh2_spectrum'] for SGC in 25.69 seconds.
+For ELGnotqso of holi-v3-altmtl we computed ['mesh2_spectrum'] for NGC in 59.89 seconds.
+For ELGnotqso of holi-v3-altmtl we computed ['mesh2_spectrum'] for SGC in 37.94 seconds.
+For QSO of holi-v3-altmtl we computed ['mesh2_spectrum'] for NGC in 18.63 seconds.
+For QSO of holi-v3-altmtl we computed ['mesh2_spectrum'] for SGC in 12.50 seconds.
+For LRGxQSO of holi-v3-altmtl we computed ['mesh2_spectrum'] for NGC in 42.11 seconds.
+For LRGxQSO of holi-v3-altmtl we computed ['mesh2_spectrum'] for SGC in 28.05 seconds.
+For LRGxELGnotqso of holi-v3-altmtl we computed ['mesh2_spectrum'] for NGC in 73.96 seconds.
+For LRGxELGnotqso of holi-v3-altmtl we computed ['mesh2_spectrum'] for SGC in 48.13 seconds.
+For ELGnotqsoxQSO of holi-v3-altmtl we computed ['mesh2_spectrum'] for NGC in 74.05 seconds.
+For ELGnotqsoxQSO of holi-v3-altmtl we computed ['mesh2_spectrum'] for SGC in 47.14 seconds.

@@ -35,6 +35,7 @@ desi_dir = Path('/dvs_ro/cfs/cdirs/desi/')
 base_stats_dir = Path('/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/')
 # These are region splits that require loading NGC+SGC
 special_regions = ['S', 'ALL', 'SnoDES', 'noDES', 'ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [20, 40, 60, 70, 80, 90, 97, 99]]
+BGS_ANY_VERSIONS = {'abacus-2ndgen-dr2-altmtl', 'abacus-hf-dr2-v2-altmtl'}
 
 
 def mkdir(dirname):
@@ -108,9 +109,9 @@ def get_full_tracer(tracer, version=None):
         if any(_tracer in tracer for _tracer in ['LRG', 'LGE', 'QSO']):
             return tracer
         if tracer == 'BGS':
-            if version == 'abacus-2ndgen-dr2-altmtl':
+            if version in BGS_ANY_VERSIONS:
                 return 'BGS_ANY-02'
-            if 'dr1' in version:
+            if version is not None and 'dr1' in version:
                 return 'BGS_BRIGHT-21.5'
             return 'BGS_BRIGHT-21.35'
         if tracer == 'ELG':
@@ -1025,7 +1026,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
                 cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
             else:
-                cat_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/complete/')
+                cat_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/complete/cosmo_sample/')
             ext = 'fits'
             if 'BGS' in tracer:
                 # ugly way to get file with mag cut for BGS
