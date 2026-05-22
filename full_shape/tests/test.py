@@ -426,6 +426,33 @@ def test_validation_abacus_mocks_run_options_propagate_prior_basis():
     assert all(observable['theory']['prior_basis'] == 'physical' for observable in observables)
 
 
+def test_validation_abacus_mocks_run_options_emulator_default_enabled():
+    options = _build_run_options(
+        stats=['mesh2_spectrum', 'mesh3_spectrum'],
+        tracers=['LRG1'],
+        version='abacus-2ndgen-dr2-complete',
+        covariance='holi-v3-altmtl',
+        stats_dir=Path('/tmp'),
+        theory_model='folpsEFT',
+    )
+    observables = options['likelihoods'][0]['observables']
+    assert all(observable['emulator']['name'] == 'taylor' for observable in observables)
+
+
+def test_validation_abacus_mocks_run_options_can_disable_emulator():
+    options = _build_run_options(
+        stats=['mesh2_spectrum', 'mesh3_spectrum'],
+        tracers=['LRG1'],
+        version='abacus-2ndgen-dr2-complete',
+        covariance='holi-v3-altmtl',
+        stats_dir=Path('/tmp'),
+        theory_model='folpsEFT',
+        emulator=False,
+    )
+    observables = options['likelihoods'][0]['observables']
+    assert all(observable['emulator']['name'] == '' for observable in observables)
+
+
 def test_validation_abacus_mocks_parser_accepts_nchains():
     parser = _get_parser()
     args = parser.parse_args(['--todo', 'sample', '--nchains', '4'])
@@ -466,6 +493,12 @@ def test_validation_abacus_mocks_parser_accepts_local_safe_threads():
     assert args.local_safe_threads is True
 
 
+def test_validation_abacus_mocks_parser_accepts_no_emulator():
+    parser = _get_parser()
+    args = parser.parse_args(['--no_emulator'])
+    assert args.no_emulator is True
+
+
 def test_validation_abacus_mocks_parser_defaults_thin_by_to_one():
     parser = _get_parser()
     args = parser.parse_args([])
@@ -482,6 +515,12 @@ def test_validation_abacus_mocks_parser_defaults_local_safe_threads_to_false():
     parser = _get_parser()
     args = parser.parse_args([])
     assert args.local_safe_threads is False
+
+
+def test_validation_abacus_mocks_parser_defaults_no_emulator_to_false():
+    parser = _get_parser()
+    args = parser.parse_args([])
+    assert args.no_emulator is False
 
 
 def test_apply_local_safe_threads_sets_missing_values_only():
