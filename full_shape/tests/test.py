@@ -329,6 +329,37 @@ def test_validation_abacus_mocks_sampler_option():
     assert options['sampler']['init']['oversample_power'] == 0
 
 
+def test_validation_abacus_mocks_pocomc_sampler_option():
+    options = _build_run_options(
+        stats=['mesh2_spectrum'],
+        tracers=['LRG1'],
+        version='abacus-2ndgen-dr2-complete',
+        covariance='holi-v3-altmtl',
+        stats_dir=Path('/tmp'),
+        theory_model='folpsD',
+        sampler='pocomc',
+    )
+    assert options['sampler']['sampler'] == 'pocomc'
+    assert options['sampler']['init'] == {}
+    assert 'thin_by' not in options['sampler']['run']
+    assert options['sampler']['run']['progress'] is True
+    assert options['sampler']['run']['check_every'] == 25
+
+
+def test_validation_abacus_mocks_pocomc_rejects_thin_by():
+    with pytest.raises(ValueError, match='PocoMC.*thin_by'):
+        _build_run_options(
+            stats=['mesh2_spectrum'],
+            tracers=['LRG1'],
+            version='abacus-2ndgen-dr2-complete',
+            covariance='holi-v3-altmtl',
+            stats_dir=Path('/tmp'),
+            theory_model='folpsD',
+            sampler='pocomc',
+            thin_by=2,
+        )
+
+
 def test_validation_abacus_mocks_thin_by_option():
     options = _build_run_options(
         stats=['mesh2_spectrum'],
@@ -465,6 +496,13 @@ def test_validation_abacus_mocks_parser_accepts_sampler():
     args = parser.parse_args(['--todo', 'sample', '--sampler', 'mcmc'])
     assert args.todo == ['sample']
     assert args.sampler == 'mcmc'
+
+
+def test_validation_abacus_mocks_parser_accepts_pocomc_sampler():
+    parser = _get_parser()
+    args = parser.parse_args(['--todo', 'sample', '--sampler', 'pocomc'])
+    assert args.todo == ['sample']
+    assert args.sampler == 'pocomc'
 
 
 def test_validation_abacus_mocks_parser_defaults_sampler_to_emcee():
