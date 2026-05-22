@@ -18,7 +18,7 @@ from clustering_statistics import tools
 
 setup_logging()
 
-def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', do_jackknife=False, regions=['NGC','SGC'], ibatch=None, postprocess=None, zranges=None, profile_time=False, **kwargs):
+def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', do_jackknife=False, regions=['NGC','SGC'], ibatch=None, postprocess=None, zranges=None, profile_time=True, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -71,12 +71,13 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             compute_stats_from_options(stats, analysis=analysis, get_stats_fn=get_stats_fn, cache=cache, **options)
             _time = time() - t0
             if profile_time: 
-                logger.info(f"For {tracer} of {version} we computed {stats} for {region} in {_time:.2f} seconds.")
+                _tracer = tools.join_tracers(tracer)
+                logger.info(f"For {_tracer} of {version} we computed {stats} for {region} in {_time:.2f} seconds.")
                 # Creates file to log times
                 mpicomm = MPI.COMM_WORLD
                 if mpicomm.rank == 0:
                     with open(f"../helper_scripts/profiling_{analysis}_stats.txt", "a") as file:
-                        file.write(f"For {tracer} of {version} we computed {stats} for {region} in {_time:.2f} seconds.\n")
+                        file.write(f"For {_tracer} of {version} we computed {stats} for {region} in {_time:.2f} seconds.\n")
 
     # postprocess
     # if postprocess:
@@ -107,8 +108,8 @@ if __name__ == '__main__':
 
     stats, postprocess = [], []
     # version  = 'glam-uchuu-v2-altmtl'
-    # version  = 'holi-v3-altmtl'
-    version  = 'holi-bgs-altmtl'
+    version  = 'holi-v3-altmtl'
+    # version  = 'holi-bgs-altmtl'
     # version  = 'abacus-hf-dr2-v2-altmtl'
     # version = 'uchuu-hf-reference'
     check_for_existing_measurements = False # True
@@ -131,17 +132,17 @@ if __name__ == '__main__':
     # run fiducial full_shape
     # stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
     # stats       = ['mesh3_spectrum', 'window_mesh3_spectrum']
-    stats = ['mesh2_spectrum','mesh3_spectrum']
-    postprocess = ['combine_regions']
-    analysis = 'full_shape'
-    project  = f'{analysis}/base'
-    weight   = 'default-FKP'
-    # regions  = ['NGC','SGC']
-    regions = ['NGC','SGC','N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
-    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # tracers  = ['QSO']
-    tracers  = ['BGS_BRIGHT-21.35']
-    max_mocks_per_batch = 1
+    # stats = ['mesh2_spectrum','mesh3_spectrum']
+    # postprocess = ['combine_regions']
+    # analysis = 'full_shape'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-FKP'
+    # # regions  = ['NGC','SGC']
+    # regions = ['NGC','SGC','N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
+    # # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
+    # # tracers  = ['QSO']
+    # tracers  = ['BGS_BRIGHT-21.35']
+    # max_mocks_per_batch = 1
 
     # run data_splits for lensing group with full_shape setup 
     # stats   = ['mesh2_spectrum']
@@ -153,15 +154,16 @@ if __name__ == '__main__':
     # max_mocks_per_batch = 1 
 
     # run fiducial local_png
-    # stats       = ['mesh2_spectrum']
-    # postprocess = ['combine_regions']
-    # analysis = 'local_png'
-    # project  = f'{analysis}/base'
+    stats       = ['mesh2_spectrum']
+    postprocess = ['combine_regions']
+    analysis = 'local_png'
+    project  = f'{analysis}/base'
     # weight   = 'default-noimsys-fkp-oqe'
-    # regions  = ['NGC','SGC']
-    # tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
+    weight   = 'default-fkp'
+    regions  = ['NGC','SGC']
+    tracers  = ['LRG', 'ELGnotqso', 'QSO', ('LRG','QSO'), ('LRG','ELGnotqso'), ('ELGnotqso','QSO')]
     # tracers = ['ELGnotqso']
-    # max_mocks_per_batch = 1
+    max_mocks_per_batch = 1
 
     # onthefly = 'complete'
     # onthefly = 'reshuffle'
