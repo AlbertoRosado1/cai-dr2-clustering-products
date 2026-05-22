@@ -75,7 +75,7 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
                 # Creates file to log times
                 mpicomm = MPI.COMM_WORLD
                 if mpicomm.rank == 0:
-                    with open("../helper_scripts/profiling_stats.txt", "a") as file:
+                    with open(f"../helper_scripts/profiling_{analysis}_stats.txt", "a") as file:
                         file.write(f"For {tracer} of {version} we computed {stats} for {region} in {_time:.2f} seconds.\n")
 
     # postprocess
@@ -107,7 +107,8 @@ if __name__ == '__main__':
 
     stats, postprocess = [], []
     # version  = 'glam-uchuu-v2-altmtl'
-    version  = 'holi-v3-altmtl'
+    # version  = 'holi-v3-altmtl'
+    version  = 'holi-bgs-altmtl'
     # version  = 'abacus-hf-dr2-v2-altmtl'
     # version = 'uchuu-hf-reference'
     check_for_existing_measurements = False # True
@@ -137,9 +138,9 @@ if __name__ == '__main__':
     weight   = 'default-FKP'
     # regions  = ['NGC','SGC']
     regions = ['NGC','SGC','N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
-    tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
+    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
     # tracers  = ['QSO']
-    # tracers  = ['BGS_BRIGHT-21.35']
+    tracers  = ['BGS_BRIGHT-21.35']
     max_mocks_per_batch = 1
 
     # run data_splits for lensing group with full_shape setup 
