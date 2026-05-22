@@ -503,11 +503,17 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
 
     primes, divisors = (2, 3, 5), (2,)
     for stat in ['recon']:
-        recon_cellsize = propose_fiducial[stat]['smoothing_radius'] / 3.
-        propose_fiducial[stat]['mattrs'] = {'boxpad': 1.2, 'cellsize': recon_cellsize, 'primes': primes, 'divisors': divisors}
+        propose_recon_cellsizes = {'BGS': 4., 'LRG': 5., 'LGE': 5., 'ELG': 8., 'LRG+ELG': 5., 'LRG+LGE': 5., 'QSO': 10.}
+        propose_fiducial[stat]['mattrs'] = {'boxpad': 1.2, 'cellsize': propose_recon_cellsizes[simple_tracers[0]], 'primes': primes, 'divisors': divisors}
 
     for name in list(propose_fiducial):
         propose_fiducial[f'recon_{name}'] = propose_fiducial[name]  # same for post-recon measurements
+
+    # recon_particle2_correlation uses a reduced, per-tracer number of randoms,
+    # distinct from the catalog/recon nran (which keep the full-shape fiducial).
+    propose_recon_corr_nran = {'BGS': 1, 'LRG': 8, 'LGE': 8, 'ELG': 10, 'LRG+ELG': 10, 'LRG+LGE': 8, 'QSO': 4}
+    propose_fiducial['recon_particle2_correlation'] = dict(propose_fiducial['recon_particle2_correlation'])  # break shared reference with particle2_correlation
+    propose_fiducial['recon_particle2_correlation']['nran'] = {tracer: propose_recon_corr_nran[st] for tracer, st in zip(tracers, simple_tracers)}
 
     for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum']:
         propose_fiducial[name] = {}

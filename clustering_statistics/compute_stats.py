@@ -266,16 +266,24 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     correlation_options = dict(options[stat]) | dict(auw=auw_options.get(stat, None))
                     # Extract selection weights if provided (e.g., NX**(-1. / 3.) weighting)
                     selection_weights = correlation_options.pop('selection_weights', None)
+                    # Optional per-tracer number of random files for this statistic (subset of the loaded randoms),
+                    # e.g. recon_particle2_correlation uses fewer randoms than the catalog/recon nran.
+                    correlation_nran = correlation_options.pop('nran', None)
 
                     def get_data(tracer):
                         # Prepare data for spectrum measurement
+                        # Optionally restrict to a reduced number of random files for this statistic
+                        _zrandoms = zrandoms[tracer]
+                        if correlation_nran is not None:
+                            nran = correlation_nran[tracer] if isinstance(correlation_nran, dict) else correlation_nran
+                            _zrandoms = _zrandoms[:nran]
                         if recon:
                             # Use reconstructed positions, with same shifts applied to randoms
-                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': zrandoms[tracer],
-                                    'shifted': [get_catalog_recon(zrandom) for zrandom in zrandoms[tracer]]}
+                            toret = {'data': get_catalog_recon(zdata[tracer]), 'randoms': _zrandoms,
+                                    'shifted': [get_catalog_recon(zrandom) for zrandom in _zrandoms]}
                         else:
                             # Default: use original positions
-                            toret = {'data': zdata[tracer], 'randoms': zrandoms[tracer]}
+                            toret = {'data': zdata[tracer], 'randoms': _zrandoms}
                         # Apply selection weights if provided (for bispectrum, NX**(-1. / 3.) weighting, etc.)
                         if selection_weights:
                             toret = {name: selection_weights[tracer](catalog) for name, catalog in toret.items()}
