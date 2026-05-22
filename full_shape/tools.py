@@ -486,6 +486,13 @@ def _get_covariance_correction_factor(covariance: types.CovarianceMatrix,
     return factor, metadata
 
 
+def _get_prepared_cache_options(observables_options: list[dict], covariance_options: dict=None, kind: str=None):
+    options = {'observables': [{name: dict(observable_options[name]) for name in ['stat', 'catalog']} for observable_options in observables_options]}
+    if kind == 'covariance':
+        options['covariance'] = covariance_options or {}
+    return options
+
+
 @default_mpicomm
 def get_stats(observables_options: list[dict], covariance_options: dict=None, unpack: bool=False,
               get_stats_fn=clustering_tools.get_stats_fn, cache_dir: str | Path=None, cache_mode: str='rw', mpicomm=None):
@@ -527,14 +534,61 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     def get_cache_fn(kind, kwargs):
         if cache_dir is None:
             return None
-        _full_options = {'observables': [{name: dict(observable_options[name]) for name in ['stat', 'catalog']} for observable_options in observables_options]}
+        _full_options = _get_prepared_cache_options(observables_options, covariance_options, kind=kind)
         _level = {'stat': 1, 'catalog': 2, 'covariance': 0}
         if kind == 'covariance':
-            _full_options['covariance'] = covariance_options
             _level['covariance'] = 1
         _str_from_options = str_from_likelihood_options(_full_options, level=_level)
         _hash = _hash_options(_full_options | kwargs)
         return cache_dir / f'{kind}_{_str_from_options}-{_hash}.h5'
+
+    def get_covariance_manifest_key():
+        options = _get_prepared_cache_options(observables_options, covariance_options, kind='covariance')
+        return _hash_options(options, length=32)
+
+    def get_covariance_manifest_fn():
+        if cache_dir is None:
+            return None
+        return cache_dir / 'covariance_manifest.json'
+
+    def read_covariance_manifest():
+        manifest_fn = get_covariance_manifest_fn()
+        if manifest_fn is None or not read_cache:
+            return {}
+        manifest = {}
+        if mpicomm.rank == 0 and manifest_fn.exists():
+            with open(manifest_fn, 'r') as file:
+                manifest = json.load(file)
+        return mpicomm.bcast(manifest, root=0)
+
+    def write_covariance_manifest_entry(cache_fn, imocks):
+        manifest_fn = get_covariance_manifest_fn()
+        if manifest_fn is None or not write_cache or mpicomm.rank != 0:
+            return
+        mkdir(manifest_fn.parent)
+        if manifest_fn.exists():
+            with open(manifest_fn, 'r') as file:
+                manifest = json.load(file)
+        else:
+            manifest = {}
+        key = get_covariance_manifest_key()
+        try:
+            filename = str(cache_fn.relative_to(cache_dir))
+        except ValueError:
+            filename = str(cache_fn)
+        manifest[key] = {'filename': filename, 'imocks': list(imocks)}
+        with open(manifest_fn, 'w') as file:
+            json.dump(manifest, file, indent=2, sort_keys=True)
+
+    def get_covariance_cache_fn_from_manifest():
+        manifest = read_covariance_manifest()
+        entry = manifest.get(get_covariance_manifest_key(), None)
+        if not entry:
+            return None, None
+        cache_fn = Path(entry['filename'])
+        if not cache_fn.is_absolute():
+            cache_fn = cache_dir / cache_fn
+        return cache_fn, entry.get('imocks', None)
 
     def get_from_cache(cache_fn):
         if cache_fn is None or not read_cache:
@@ -792,42 +846,46 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         covariance.attrs['nobs'] = None
     elif covariance_options['source'] == 'mock':
         # Mock-based covariance
-        cache_fn = None
+        cache_fn, imocks_exists = get_covariance_cache_fn_from_manifest()
         covariance_cache_hit = False
-        all_fns = []
-        covariance_log_patterns = []
-        all_imocks = None
-        for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
-            file_kw = file_kw | {'imock': '*', 'project': ''} | covariance_options
-            file_kw['tracer'] = get_full_tracer(get_simple_tracer(file_kw['tracer']), version=file_kw['version'])
-            imocks = file_kw.pop('imock')
-            file_kw.pop('extra', None)  # XXX: ignore extra
-            if imocks == '*':
-                imocks = list(range(2001))
-            if all_imocks is None:
-                all_imocks = list(imocks)
-            else:
-                all_imocks = [imock for imock in all_imocks if imock in imocks]
-            stat_fns = [_get_mock_stats_fn(stat, file_kw | {'imock': imock}) for imock in imocks]
-            all_fns.append(stat_fns)
-            covariance_log_patterns.append((stat, _format_log_fns(stat_fns)))
-        all_fns = list(zip(*all_fns, strict=True))  # get a list of list of file names
-        ifns_exists = []
-        if mpicomm.rank == 0:
-            for stat, pattern in covariance_log_patterns:
-                logger.info(f"Looking for covariance mocks for {stat} at {pattern}")
-            for ifn, fns in enumerate(all_fns):
-                if all(fn.exists() for fn in fns):
-                    ifns_exists.append(ifn)
-        ifns_exists = mpicomm.bcast(ifns_exists, root=0)
-        if not ifns_exists:
-            raise FileNotFoundError(
-                _format_missing_covariance_context(covariance_options, covariance_log_patterns, observables_options)
-            )
-        imocks_exists = [all_imocks[ifn] for ifn in ifns_exists]
-        cache_fn = get_cache_fn('covariance', dict(imocks=imocks_exists))
         covariance = get_from_cache(cache_fn)
         covariance_cache_hit = covariance is not None
+        if covariance is not None and mpicomm.rank == 0:
+            logger.info(f"Reading covariance cache {cache_fn} from manifest {get_covariance_manifest_fn()}.")
+        if covariance is None:
+            all_fns = []
+            covariance_log_patterns = []
+            all_imocks = None
+            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
+                file_kw = file_kw | {'imock': '*'} | covariance_options
+                file_kw['tracer'] = get_full_tracer(get_simple_tracer(file_kw['tracer']), version=file_kw['version'])
+                imocks = file_kw.pop('imock')
+                if imocks == '*':
+                    imocks = list(range(2001))
+                if all_imocks is None:
+                    all_imocks = list(imocks)
+                else:
+                    all_imocks = [imock for imock in all_imocks if imock in imocks]
+                stat_fns = [_get_mock_stats_fn(stat, file_kw | {'imock': imock}) for imock in imocks]
+                all_fns.append(stat_fns)
+                covariance_log_patterns.append((stat, _format_log_fns(stat_fns)))
+            all_fns = list(zip(*all_fns, strict=True))  # get a list of list of file names
+            ifns_exists = []
+            if mpicomm.rank == 0:
+                for stat, pattern in covariance_log_patterns:
+                    logger.info(f"Looking for covariance mocks for {stat} at {pattern}")
+                for ifn, fns in enumerate(all_fns):
+                    if all(fn.exists() for fn in fns):
+                        ifns_exists.append(ifn)
+            ifns_exists = mpicomm.bcast(ifns_exists, root=0)
+            if not ifns_exists:
+                raise FileNotFoundError(
+                    _format_missing_covariance_context(covariance_options, covariance_log_patterns, observables_options)
+                )
+            imocks_exists = [all_imocks[ifn] for ifn in ifns_exists]
+            cache_fn = get_cache_fn('covariance', dict(imocks=imocks_exists))
+            covariance = get_from_cache(cache_fn)
+            covariance_cache_hit = covariance is not None
         if covariance is None:
             mocks = []
             if mpicomm.rank == 0:
@@ -847,6 +905,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             covariance_cache_hit = False
         if write_cache and cache_fn is not None and not covariance_cache_hit:
             write_stats(cache_fn, covariance)
+        if cache_fn is not None:
+            write_covariance_manifest_entry(cache_fn, imocks_exists)
 
     covariance = covariance.at.observable.match(data)
 

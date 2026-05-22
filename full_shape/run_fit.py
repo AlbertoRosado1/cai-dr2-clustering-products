@@ -48,7 +48,7 @@ def run_fit_from_options(actions,
     options = fill_fiducial_options(kwargs)
     likelihood = get_likelihood(likelihoods_options=options['likelihoods'],
                                 cosmology_options=options['cosmology'],
-                                get_stats_fn=get_stats_fn, cache_dir=cache_dir)
+                                get_stats_fn=get_stats_fn, cache_dir=cache_dir, cache_mode=cache_mode)
     likelihood()
     if likelihood.mpicomm.rank == 0:
         print('likelihood priors:')
