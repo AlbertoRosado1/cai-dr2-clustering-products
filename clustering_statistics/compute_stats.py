@@ -269,6 +269,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     # Optional per-tracer number of random files for this statistic (subset of the loaded randoms),
                     # e.g. recon_particle2_correlation uses fewer randoms than the catalog/recon nran.
                     correlation_nran = correlation_options.pop('nran', None)
+                    if correlation_nran is not None and jax.process_index() == 0:
+                        logger.info(f'{stat}: using {correlation_nran} random file(s) per tracer '
+                                    f'(out of {{{", ".join(f"{t!r}: {len(zrandoms[t])}" for t in tracers)}}} loaded).')
 
                     def get_data(tracer):
                         # Prepare data for spectrum measurement
