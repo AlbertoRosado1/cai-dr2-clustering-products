@@ -40,20 +40,26 @@ I (Edmond) prefers to work locally for the inference as we are on an easy fit si
 To collect files on my local computer (`/Users/edmond/Work/data/desi-clustering/`): 
 
  * Data:
-    * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded`
-    * From CFS:
-        * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/ . ` 
-    * From my local measurements (ie on my scratch): 
-        * `rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/ . ` 
-        
+ ```bash
+cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded
+# From CFS:
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/ .  
+# From my local measurements (ie on my scratch): 
+rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/ . 
+```
+
  * Holi Mocks:
-    * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl`
-    * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ . `
-    * `rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ .`
+ ```bash
+cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ . 
+rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ .
+```
 
 * Glam Mocks:
-    * `cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl`
-    * `rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl/ .`
+```bash
+cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl/ .
+```
 
 ### Upload data on NERSC:
 
