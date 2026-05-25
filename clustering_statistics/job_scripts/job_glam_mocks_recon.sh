@@ -3,7 +3,7 @@
 #SBATCH -C gpu&hbm80g
 #SBATCH -N 1
 #SBATCH --gpus 4
-#SBATCH -t 1:00:00
+#SBATCH -t 1:10:00
 #SBATCH -q regular
 #SBATCH -J glam_mocks_recon
 #SBATCH -L SCRATCH
@@ -28,8 +28,12 @@ JOB_FLAGS="-N 1 -n 4"
 COMMON_FLAGS="--stats recon_mesh2_spectrum recon_particle2_correlation --region NGC SGC --imock $imock --version $VERSION --stats_dir $STATS_DIR --expand_randoms data-dr2-v2 --weight default-FKP --combine"
 
 LRG_FLAGS="--tracer LRG --zrange 0.4 0.6 0.6 0.8 0.8 1.1"
+ELG_FLAGS="--tracer ELG_LOPnotqso --zrange 0.8 1.1 1.1 1.6"
+QSO_FLAGS="--tracer QSO --zrange 0.8 2.1"
 
 srun $JOB_FLAGS $CODE $LRG_FLAGS $COMMON_FLAGS
+srun $JOB_FLAGS $CODE $ELG_FLAGS $COMMON_FLAGS
+srun $JOB_FLAGS $CODE $QSO_FLAGS $COMMON_FLAGS
 
 echo " "
 if (( $SECONDS > 3600 )); then
