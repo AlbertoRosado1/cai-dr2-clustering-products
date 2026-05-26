@@ -141,7 +141,7 @@ def compute_reconstruction_cpu(get_data_randoms, mattrs=None, mode='recsym', bia
     if mpicomm.rank == 0:
         logger.info('f = %.3f, bias = %.3f at zeff = %.3f with smoothing_radius = %.3f, cellsize = %.3f', f, bias, zeff, smoothing_radius, cellsize)
 
-    recon_kwargs = dict(f=f, bias=bias, positions=data_positions, cellsize=cellsize, position_type='pos', mpicomm=mpicomm)
+    recon_kwargs = dict(f=f, bias=bias, positions=data_positions, cellsize=cellsize, position_type='pos', mpicomm=mpicomm, threshold_randoms=('noise',0.01))
     if boxsize is not None:
         recon_kwargs['boxsize'] = boxsize
     elif boxpad is not None:
@@ -227,31 +227,72 @@ def recon_output_cpu(get_catalog_fn=None, get_stats_fn=tools.get_stats_fn,
             zrandoms[tracer] = [get_zcatalog(random, zrange[tracer]) for random in randoms[tracer]]
     return zdata, zrandoms
 
-def test_recon_output():
+def test_recon_output(tracers=('LRG', 'ELG_LOPnotqso', 'QSO'), imock=451):
     stats_dir = Path(Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks')
-    for tracer in ['LRG']:
-        zrange = tools.propose_fiducial('zranges', tracer)[0]
-        for region in ['NGC', 'SGC'][:1]:
-            catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=451, nran=2)
-            catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
-            # recon_output0(stat, catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={}, particle2_correlation={})
-            
-            zdata, zrandoms = recon_output(catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={}, particle2_correlation={}, recon={'bias':2.0})
+    all_zdata, all_zrandoms = {}, {}
 
-    # show some structure of data and randoms
-        print(type(zdata[tracer]), type(zrandoms[tracer]), len(zrandoms[tracer]), len(zrandoms[tracer][0]), type(zrandoms[tracer][0][0]))
-        print(zdata[tracer][0].keys(), zdata[tracer][0]['POSITION_REC'].shape)
-        print(zrandoms[tracer][0][0].keys(), zrandoms[tracer][0][0]['POSITION_REC'].shape)
+    for tracer in tracers:
+        fid_recon = tools.propose_fiducial('recon', tracer)
+        bias = fid_recon['bias']
+        smoothing_radius = fid_recon['smoothing_radius']
+        cellsize = smoothing_radius / 3.
+        nran = tools.propose_fiducial('nran', tracer)
+        recon_kw = dict(bias=bias, smoothing_radius=smoothing_radius, mattrs={'cellsize': cellsize, 'boxpad': 1.2})
+        settings_tag = f'bias{bias:.1f}_sr{smoothing_radius:.1f}_cellsize{cellsize:.2f}_nran{nran:d}'
 
-        zrange_text = f"z{zrange[0]}-{zrange[1]}"
-        zdata[tracer].write(stats_dir / f'jax_recon_{tracer}_{zrange_text}_{region}_clustering.dat.h5')
-        for i, zrandom in enumerate(zrandoms[tracer]):
-            zrandom.write(stats_dir / f'jax_recon_{tracer}_{i}_{zrange_text}_{region}_clustering.ran.h5')
-    
-    return zdata, zrandoms
+        for zrange in tools.propose_fiducial('zranges', tracer):
+            for region in ['NGC', 'SGC'][:1]:
+                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=imock, nran=nran)
+                catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=nran)})
+
+                zdata, zrandoms = recon_output(catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), mesh2_spectrum={}, particle2_correlation={}, recon=recon_kw)
+
+            # show some structure of data and randoms
+            print(type(zdata[tracer]), type(zrandoms[tracer]), len(zrandoms[tracer]), len(zrandoms[tracer][0]), type(zrandoms[tracer][0][0]))
+            print(zdata[tracer][0].keys(), zdata[tracer][0]['POSITION_REC'].shape)
+            print(zrandoms[tracer][0][0].keys(), zrandoms[tracer][0][0]['POSITION_REC'].shape)
+
+            zrange_text = f"z{zrange[0]}-{zrange[1]}"
+            zdata[tracer].write(stats_dir / f'jax_recon_{tracer}_{settings_tag}_{zrange_text}_{region}_clustering.dat.h5')
+            for i, zrandom in enumerate(zrandoms[tracer]):
+                zrandom.write(stats_dir / f'jax_recon_{tracer}_{i}_{settings_tag}_{zrange_text}_{region}_clustering.ran.h5')
+        all_zdata[tracer] = zdata[tracer]
+        all_zrandoms[tracer] = zrandoms[tracer]
+
+    return all_zdata, all_zrandoms
+
+
+def test_recon_output_cpu(tracers=('LRG', 'ELG_LOPnotqso', 'QSO'), imock=451):
+    stats_dir = Path(Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks')
+    all_zdata, all_zrandoms = {}, {}
+
+    for tracer in tracers:
+        fid_recon = tools.propose_fiducial('recon', tracer)
+        bias = fid_recon['bias']
+        smoothing_radius = fid_recon['smoothing_radius']
+        cellsize = smoothing_radius / 3.
+        nran = tools.propose_fiducial('nran', tracer)
+        recon_kw = dict(bias=bias, smoothing_radius=smoothing_radius, mattrs={'cellsize': cellsize, 'boxpad': 1.2})
+        settings_tag = f'bias{bias:.1f}_sr{smoothing_radius:.1f}_cellsize{cellsize:.2f}_nran{nran:d}'
+
+        for zrange in tools.propose_fiducial('zranges', tracer):
+            for region in ['NGC', 'SGC'][:1]:
+                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=imock, nran=nran)
+                catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=nran)})
+
+                zdata, zrandoms = recon_output_cpu(catalog=catalog_options, get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir), recon=recon_kw)
+
+            zrange_text = f"z{zrange[0]}-{zrange[1]}"
+            zdata[tracer].write(stats_dir / f'pyrecon_{tracer}_{settings_tag}_{zrange_text}_{region}_clustering.dat.h5')
+            for i, zrandom in enumerate(zrandoms[tracer]):
+                zrandom.write(stats_dir / f'pyrecon_{tracer}_{i}_{settings_tag}_{zrange_text}_{region}_clustering.ran.h5')
+        all_zdata[tracer] = zdata[tracer]
+        all_zrandoms[tracer] = zrandoms[tracer]
+
+    return all_zdata, all_zrandoms
 
 def test_recon_clustering(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum'],
-                          to_test=['boxsize', 'nran', 'cellsize']):
+                          to_test=['boxsize', 'nran', 'cellsize'], tracers=None):
     checks = {
         'cellsize': check_cellsize_recon,
         'boxsize':  check_boxsize_recon,
@@ -260,47 +301,76 @@ def test_recon_clustering(stat=['recon_particle2_correlation', 'recon_mesh2_spec
     }
     for name in to_test:
         if name in checks:
-            checks[name](stat=stat)
+            kwargs = dict(stat=stat)
+            if tracers is not None:
+                kwargs['tracers'] = tracers
+            checks[name](**kwargs)
 
-def check_cellsize_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']):
+def _all_outputs_exist(stat, stats_dir, extra, tracer, zranges, region, imock):
+    """Return True only if every expected output file already exists on disk."""
+    if np.ndim(zranges[0]) == 0:
+        zranges = [zranges]
+    for zrange in zranges:
+        for kind in stat:
+            fn = tools.get_stats_fn(stats_dir=stats_dir, kind=kind, version='holi-v1-altmtl',
+                                    tracer=tracer, zrange=zrange, region=region, imock=imock,
+                                    weight='default-FKP', extra=extra)
+            if not fn.exists():
+                return False
+    return True
+
+
+def check_cellsize_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum'], tracers=None):
     """Run recon measurements with varying reconstruction cell size to check stability."""
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    cellsizes = [4]#6, 7.8, 10.
-    nran = 10
-    boxsize = 6000.
-    for tracer in ['ELG_LOPnotqso']:
+    cellsizes = [4, 6, 10.]#
+    nrans = {'ELG_LOPnotqso': 10, 'LRG': 8, 'QSO': 4}
+    boxsizes = {'ELG_LOPnotqso': 6000., 'LRG': 7000, 'QSO': 7000.}
+    imocks_dict = {'ELG_LOPnotqso': list(range(451, 461)), 'LRG': list(range(451, 461)), 'QSO': list(range(451, 461))}
+    _tracers = tracers if tracers is not None else ['QSO', 'LRG', 'ELG_LOPnotqso']
+    for tracer in _tracers:
         zrange = tools.propose_fiducial('zranges', tracer)
-        for region in ['NGC', 'SGC']:
-            for cellsize in cellsizes:
-                catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=451, nran=nran)
-                catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
-                extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
-                compute_stats_from_options(stat, catalog=catalog_options, mattrs={'cellsize': cellsize, 'boxsize': boxsize},
-                                           get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
-                                           recon_mesh2_spectrum={}, recon_particle2_correlation={})
+        nran = nrans[tracer]
+        boxsize = boxsizes[tracer]
+        for imock in imocks_dict[tracer]:
+            for region in ['NGC', 'SGC']:
+                for cellsize in cellsizes:
+                    catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=imock, nran=nran)
+                    catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
+                    extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
+                    if _all_outputs_exist(stat, stats_dir, extra, tracer, zrange, region, imock):
+                        logger.info('Skipping existing %s %s mock%d cellsize=%.2f', tracer, region, imock, cellsize)
+                        continue
+                    compute_stats_from_options(stat, catalog=catalog_options, mattrs={'cellsize': cellsize, 'boxsize': boxsize},
+                                               get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
+                                               recon_mesh2_spectrum={}, recon_particle2_correlation={})
 
 
 def check_boxsize_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']):
     """Run recon measurements with varying box size to check stability."""
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    boxsizes = {'ELG_LOPnotqso': [6000., 7000., 8000., 9000., 10000.]}
+    boxsizes = {'LRG':(5000, 6000, 7000, 8000, 9000,10000.), 'QSO':(7000, 8000, 9000,10000.)}#'ELG_LOPnotqso': [6000., 7000., 8000., 9000., 10000.]}
+    nrans = {'LRG': 8, 'QSO': 4}
     cellsize = 7.8  
-    nran = 10
     for tracer in boxsizes:
         zrange = tools.propose_fiducial('zranges', tracer)
+        nran = nrans[tracer]
         for region in ['NGC', 'SGC']:
             for boxsize in boxsizes[tracer]:
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=451, nran=nran)
                 catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
                 extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
+                if _all_outputs_exist(stat, stats_dir, extra, tracer, zrange, region, 451):
+                    logger.info('Skipping existing %s %s boxsize=%.0f', tracer, region, boxsize)
+                    continue
                 compute_stats_from_options(stat, catalog=catalog_options, mattrs={'boxsize': boxsize, 'cellsize': cellsize},
                                            get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
                                            recon_mesh2_spectrum={}, recon_particle2_correlation={})
-                
+
 def get_sigma_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']):
     """Run recon measurements with varying box size to check stability."""
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    boxsizes = {'ELG_LOPnotqso':[10000.]}#'LRG': [10000.], 
+    boxsizes = {'LRG': [10000.],'QSO': [10000.]}# 'ELG_LOPnotqso':[10000.]
     cellsize = 7.8  
     nran = 18
     imocks = range(451, 461)
@@ -312,6 +382,9 @@ def get_sigma_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']
                 catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=imock, nran=nran)
                 catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
                 extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
+                if _all_outputs_exist(stat, stats_dir, extra, tracer, zrange, region, imock):
+                    logger.info('Skipping existing %s %s mock%d sigma', tracer, region, imock)
+                    continue
                 compute_stats_from_options(stat, catalog=catalog_options, mattrs={'boxsize': boxsize, 'cellsize': cellsize},
                                            get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
                                            recon_mesh2_spectrum={}, recon_particle2_correlation={})
@@ -320,7 +393,7 @@ def get_sigma_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']
 def check_nran_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum']):
     """Run recon measurements with varying number of randoms to check stability."""
     stats_dir = Path(os.getenv('SCRATCH')) / 'clustering-measurements-checks'
-    nrans = {'ELG_LOPnotqso': [6, 10, 14]}
+    nrans = {'LRG':[8,10],'QSO':[4, 6]}#'ELG_LOPnotqso': [6, 10, 14]}
     cellsize = 7.8
     boxsize = 10000.
     imocks = range(451, 461)
@@ -328,10 +401,13 @@ def check_nran_recon(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum'
         for tracer in nrans:
             zrange = tools.propose_fiducial('zranges', tracer)
             for region in ['NGC', 'SGC']:
-                for nran in nrans:
+                for nran in nrans[tracer]:
                     catalog_options = dict(version='holi-v1-altmtl', tracer=tracer, zrange=zrange, region=region, imock=imock, nran=nran)
                     catalog_options.update(expand={'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=tracer, nran=catalog_options['nran'])})
                     extra = f'nran{nran:d}_cellsize{cellsize:.2f}_boxsize{boxsize:.0f}'
+                    if _all_outputs_exist(stat, stats_dir, extra, tracer, zrange, region, imock):
+                        logger.info('Skipping existing %s %s mock%d nran=%d', tracer, region, imock, nran)
+                        continue
                     compute_stats_from_options(stat, catalog=catalog_options, mattrs={'boxsize': boxsize, 'cellsize': cellsize},
                                             get_stats_fn=functools.partial(tools.get_stats_fn, stats_dir=stats_dir, extra=extra),
                                             recon_mesh2_spectrum={}, recon_particle2_correlation={})
@@ -341,16 +417,19 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--cpu', action='store_true', default=False, help='Run on CPU (pyrecon/MPI), skipping JAX imports and initialization')
+    parser.add_argument('--save', action='store_true', default=False, help='Run recon-and-save for all tracers (imock=451)')
+    parser.add_argument('--todo', nargs='+', default=['boxsize', 'nran'], help='Which checks to run: boxsize, nran, cellsize, sigma')
+    parser.add_argument('--tracers', nargs='+', default=None, help='Restrict checks to these tracers, e.g. --tracers LRG ELG_LOPnotqso')
     args = parser.parse_args()
 
     setup_logging()
     if args.cpu:
-        recon_output_cpu(catalog=dict(version='holi-v1-altmtl', tracer='LRG', region='NGC', imock=451, nran=2), recon={'bias': 2.0})
+        test_recon_output_cpu()
     else:
         import jax
         os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
         jax.distributed.initialize()
-        # data, randoms = test_recon_output()
-        test_recon_clustering(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum'], to_test=['sigma','nran'])#'boxsize','cellsize', sigma']
-
-
+        if args.save:
+            test_recon_output()
+        else:
+            test_recon_clustering(stat=['recon_particle2_correlation', 'recon_mesh2_spectrum'], to_test=args.todo, tracers=args.tracers)
