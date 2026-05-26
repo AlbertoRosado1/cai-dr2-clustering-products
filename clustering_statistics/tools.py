@@ -1828,7 +1828,7 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                 individual_weight /= get_binned_weight(catalog, binned_weight['missing_power'])
                 bitwise_weights = catalog['BITWEIGHTS']
                 if 'iip' in weight_type:
-                    individual_weight *= _compute_iip_weight(bitweights)
+                    individual_weight *= _compute_iip_weight(bitwise_weights)
                     bitwise_weights = None
             else:
                 # equivalent of IIP weights
