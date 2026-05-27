@@ -31,12 +31,10 @@ output, error = 'slurm_outputs/holi_mocks_recon/slurm-%j.out', 'slurm_outputs/ho
 kwargs = {}
 environ = Environment('nersc-cosmodesi')
 tm = TaskManager(queue=queue, environ=environ)
-tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
-                            mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu'))
-tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
+tm80 = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='03:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
 
-def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum'], analysis='full_shape', ibatch=None, postprocess=None, **kwargs):
+def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum', 'recon_particle2_correlation'], analysis='full_shape', ibatch=None, postprocess=None, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -58,7 +56,7 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
     for imock in imocks:
         regions = ['NGC', 'SGC']
         for region in regions:
-            options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, imock=imock), recon_mesh2_spectrum={'cut': True, 'auw': True}, recon_particle2_correlation={})
+            options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, imock=imock), recon_mesh2_spectrum={}, recon_particle2_correlation={})
 
             stats_dir_kws = dict(stats_dir=stats_dir, project=project)
             if onthefly == 'complete':
@@ -78,14 +76,14 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
 
     # postprocess
     if postprocess:
-        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, recon_mesh2_spectrum={'cut': True, 'auw': True}, recon_particle2_correlation={})
+        postprocess_options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, recon_mesh2_spectrum={}, recon_particle2_correlation={})
         postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
-def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum'], postprocess=['combine_regions'], **kwargs):
+def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum', 'recon_particle2_correlation'], postprocess=['combine_regions'], **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, recon_mesh2_spectrum={'cut': True, 'auw': True}, recon_particle2_correlation={})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, recon_mesh2_spectrum={}, recon_particle2_correlation={})
     stats_dir_kws = dict(stats_dir=stats_dir, project=project)
     if onthefly == 'complete':
         get_stats_fn = functools.partial(tools.get_stats_fn, extra='complete', **stats_dir_kws)
@@ -103,32 +101,39 @@ if __name__ == '__main__':
     mode = 'slurm'
     stats = ['recon_mesh2_spectrum', 'recon_particle2_correlation']
     postprocess = ['combine_regions']
-    imocks = np.arange(1001)
+    imocks2run = np.arange(1001)
     stats_dir = tools.base_stats_dir
-    analysis = 'full_shape'
-    project = 'bao/base'
+    analysis = 'bao'
+    project = f'{analysis}/base'
     version = 'holi-v3-altmtl'
     onthefly = None
+    if version == 'holi-v3-altmtl':
+        # do not perform measurements on dubious mocks
+        bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt', dtype=int)
+        imocks2run = imocks2run[~np.isin(imocks2run, bad_imocks)]
+    # Per-tracer batch sizes (mocks per slurm task), sized to fit each task in the 3 h wall.
+    # Measured per-mock cost (NGC+SGC, all zranges): LRG ~27 min, ELG ~28 min, QSO ~6 min.
+    max_mocks_per_batch_qso    = 25  # 25 * 6  ~= 150 min, in 3 h wall (30 min margin)
+    max_mocks_per_batch_others = 5   # 5  * 28 ~= 140 min, in 3 h wall (40 min margin)
 
     for tracer in ['LRG', 'ELG_LOPnotqso', 'QSO']:
+        max_mocks_per_batch = max_mocks_per_batch_qso if tracer == 'QSO' else max_mocks_per_batch_others
         if True:
-            exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer, region='NGC', version=version), test_if_readable=False, imock=list(range(1001)))[:2]
+            exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer, region='NGC', version=version), test_if_readable=False, imock=imocks2run)[:2]
             imocks = exists[1]['imock']
             rerun = []
             for zrange in tools.propose_fiducial('zranges', tracer, analysis=analysis):
                 for kind in ['recon_mesh2_spectrum', 'recon_particle2_correlation']:
-                    rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, kind=kind, stats_dir=stats_dir, project=project, tracer=tracer, region='NGC', weight='default-FKP', zrange=zrange, version=version), test_if_readable=True, imock=list(range(1001)))
+                    rexists, missing, unreadable = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_stats_fn, kind=kind, stats_dir=stats_dir, project=project, tracer=tracer, region='NGC', weight='default-FKP', zrange=zrange, version=version), test_if_readable=True, imock=imocks2run)
                     rerun += [imock for imock in imocks if (imock in unreadable[1]['imock']) or (imock not in rexists[1]['imock'])]
             imocks = sorted(set(rerun))
 
         def get_run_stats():
             _tm = tm80
-            if tracer == 'LRG':
-                _tm = tm
             return run_stats if mode == 'interactive' else _tm.python_app(run_stats)
 
         run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, stats=stats, analysis=analysis, onthefly=onthefly, postprocess=postprocess)
         if stats:
-            batch_imocks = np.array_split(imocks, max(len(imocks) // 10, 1)) if len(imocks) else []
+            batch_imocks = np.array_split(imocks, max(len(imocks) // max_mocks_per_batch, 1)) if len(imocks) else []
             for _imocks in batch_imocks:
                 get_run_stats()(imocks=_imocks, **run_stats_kws)
