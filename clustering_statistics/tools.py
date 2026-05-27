@@ -504,11 +504,17 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
 
     primes, divisors = (2, 3, 5), (2,)
     for stat in ['recon']:
-        recon_cellsize = propose_fiducial[stat]['smoothing_radius'] / 3.
-        propose_fiducial[stat]['mattrs'] = {'boxpad': 1.2, 'cellsize': recon_cellsize, 'primes': primes, 'divisors': divisors}
+        propose_recon_cellsizes = {'BGS': 4., 'LRG': 5., 'LGE': 5., 'ELG': 8., 'LRG+ELG': 5., 'LRG+LGE': 5., 'QSO': 10.}
+        propose_fiducial[stat]['mattrs'] = {'boxpad': 1.2, 'cellsize': propose_recon_cellsizes[simple_tracers[0]], 'primes': primes, 'divisors': divisors}
 
     for name in list(propose_fiducial):
         propose_fiducial[f'recon_{name}'] = propose_fiducial[name]  # same for post-recon measurements
+
+    # recon_particle2_correlation uses a reduced, per-tracer number of randoms,
+    # distinct from the catalog/recon nran (which keep the full-shape fiducial).
+    propose_recon_corr_nran = {'BGS': 1, 'LRG': 8, 'LGE': 8, 'ELG': 10, 'LRG+ELG': 10, 'LRG+LGE': 8, 'QSO': 4}
+    propose_fiducial['recon_particle2_correlation'] = dict(propose_fiducial['recon_particle2_correlation'])  # break shared reference with particle2_correlation
+    propose_fiducial['recon_particle2_correlation']['nran'] = {tracer: propose_recon_corr_nran[st] for tracer, st in zip(tracers, simple_tracers)}
 
     for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum']:
         propose_fiducial[name] = {}
@@ -1311,6 +1317,18 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
     return catalog
 
 
+def _compute_iip_weight(bitweights, return_recurr: bool=False):
+    """Compute IIP weights."""
+    bitweights = _format_bitweights(bitweights)
+    # Input: list of bitweights
+    nbits = 8 * sum(weight.dtype.itemsize for weight in bitweights)
+    recurr = popcount(*bitweights)
+    wiip = (nbits + 1) / (recurr + 1)
+    if return_recurr:
+        return wiip, recurr
+    return wiip
+
+
 def _compute_missing_power(ntile, bitweights, loc_assigned, method='missing_power'):
     """
     Compute "missing power weights", called "NTMP" in Davide's paper below.
@@ -1336,11 +1354,7 @@ def _compute_missing_power(ntile, bitweights, loc_assigned, method='missing_powe
     toret : array_like
         Missing power weights per NTILE.
     """
-    bitweights = _format_bitweights(bitweights)
-    # Input: list of bitweights
-    nbits = 8 * sum(weight.dtype.itemsize for weight in bitweights)
-    recurr = popcount(*bitweights)
-    wiip = (nbits + 1) / (recurr + 1)
+    wiip, recurr = _compute_iip_weight(bitweights, return_recurr=True)
     zero_prob = (recurr == 0) & (~loc_assigned)
 
     #print(np.sum(zerop_msk))
@@ -1763,7 +1777,8 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
     weight : str or None
         Weight specification string. Typical tokens include:
         - 'default' : use catalog['WEIGHT'] as INDWEIGHT
-        - 'bitwise'  : apply bitwise weighting logic (may drop FRAC_TLOBS_TILES==0)
+        - 'bitwise'  : apply bitwise (PIP for 2PCF) weighting (may drop FRAC_TLOBS_TILES==0)
+        - 'bitwise-iip': apply IIP based on bitwise weights
         - 'FKP' or '...FKP' : include FKP weight multiplication (requires FKP_P0 or existing WEIGHT_FKP)
         - 'noimsys'  : divide INDWEIGHT by WEIGHT_SYS (assumes WEIGHT contains WEIGHT_SYS)
         - 'comp'     : multiply INDWEIGHT by binned completeness weights provided in binned_weight['completeness']
@@ -1818,6 +1833,9 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             if 'bitwise' in weight_type:
                 individual_weight /= get_binned_weight(catalog, binned_weight['missing_power'])
                 bitwise_weights = catalog['BITWEIGHTS']
+                if 'iip' in weight_type:
+                    individual_weight *= _compute_iip_weight(bitwise_weights)
+                    bitwise_weights = None
             else:
                 # equivalent of IIP weights
                 #individual_weight /= (catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES'])
@@ -1849,6 +1867,9 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             if kind == 'data':
                 individual_weight = catalog['WEIGHT'] / catalog['WEIGHT_COMP']
                 bitwise_weights = catalog['BITWEIGHTS']
+                if 'iip' in weight_type:
+                    individual_weight *= _compute_iip_weight(bitwise_weights)
+                    bitwise_weights = None
             elif kind == 'randoms':
                 individual_weight = catalog['WEIGHT'] * get_binned_weight(catalog, binned_weight['missing_power'])
 

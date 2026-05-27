@@ -133,7 +133,7 @@ if __name__ == '__main__':
     # imocks2run = np.arange(2000)
     imocks2run = np.arange(1500)
     if version == 'glam-uchuu-v2-altmtl':
-        imocks2run = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt',dtype=int)
+        imocks2run = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape

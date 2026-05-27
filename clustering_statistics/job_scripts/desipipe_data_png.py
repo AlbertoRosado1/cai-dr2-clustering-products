@@ -207,7 +207,7 @@ if __name__ == '__main__':
             return _tm.python_app(run_stats)
 
     cat_dir = Path('/global/cfs/cdirs/desi/survey/catalogs/DA2/LSS/loa-v1/LSScats/v2/fNL/')
-    stats_dir = Path(os.getenv('SCRATCH', '.')) / 'DR2_local_png' / 'measurements' / 'loa-v1/v2/fNL'
+    stats_dir = Path(os.getenv('SCRATCH', '.')) / 'desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/'
 
     if args.blinded:
         cat_dir = cat_dir / 'blinded'

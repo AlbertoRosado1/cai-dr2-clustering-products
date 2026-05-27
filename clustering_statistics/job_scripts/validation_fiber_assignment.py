@@ -115,7 +115,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     from clustering_statistics import postprocess_stats_from_options
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum']}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True}, mesh3_spectrum={'auw': True}, window_mesh3_spectrum={})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'particle2_correlation', 'particle3_correlation']}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True}, mesh3_spectrum={'auw': True}, window_mesh3_spectrum={})
     stats_dir_kws = dict(stats_dir=stats_dir, project=project)
     _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly)
     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=_get_stats_fn, **options)
@@ -125,16 +125,23 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 if __name__ == '__main__':
 
     stats, postprocess = [], []
-    version = 'abacus-hf-dr2-v2-altmtl'
+    # version = 'abacus-hf-dr2-v2-altmtl'
+    # version = 'glam-uchuu-v2-altmtl'
     # version = 'abacus-2ndgen-dr2-complete'
     # version = 'abacus-2ndgen-dr2-altmtl'
+    version = 'data-dr2-v2'
     check_for_existing_measurements = False
-
     imocks = np.arange(25)
-    #imocks = np.arange(5, 25)
+    #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
     #imocks = np.arange(9)
     #imocks = np.arange(1)
+    if 'data' in version:
+        imocks = [None]
+    if version == 'glam-uchuu-v2-altmtl':
+        check_for_existing_measurements = True
+        imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
+
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
@@ -146,6 +153,7 @@ if __name__ == '__main__':
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'
     #tracers = ['BGS_BRIGHT']
+    #tracers = ['BGS_ANY-02']
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
@@ -162,7 +170,8 @@ if __name__ == '__main__':
     project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics'
     #weight = 'default-FKP'
-    weight = 'default-FKP-noimsys'
+    weight = 'default-FKP-bitwise-iip'
+    #weight = 'default-FKP-noimsys'
     #weight = 'default-noimsys'
     #weight = 'default'
     regions = ['NGC', 'SGC']
@@ -180,7 +189,8 @@ if __name__ == '__main__':
     #onthefly = 'altmtl'
     
     for tracer in tracers:
-        tracer = tools.get_full_tracer(tracer, version=version)
+        if 'BGS' not in tracer:
+            tracer = tools.get_full_tracer(tracer, version=version)
         if 'png' in analysis:
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
@@ -198,9 +208,14 @@ if __name__ == '__main__':
             return _tm.python_app(run_stats)
 
         run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
+
+        if check_for_existing_measurements:
+            exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer[0] if isinstance(tracer, (list, tuple)) else tracer,
+                                                                                           region='NGC', version=version), test_if_readable=False, imock=imocks)[:2]
+            imocks = exists[1]['imock']
         if True:
             if any('window' in stat for stat in stats):
-                _imocks = [0]
+                _imocks = imocks[:1]
                 nbatches = 1
                 tasks = []
                 for ibatch in range(nbatches):
@@ -212,7 +227,7 @@ if __name__ == '__main__':
             elif any('covariance' in stat for stat in stats):
                 get_run_stats()(imocks=[0], stats=stats, **run_stats_kws)
             elif stats:
-                batch_imocks = np.array_split(imocks, max((len(imocks) + max_mocks_per_batch - 1) // max_mocks_per_batch, 1)) if len(imocks) else []
+                batch_imocks = np.array_split(imocks, max((len(imocks) + max_mocks_per_batch - 1) // max_mocks_per_batch, 1)) if len(imocks) > max_mocks_per_batch else [imocks]
                 for _imocks in batch_imocks:
                     get_run_stats()(imocks=_imocks, stats=stats, **run_stats_kws)
         if postprocess:
