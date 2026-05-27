@@ -975,7 +975,7 @@ def main(**kwargs):
     if args.combine is not None and jax.process_index() == 0:
         stats = []
         if args.combine: stats = args.combine
-        elif args.stats: stats = args.stats
+        elif args.stats: stats = [stat for stat in args.stats if stat != 'close_pair_correction'] # avoid passing 'close_pair_correction' to `postprocess_stats_from_options`
         else: stats = ['mesh2_spectrum', 'mesh3_spectrum']  # best guess, if not argument was provided
         postprocess_stats_from_options(['combine_regions'], get_stats_fn=get_stats_fn, combine_regions=dict(stats=stats), **options, imocks=args.imock)
 
