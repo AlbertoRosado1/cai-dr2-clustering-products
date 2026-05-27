@@ -1859,6 +1859,9 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             individual_weight *= catalog['WEIGHT_FKP']
 
         if 'noimsys' in weight_type:
+            if 'wsys' in weight_type:
+                # Avoid dividing by WEIGHT_SYS multiple times.
+                raise ValueError(f"Do not pass `noimsys` and `wsys` simultaneously. You provided {weight_type}.")
             # this assumes that the WEIGHT column contains WEIGHT_SYS
             if log and mpicomm.rank == 0:
                 logger.info('Dividing individual weights by WEIGHT_SYS')
@@ -1869,9 +1872,12 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
 
         if 'wsys' in weight_type and not 'noimsys' in weight_type:
             new_wsys = weight_type.split('wsys-')[-1]
+            new_wsys_col = f'WEIGHT_{new_wsys.upper()}'
+            if new_wsys_col not in catalog.columns():
+                raise ValueError(f'{new_wsys_col} column does not exist!')
             if log and mpicomm.rank == 0:
-                logger.info(f'Use a different wsys weight: WEIGHT_{new_wsys.upper()}')
-            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog['WEIGHT_SYS']
+                logger.info(f'Using a different wsys weight: {new_wsys_col}')
+            individual_weight *= catalog[new_wsys_col] / catalog['WEIGHT_SYS']
 
         catalog['INDWEIGHT'] = individual_weight
         if bitwise_weights is not None:
