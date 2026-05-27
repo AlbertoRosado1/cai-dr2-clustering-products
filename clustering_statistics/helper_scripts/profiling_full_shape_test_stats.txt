@@ -1,0 +1,3 @@
+For LRG of holi-v3-altmtl we computed ['mesh2_spectrum', 'mesh3_spectrum'] for ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES', 'SnoDES', 'DES', 'ACT_DR6', 'PLANCK_PR4', 'GAL040', 'GAL060'] in 2411.11 seconds.
+For ELG_LOPnotqso of holi-v3-altmtl we computed ['mesh2_spectrum', 'mesh3_spectrum'] for ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES', 'SnoDES', 'DES', 'ACT_DR6', 'PLANCK_PR4', 'GAL040', 'GAL060'] in 2998.42 seconds.
+For QSO of holi-v3-altmtl we computed ['mesh2_spectrum', 'mesh3_spectrum'] for ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES', 'SnoDES', 'DES', 'ACT_DR6', 'PLANCK_PR4', 'GAL040', 'GAL060'] in 1728.46 seconds.

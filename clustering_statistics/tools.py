@@ -1027,12 +1027,18 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
-                cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
+                if 'BGS' in tracer:
+                    cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/altmtl/BGS_BRIGHT/MAG-21.35_KP3/")
+                else:
+                    cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
             elif 'complete' in version:
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
                 cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
             else:
-                cat_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/complete/cosmo_sample/')
+                if 'BGS' in tracer:
+                    cat_dir =  Path('/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/complete/cosmo_sample/')
+                else:
+                    cat_dir =  Path('/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/complete/')
             ext = 'fits'
             if 'BGS' in tracer:
                 # ugly way to get file with mag cut for BGS
@@ -1311,6 +1317,18 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
     return catalog
 
 
+def _compute_iip_weight(bitweights, return_recurr: bool=False):
+    """Compute IIP weights."""
+    bitweights = _format_bitweights(bitweights)
+    # Input: list of bitweights
+    nbits = 8 * sum(weight.dtype.itemsize for weight in bitweights)
+    recurr = popcount(*bitweights)
+    wiip = (nbits + 1) / (recurr + 1)
+    if return_recurr:
+        return wiip, recurr
+    return wiip
+
+
 def _compute_missing_power(ntile, bitweights, loc_assigned, method='missing_power'):
     """
     Compute "missing power weights", called "NTMP" in Davide's paper below.
@@ -1336,11 +1354,7 @@ def _compute_missing_power(ntile, bitweights, loc_assigned, method='missing_powe
     toret : array_like
         Missing power weights per NTILE.
     """
-    bitweights = _format_bitweights(bitweights)
-    # Input: list of bitweights
-    nbits = 8 * sum(weight.dtype.itemsize for weight in bitweights)
-    recurr = popcount(*bitweights)
-    wiip = (nbits + 1) / (recurr + 1)
+    wiip, recurr = _compute_iip_weight(bitweights, return_recurr=True)
     zero_prob = (recurr == 0) & (~loc_assigned)
 
     #print(np.sum(zerop_msk))
@@ -1763,7 +1777,8 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
     weight : str or None
         Weight specification string. Typical tokens include:
         - 'default' : use catalog['WEIGHT'] as INDWEIGHT
-        - 'bitwise'  : apply bitwise weighting logic (may drop FRAC_TLOBS_TILES==0)
+        - 'bitwise'  : apply bitwise (PIP for 2PCF) weighting (may drop FRAC_TLOBS_TILES==0)
+        - 'bitwise-iip': apply IIP based on bitwise weights
         - 'FKP' or '...FKP' : include FKP weight multiplication (requires FKP_P0 or existing WEIGHT_FKP)
         - 'noimsys'  : divide INDWEIGHT by WEIGHT_SYS (assumes WEIGHT contains WEIGHT_SYS)
         - 'comp'     : multiply INDWEIGHT by binned completeness weights provided in binned_weight['completeness']
@@ -1818,6 +1833,9 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             if 'bitwise' in weight_type:
                 individual_weight /= get_binned_weight(catalog, binned_weight['missing_power'])
                 bitwise_weights = catalog['BITWEIGHTS']
+                if 'iip' in weight_type:
+                    individual_weight *= _compute_iip_weight(bitwise_weights)
+                    bitwise_weights = None
             else:
                 # equivalent of IIP weights
                 #individual_weight /= (catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES'])
@@ -1849,6 +1867,9 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             if kind == 'data':
                 individual_weight = catalog['WEIGHT'] / catalog['WEIGHT_COMP']
                 bitwise_weights = catalog['BITWEIGHTS']
+                if 'iip' in weight_type:
+                    individual_weight *= _compute_iip_weight(bitwise_weights)
+                    bitwise_weights = None
             elif kind == 'randoms':
                 individual_weight = catalog['WEIGHT'] * get_binned_weight(catalog, binned_weight['missing_power'])
 
@@ -1865,6 +1886,9 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             individual_weight *= catalog['WEIGHT_FKP']
 
         if 'noimsys' in weight_type:
+            if 'wsys' in weight_type:
+                # Avoid dividing by WEIGHT_SYS multiple times.
+                raise ValueError(f"Do not pass `noimsys` and `wsys` simultaneously. You provided {weight_type}.")
             # this assumes that the WEIGHT column contains WEIGHT_SYS
             if log and mpicomm.rank == 0:
                 logger.info('Dividing individual weights by WEIGHT_SYS')
@@ -1875,9 +1899,12 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
 
         if 'wsys' in weight_type and not 'noimsys' in weight_type:
             new_wsys = weight_type.split('wsys-')[-1]
+            new_wsys_col = f'WEIGHT_{new_wsys.upper()}'
+            if new_wsys_col not in catalog.columns():
+                raise ValueError(f'{new_wsys_col} column does not exist!')
             if log and mpicomm.rank == 0:
-                logger.info(f'Use a different wsys weight: WEIGHT_{new_wsys.upper()}')
-            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog['WEIGHT_SYS']
+                logger.info(f'Using a different wsys weight: {new_wsys_col}')
+            individual_weight *= catalog[new_wsys_col] / catalog['WEIGHT_SYS']
 
         catalog['INDWEIGHT'] = individual_weight
         if bitwise_weights is not None:
