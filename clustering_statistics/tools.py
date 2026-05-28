@@ -904,6 +904,25 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'full_randoms':
                 return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
 
+        elif version == 'data-dr2-v2.1':
+            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2.1'
+            if kind == 'parent_randoms':
+                program = 'bright' if 'BGS' in tracer else 'dark'
+                return [_find_extension(cat_dir / f'{program}_{iran}_full_noveto.ran', None) for iran in nrans]
+            if 'bitwise' in weight:
+                data_dir = cat_dir / 'PIP'
+            else:
+                data_dir = cat_dir / 'nonKP'
+            ext = 'fits'
+            if kind == 'data':
+                return data_dir / f'{tracer}_{region}_clustering.dat.{ext}'
+            if kind == 'randoms':
+                return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{ext}' for iran in nrans]
+            if kind == 'full_data':
+                return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
+            if kind == 'full_randoms':
+                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
+
         elif 'data-dr3' in version:
             if version == 'data-dr3-matterhorn-v2-test':
                 cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/matterhorn-v2/LSScats/test'
