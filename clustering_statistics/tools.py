@@ -1604,7 +1604,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                     expand['from_data'] = ['FRAC_TLOBS_TILES']
                 else:
                     expand['data_fn'] = reshuffle['data_fn']
-                    expand['from_data'] = [''] # no need of FRAC_TLOBS_TILES for on-the-fly complete mocks
+                    expand['from_data'] = [] # no need of FRAC_TLOBS_TILES for on-the-fly complete mocks
 
     if kind == 'randoms' and isinstance(expand, dict):
         # if reshuffling is performed need to extract FRAC_TLOBS_TILES from data to have the correct completeness weight !
