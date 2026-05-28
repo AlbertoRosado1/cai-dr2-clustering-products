@@ -1035,27 +1035,25 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
                 cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
             else:
+                ext = 'fits'
                 if 'BGS' in tracer:
                     cat_dir =  Path('/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/complete/cosmo_sample/')
+                    # ugly way to get file with mag cut for BGS
+                    if '-' in tracer:
+                        mag = tracer.split('-')[-1]
+                        mag_cut = f'_Mr_{mag}'
+                    else: 
+                        mag_cut = ''
+                    if kind == 'data':
+                        return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_0000_clustering.dat.{ext}')
+                    if kind == 'randoms':
+                        return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_{iran}_0000_clustering.ran.{ext}' for iran in nrans]
                 else:
                     cat_dir =  Path('/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/complete/')
-            ext = 'fits'
-            if 'BGS' in tracer:
-                # ugly way to get file with mag cut for BGS
-                if '-' in tracer:
-                    mag = tracer.split('-')[-1]
-                    mag_cut = f'_Mr_{mag}'
-                else: 
-                    mag_cut = ''
-                if kind == 'data':
-                    return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_0000_clustering.dat.{ext}')
-                if kind == 'randoms':
-                    return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_{iran}_0000_clustering.ran.{ext}' for iran in nrans]
-            else:
-                if kind == 'data':
-                    return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_clustering.dat.{ext}')
-                if kind == 'randoms':
-                    return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
+                    if kind == 'data':
+                        return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_clustering.dat.{ext}')
+                    if kind == 'randoms':
+                        return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
 
     # print(version)
     if cat_dir is None:
