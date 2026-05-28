@@ -1921,6 +1921,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
         if kind in ['data', 'randoms'] and (keep_all_columns or 'POSITION' in keep_columns):
             catalog = set_positions_from_rdz(catalog)
         if not keep_all_columns:
+            keep_columns = list(keep_columns) + ['INDWEIGHT', 'BITWEIGHT'] # always keep INDWEIGHT and BITWEIGHT (if present) as the docstring says
             catalog = catalog[[column for column in catalog if column in keep_columns]]
         rdzw.append(catalog)
     if concatenate:
