@@ -1604,10 +1604,11 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                     expand['from_data'] = ['FRAC_TLOBS_TILES']
                 else:
                     expand['data_fn'] = reshuffle['data_fn']
+                    expand['from_data'] = [''] # no need of FRAC_TLOBS_TILES for on-the-fly complete mocks
 
     if kind == 'randoms' and isinstance(expand, dict):
-        # No need to import anything from data if reshuffling is performed
-        from_data = expand.get('from_data', [] if isinstance(reshuffle, dict) else ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES'][:-1])
+        # if reshuffling is performed need to extract FRAC_TLOBS_TILES from data to have the correct completeness weight !
+        from_data = expand.get('from_data', ['FRAC_TLOBS_TILES'] if isinstance(reshuffle, dict) else ['Z', 'WEIGHT_SYS'])
         from_randoms = expand.get('from_randoms', ['RA', 'DEC', 'NTILE'])
         parent_randoms_fn = expand['parent_randoms_fn']
         if not isinstance(parent_randoms_fn, (tuple, list)):
