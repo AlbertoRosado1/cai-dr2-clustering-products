@@ -1309,10 +1309,10 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
         catalog = Catalog.read(fn, mpicomm=mpicomm)
     catalog.attrs.update(catalog.header)  # for header not transmitted in pickling
     if 'WEIGHT' not in catalog:
-        warnings.warn('WEIGHT not in catalog')
+        logger.warning(f'WEIGHT not in catalog: {fn}')
         catalog['WEIGHT'] = catalog.ones()
     if 'TARGETID' not in catalog:
-        warnings.warn('TARGETID not in catalog')
+        logger.warning(f'TARGETID not in catalog: {fn}')
         catalog['TARGETID'] = catalog.cindex()
     return catalog
 
