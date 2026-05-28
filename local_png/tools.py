@@ -8,7 +8,7 @@ logger = logging.getLogger('PNG fitting tools')
 
 def read_data(data_dir='.', mocks_dir=None, 
               tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', 
-              add_ic=False, aladr1=False, weight_type_mocks=None, **kwargs):
+              window_extra='', weight_type_mocks=None, **kwargs):
     """ 
     Read the data from the clustering statistics output. This is a wrapper of clustering_statistics.tools.get_stats_fn.
     """
@@ -19,15 +19,8 @@ def read_data(data_dir='.', mocks_dir=None,
     pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
 
     # Read the window matrix:
-    if add_ic and aladr1:
-        logger.info('Reading the window with integral constraint contribution (DR1 style) ...')
-        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra='with_ic'))
-    elif add_ic and not aladr1:
-        logger.info('Reading the window with integral constraint contribution (DR2 style)...') 
-        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra='RIC+AMR'))
-    else:
-        logger.info('Reading the window without integral constraint contribution...')
-        window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
+    logger.info(f'Reading the window with {window_extra=}')
+    window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra=window_extra))
 
     # Read the analytical covariance matrix:
     try: 
@@ -40,15 +33,14 @@ def read_data(data_dir='.', mocks_dir=None,
     mocks = None
     if mocks_dir is not None: 
         weight_type_mocks = weight_type_mocks or weight_type
+        if 'nmocks' in kwargs:
+            nmocks = kwargs['nmocks']
+            logger.info(f"Reading {nmocks} mocks for tracer {tracer} with weight type {weight_type_mocks}.")
+        else:
+            nmocks = 1000 if weight_type_mocks == 'default-fkp-oqe' else 100
 
-        nmocks = 1000 if weight_type_mocks == 'default-fkp-oqe' else 100
         fns_mock = [get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=mocks_dir, project='holi-v3-altmtl', tracer=tracer, region=region, zrange=zrange, 
                                  weight=weight_type_mocks, imock=imock) for imock in range(nmocks)]    
-        # These mocks are not available yet with altmtl due to sysnet error -> should be ready soon.  
-        if nmocks == 1000:
-            for i, bad_mocks in enumerate([363, 565]):
-                _ = fns_mock.pop(bad_mocks - i)  # don't forget pop remove the object from the list, so the next bad_mocks index is shifted by -1.
-
         mocks = [lsstypes.read(fn) for fn in fns_mock]
 
     return pk, window, cov, mocks
@@ -455,7 +447,7 @@ def run_profiler(likelihood, fn_output=None, sigfigs=2):
     return profiler
 
 
-def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False, nchains=1, max_iterations=1e5, check_every=1000):
+def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False, nchains=1, max_iterations=20000, check_every=5000):
     """Run the MCMC sampler on the likelihood, the results are saved in a text file if fn_output is provided. 
 
     Args:
@@ -476,7 +468,7 @@ def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False,
     return sampler
 
 
-def plot_observables(observables, ylims=None, show=True, fn_output=None):
+def plot_observables(observables, figsize=(6, 4),ylims=None, show=True, fn_output=None):
     """ 
     Plot the observables (power spectrum multipoles) with their theory predictions and residuals.
 
@@ -490,7 +482,7 @@ def plot_observables(observables, ylims=None, show=True, fn_output=None):
         Profiler or profile-like object. If provided, an extra column is added to display
         its summary table.
     """
-    fig, axs = plt.subplots(2, 2, figsize=(6, 4), sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
+    fig, axs = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
     fig.subplots_adjust(hspace=0.1)
 
     translator = {'LRGxLRG': 'L', 'ELGxELG': 'E', 'QSOxQSO': 'Q', 'LRGxELG': 'LxE', 'LRGxQSO': 'LxQ', 'ELGxQSO': 'ExQ'}
