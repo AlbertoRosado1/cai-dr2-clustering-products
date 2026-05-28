@@ -1986,8 +1986,8 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
     """
     catalogs = read_catalog(kind=kind, concatenate=concatenate, get_catalog_fn=get_catalog_fn,
                             expand=expand, reshuffle=reshuffle, complete=complete, mpicomm=mpicomm, read=_read_catalog,
-                            keep_columns=None if keep_columns is None else True, **kwargs)
-    # keep_columns=True means to keep all columns at the read_catalog step as they may be needed for the preparation steps (masking, weights, positions). but if keep_columns is None (meaning the default set of columns), we can use the default set of columns at the read_catalog step, this saves a bit of memory and I/O with HDF5 catalogs
+                            keep_columns=True if keep_columns is True else None, **kwargs)
+    # for the read_catalog, it doesn't always work to have the same keep_columns, as more columns can be needed in the prepare_catalog steps (masking, setting weights or positions). if keep_columns is True, we keep all columns at the read_catalog step and it works. if keep_columns is None, we use the default set of columns and this also works. if keep_columns is a custom list, this code gives keep_columns=None for the read_catalog step as well, which should not give errors and should generally work as long as the custom keep_columns set passed to this function is narrower than the default set of columns (which is reasonable to expect from the docstring)
     # the keep_columns argument is passed to prepare_catalog to control the final output columns
     catalogs = prepare_catalog(catalogs, kind=kind, set_positions_from_rdz=set_positions_from_rdz,
                                mask_catalog=mask_catalog, set_catalog_weights=set_catalog_weights,
