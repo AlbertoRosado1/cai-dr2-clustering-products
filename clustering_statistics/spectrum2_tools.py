@@ -1421,6 +1421,7 @@ def compute_window_mesh2_spectrum_fm(
             extra_effects = "RIC+AMR"
             amr_argss = []
             for itracer, (data_tracer, randoms_tracer) in enumerate(zip(zip(*all_data, strict=True), zip(*all_randoms, strict=True), strict=True)):
+                logger.debug(f"{itracer} -- {amr_regions_zranges[itracer]}")
                 amr_argss.append(prepare_AMR(data=data_tracer, randoms=randoms_tracer, regions_zranges=amr_regions_zranges[itracer], apply_to="randoms"))
             amr_argss = tuple(amr_argss)
 

@@ -155,6 +155,8 @@ def collect_argparser():
     parser.add_argument('--interactive', action='store_true', help='Whether to run in interactive mode (without spawning jobs with desipipe).')
     
     parser.add_argument('--tracers', nargs='+', type=str, default=None, help='Which tracer to run..')
+    parser.add_argument('--regions', nargs='+', type=str, default=None, help='Which regions to compute..', 
+                        choices=['NGC', 'SGC', 'N', 'NGCnoN', 'SGCnoDES', 'DES'] + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]])
     
     parser.add_argument('--blinded', action='store_true', help='Run with blinded data or not.')
     parser.add_argument('--fm_window', action='store_true', help='Compute the forward model of the window function. This is a heavier computation, so we keep it optional and separate for now.')
@@ -185,9 +187,11 @@ if __name__ == '__main__':
 
     srun -n 4 python desipipe_data_png.py --interactive --blinded --tracer LRG LRG_zcmb
     
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0 2
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --ric --ellsout 0 2
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --ric --amr --ellsout 0 2
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0 2 --tracer LRG
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --ric --ellsout 0 2 --tracer LRG
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --ric --amr --ellsout 0 2 --tracer LRG
+
+    srun -n 1 python desipipe_data_png.py --interactive --blinded --fm_window --ric --amr --ellsout 0 2 --tracer LRGxQSO
 
     """
     from clustering_statistics import setup_logging, tools
@@ -204,13 +208,12 @@ if __name__ == '__main__':
         logger.info("Create queue with jobs inside using desipipe. Don\'t forget to run `desipipe spawn -q data_png --spawn` to launch the jobs!")
         tm, tm80 = setup_queue()
 
+
     def get_run_stats():
         if mode == 'interactive':
             return run_stats
         else: 
-            _tm = tm80
-            #if tracer in ['LRG']: _tm = tm
-            return _tm.python_app(run_stats)
+            return tm80.python_app(run_stats)
 
 
     cat_dir = Path('/global/cfs/cdirs/desi/survey/catalogs/DA2/LSS/loa-v1/LSScats/v2/fNL/')
@@ -231,19 +234,17 @@ if __name__ == '__main__':
         tracers = [tuple(tt.split('x')) if 'x' in tt else tt for tt in args.tracers] 
     else:
         tracers = ['LRG']
+        
         #tracers = [('ELGnotqso', 'QSO')] #'ELGnotqso', ('LRG', 'QSO'), ('LRG', 'ELGnotqso')
         #tracers = ['LRG', 'LRG_zcmb', 'ELGnotqso', 'QSO', 'QSO_zcmb', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO')]
         #tracers = ['LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO_zcmb', ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]  # NGC+SGC = 2h30
         #tracers = ['ELGnotqso', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO')]
 
-    #regions = ['NGC', 'SGC']
-    regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'SGCnoDES', 'DES'] #+ ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]]
-
+    regions = args.regions if args.regions is not None else ['NGC', 'SGC']
 
     for tracer in tracers:         
-        #zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')[:1]
-
-        zranges = [(0.4, 1.1), (0.4, 1.0), (0.4, 0.9), (0.4, 0.8)]
+        zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')[:1]
+        #zranges = [(0.4, 1.1), (0.4, 1.0), (0.4, 0.9), (0.4, 0.8)]
 
         weights = ['default-fkp-oqe', 'default-fkp'][:1]
         logger.info(f'{tracer=}, {zranges=}, {weights=}')
@@ -279,7 +280,8 @@ if __name__ == '__main__':
             logger.info(f"Use region={total_regions} and zrange={total_zranges} for reading the catalogs.")
 
             # Update options for forward window:
-            kwargs = {'geo': args.geo, 'ric': args.ric, 'amr': args.amr, 'ellsout': args.ellsout, 
+            kwargs = {'geo': args.geo, 'ric': args.ric, 'amr': args.amr, 'ellsout': args.ellsout,
+                      #'amr_regions_zranges':  
                       'spectrum_regions_zranges': list(itertools.product(regions, zranges))}
             logger.info(f"window_mesh2_spectrum_fm kwargs: {kwargs}")
 
