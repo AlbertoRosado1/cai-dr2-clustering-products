@@ -553,11 +553,23 @@ def get_getdist_plotter(fig_width_inch=5, fontsize=14, legend_fontsize=12, axes_
 def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\rm loc}$', r'$b_1$', r'$s_{n,0}$', r'$\Sigma_s$'], 
                   contour_colors=None, filled=True, contour_ls=None, g=None, fn_output=None, return_fig=False):
     """ Wrapper around getdist's plot_triangle to plot the contours of the different chains."""
+
+    # Compatibility shim: matplotlib >= 3.10 removed QuadContourSet.collections.
+    # In 3.10+ QuadContourSet IS a Collection itself, so returning [self] restores
+    # the iteration pattern used by getdist (for c in cs.collections: c.set_dashes(...)).
+    import matplotlib.contour as _mcontour
+    if not hasattr(_mcontour.QuadContourSet, 'collections'):
+        _mcontour.QuadContourSet.collections = property(lambda self: [self])
+
+    # Avoid getdist print statements about loading chains (burning ..), since we are building the chains ourselves.
+    import getdist.chains
+    getdist.chains.print_load_details = False
+
     from desilike.samples import plotting
-    
+
     if g is None: g = get_getdist_plotter()
-    plotting.plot_triangle(chains, params, legend_labels=legend_labels, 
-                           contour_colors=contour_colors, filled=filled, contour_ls=contour_ls, 
+    plotting.plot_triangle(chains, params, legend_labels=legend_labels,
+                           contour_colors=contour_colors, filled=filled, contour_ls=contour_ls,
                            g=g, show=False, fn=None)
 
     if xlabels is not None:
