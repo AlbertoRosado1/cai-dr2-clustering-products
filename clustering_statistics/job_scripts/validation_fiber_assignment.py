@@ -71,21 +71,22 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
         raise ValueError('Please provide zranges.')
     for imock in imocks:
         for region in regions:
-            mesh2_spectrum = {'cut': True if 'full_shape' in analysis else None, 
-                              'auw': True if 'altmtl' in version and onthefly is None and 'full_shape' in analysis else None}
-            window_mesh2_spectrum = {'cut': True if 'full_shape' in analysis else None}
-            mesh3_spectrum = {'auw': True if 'altmtl' in version and onthefly is None and 'full_shape' in analysis else None}
+            correction = 'close_pair_correction' in stats  # run AUW or theta-cut only when asking for close_pair_correction
+            auw = correction and ('altmtl' in version and onthefly is None or 'data' in version)
+            cut = correction
+            mesh2_spectrum = {'cut': cut, 'auw': auw}
+            window_mesh2_spectrum = {'cut': cut}
+            mesh3_spectrum = {'auw': auw}
             window_mesh3_spectrum = {'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch}
-            mode = 'theta'
+            mode = 'smu'
             if mode == 'smu':
                 particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 40., 41), mu=(np.linspace(-1., 1., 201), 'midpoint'))}
                 particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
             elif mode == 'theta':
                 particle2_correlation = {'split_randoms': (2., 10), 'battrs': dict(theta=np.linspace(0., 0.3, 31))}
                 particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(theta=np.linspace(0., 0.3, 31))}
-            if False:
-                particle2_correlation |= {'auw': True}
-                particle3_correlation |= {'auw': True}
+            particle2_correlation |= {'auw': auw}
+            particle3_correlation |= {'auw': auw}
             #particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
@@ -125,11 +126,11 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 if __name__ == '__main__':
 
     stats, postprocess = [], []
-    # version = 'abacus-hf-dr2-v2-altmtl'
+    version = 'abacus-hf-dr2-v2-altmtl'
     # version = 'glam-uchuu-v2-altmtl'
     # version = 'abacus-2ndgen-dr2-complete'
     # version = 'abacus-2ndgen-dr2-altmtl'
-    version = 'data-dr2-v2'
+    # version = 'data-dr2-v2'
     check_for_existing_measurements = False
     imocks = np.arange(25)
     #imocks = np.arange(12, 25)
@@ -157,20 +158,20 @@ if __name__ == '__main__':
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
-    stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
+    #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
     #stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    #stats = ['mesh2_spectrum', 'close_pair_correction'][:1]
+    stats = ['mesh2_spectrum', 'close_pair_correction']
     #stats = ['particle3_correlation'][:0]
     #postprocess = ['combine_regions']
     analysis = 'full_shape'
     project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics'
-    #weight = 'default-FKP'
-    weight = 'default-FKP-bitwise-iip'
+    weight = 'default-FKP'
+    #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP-noimsys'
     #weight = 'default-noimsys'
     #weight = 'default'
