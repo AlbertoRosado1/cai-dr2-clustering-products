@@ -182,9 +182,9 @@ if __name__ == '__main__':
     srun -n 4 python desipipe_data_png.py --interactive --blinded --tracer LRG LRG_zcmb
     
     # run forward model of the window for IC contributions:
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --geo --ellsout 0 2 --tracer ELGnotqso
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --geo --ellsout 0 2 --tracer LRGxELGnotqso
     srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --ellsout 0 2 --tracer QSO
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer ELGnotqsoxQSO
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer LRGxELGnotqso
 
     """
     from clustering_statistics import setup_logging, tools
