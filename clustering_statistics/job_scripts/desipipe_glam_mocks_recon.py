@@ -101,7 +101,7 @@ if __name__ == '__main__':
     mode = 'slurm'
     stats = ['recon_mesh2_spectrum', 'recon_particle2_correlation']
     postprocess = ['combine_regions']
-    imocks2run = 150 + np.arange(50)  # TEST: 50 realizations (glam starts at 150); use np.arange(1000) for production
+    imocks2run = np.arange(1000)
     stats_dir = tools.base_stats_dir
     analysis = 'bao'
     project = f'{analysis}/base'
