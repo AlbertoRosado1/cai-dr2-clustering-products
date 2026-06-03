@@ -1,16 +1,16 @@
 """
 Script to create and spawn desipipe tasks to compute post-recon clustering measurements
-(2pcf `recon_particle2_correlation` and power spectrum `recon_mesh2_spectrum`) on HOLI mocks.
+(2pcf `recon_particle2_correlation` and power spectrum `recon_mesh2_spectrum`) on GLAM-Uchuu mocks.
 
 To create and spawn the tasks on NERSC, use the following commands:
 ```bash
 salloc -N 1 -C "gpu&hbm80g" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 export PYTHONPATH=$HOME/cai-dr2-clustering-products/:$PYTHONPATH
-python desipipe_holi_mocks_recon.py         # create the list of tasks
-desipipe tasks -q holi_mocks_recon          # check the list of tasks
-desipipe spawn -q holi_mocks_recon --spawn  # spawn the jobs
-desipipe queues -q holi_mocks_recon         # check the queue
+python desipipe_glam_mocks_recon.py         # create the list of tasks
+desipipe tasks -q glam_mocks_recon          # check the list of tasks
+desipipe spawn -q glam_mocks_recon --spawn  # spawn the jobs
+desipipe queues -q glam_mocks_recon         # check the queue
 ```
 """
 import os
@@ -24,17 +24,17 @@ from clustering_statistics import tools
 
 setup_logging()
 
-queue = Queue('holi_mocks_recon')
+queue = Queue('glam_mocks_recon')
 queue.clear(kill=False)
 
-output, error = 'slurm_outputs/holi_mocks_recon/slurm-%j.out', 'slurm_outputs/holi_mocks_recon/slurm-%j.err'
+output, error = 'slurm_outputs/glam_mocks_recon/slurm-%j.out', 'slurm_outputs/glam_mocks_recon/slurm-%j.err'
 kwargs = {}
 environ = Environment('nersc-cosmodesi')
 tm = TaskManager(queue=queue, environ=environ)
 tm80 = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='03:00:00',
                             mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
 
-def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum', 'recon_particle2_correlation'], analysis='full_shape', ibatch=None, postprocess=None, **kwargs):
+def run_stats(tracer='LRG', project='', version='glam-uchuu-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum', 'recon_particle2_correlation'], analysis='full_shape', ibatch=None, postprocess=None, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -80,7 +80,7 @@ def run_stats(tracer='LRG', project='', version='holi-v1-altmtl', onthefly=None,
         postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **postprocess_options)
 
 
-def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='holi-v1-altmtl', onthefly=None, imocks=[201], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum', 'recon_particle2_correlation'], postprocess=['combine_regions'], **kwargs):
+def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='glam-uchuu-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['recon_mesh2_spectrum', 'recon_particle2_correlation'], postprocess=['combine_regions'], **kwargs):
     from clustering_statistics import postprocess_stats_from_options
     zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
     options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, imock=imocks[0]), imocks=imocks, combine_regions={'stats': stats}, recon_mesh2_spectrum={}, recon_particle2_correlation={})
@@ -101,15 +101,15 @@ if __name__ == '__main__':
     mode = 'slurm'
     stats = ['recon_mesh2_spectrum', 'recon_particle2_correlation']
     postprocess = ['combine_regions']
-    imocks2run = np.arange(50)  # TEST: 50 realizations; bump to np.arange(1001) for production
+    imocks2run = 150 + np.arange(50)  # TEST: 50 realizations (glam starts at 150); use np.arange(1000) for production
     stats_dir = tools.base_stats_dir
     analysis = 'bao'
     project = f'{analysis}/base'
-    version = 'holi-v3-altmtl'
+    version = 'glam-uchuu-v2-altmtl'
     onthefly = None
-    if version == 'holi-v3-altmtl':
+    if version == 'glam-uchuu-v2-altmtl':
         # do not perform measurements on dubious mocks
-        bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt', dtype=int)
+        bad_imocks = [280, 543, 1275]
         imocks2run = imocks2run[~np.isin(imocks2run, bad_imocks)]
     # Per-tracer batch sizes (mocks per slurm task), sized to fit each task in the 3 h wall.
     # Measured per-mock cost (NGC+SGC, all zranges): LRG ~27 min, ELG ~28 min, QSO ~6 min.
