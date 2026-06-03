@@ -101,7 +101,7 @@ if __name__ == '__main__':
     mode = 'slurm'
     stats = ['recon_mesh2_spectrum', 'recon_particle2_correlation']
     postprocess = ['combine_regions']
-    imocks2run = np.arange(50)  # TEST: 50 realizations; bump to np.arange(1001) for production
+    imocks2run = np.arange(1001)
     stats_dir = tools.base_stats_dir
     analysis = 'bao'
     project = f'{analysis}/base'
