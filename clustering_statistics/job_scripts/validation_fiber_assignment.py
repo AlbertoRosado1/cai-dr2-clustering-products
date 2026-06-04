@@ -71,7 +71,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
         raise ValueError('Please provide zranges.')
     for imock in imocks:
         for region in regions:
-            correction = 'close_pair_correction' in stats  # run AUW or theta-cut only when asking for close_pair_correction
+            correction = any('close_pair_correction' in stat or 'window' in stat for stat in stats) # run AUW or theta-cut only when asking for close_pair_correction
             auw = correction and ('altmtl' in version and onthefly is None or 'data' in version)
             cut = correction
             mesh2_spectrum = {'cut': cut, 'auw': auw}
@@ -97,8 +97,8 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             
             for itracer in options['catalog']:
                 #options['catalog'][itracer]['nran'] = 1
-                if 'BGS_BRIGHT' in itracer:
-                    options['catalog'][itracer]['tracer'] = 'BGS_BRIGHT'
+                #if 'BGS_BRIGHT' in itracer:
+                #    options['catalog'][itracer]['tracer'] = 'BGS_BRIGHT'
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
@@ -136,7 +136,7 @@ if __name__ == '__main__':
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
     #imocks = np.arange(9)
-    #imocks = np.arange(1)
+    #imocks = np.arange(1, 2)
     if 'data' in version:
         imocks = [None]
     if version == 'glam-uchuu-v2-altmtl':
@@ -146,47 +146,49 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['LRG', 'ELG', 'QSO']
+    #tracers = ['LRG', 'ELG', 'QSO']
     #tracers = ['ELG', 'LRG']
     #tracers = ['ELG']
     #tracers = ['QSO']
 
     # run BGS
-    #version = 'abacus-2ndgen-dr2-altmtl'
+    version = 'abacus-2ndgen-dr2-altmtl'
     #tracers = ['BGS_BRIGHT']
+    tracers = ['BGS_BRIGHT-02']
     #tracers = ['BGS_ANY-02']
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    #stats = ['mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
     #stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'close_pair_correction']
-    #stats = ['particle3_correlation'][:0]
-    #postprocess = ['combine_regions']
+    #stats = ['mesh2_spectrum', 'close_pair_correction']
+    stats = ['particle3_correlation'][:0]
+    postprocess = ['combine_regions']
     analysis = 'full_shape'
-    project = f'{analysis}/fiber_assignment_systematics_tests'
-    #project = f'{analysis}/fiber_assignment_systematics'
+    #project = f'{analysis}/fiber_assignment_systematics_tests'
+    project = f'{analysis}/fiber_assignment_systematics'
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
+    #weight = 'default-FKP'
     #weight = 'default-FKP-noimsys'
-    #weight = 'default-noimsys'
     #weight = 'default'
     regions = ['NGC', 'SGC']
     #regions = ['SGCnoDES', 'DES']
     max_mocks_per_batch = 5
 
-    onthefly = None
+    #onthefly = None
     #onthefly = 'complete-nozfail'
     #onthefly = 'complete-renorm'
     #onthefly = 'complete-downsample'
     #onthefly = 'complete-samenz'
     #onthefly = 'complete-fixnz'
     #onthefly = 'complete-fibered'
-    #onthefly = 'complete'
+    onthefly = 'complete'
     #onthefly = 'altmtl'
     
     for tracer in tracers:
