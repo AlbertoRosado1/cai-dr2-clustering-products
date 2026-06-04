@@ -1,0 +1,8 @@
+For LRG of holi-v3-altmtl we computed ['particle2_correlation'] for NGC in 757.59 seconds.
+For LRG of holi-v3-altmtl we computed ['particle2_correlation'] for SGC in 411.34 seconds.
+For ELG_LOPnotqso of holi-v3-altmtl we computed ['particle2_correlation'] for NGC in 908.06 seconds.
+For ELG_LOPnotqso of holi-v3-altmtl we computed ['particle2_correlation'] for SGC in 489.61 seconds.
+For QSO of holi-v3-altmtl we computed ['particle2_correlation'] for NGC in 102.77 seconds.
+For QSO of holi-v3-altmtl we computed ['particle2_correlation'] for SGC in 68.65 seconds.
+For BGS_BRIGHT-21.35 of holi-bgs-altmtl we computed ['particle2_correlation'] for NGC in 949.89 seconds.
+For BGS_BRIGHT-21.35 of holi-bgs-altmtl we computed ['particle2_correlation'] for SGC in 347.29 seconds.
