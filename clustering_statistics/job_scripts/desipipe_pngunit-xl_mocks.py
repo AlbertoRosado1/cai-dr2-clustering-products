@@ -1,39 +1,29 @@
 """
-Create & spawn desipipe tasks to measure the power spectrum P(k) multipoles of the
-PNG-UNIT-XL mocks (fNL = 0, +20, -20) for LRG and QSO, in NGC and SGC, then combine
-into GCcomb. Only `mesh2_spectrum` is measured -- no window functions.
-
-Mimics job_scripts/desipipe_holi_mocks.py (local_png setup: meshsize 700 / cellsize 20,
-ells=(0, 2), 'default-fkp-oqe' weights, dk=0.001 k-binning). Catalog paths are resolved
-by a small custom get_catalog_fn, because the PNG-UNIT-XL data and randoms live in
-different directories and carry a 'complete' infix:
-    <bdir>/complete/<fnl>/{tracer}_complete_{region}_clustering.dat.fits   (data)
-    <bdir>/randoms/{tracer}_complete_{region}_{i}_clustering.ran.fits      (randoms, i=0..17)
-
 Usage on NERSC:
     salloc -N 1 -C "gpu&hbm80g" -t 02:00:00 --gpus 4 --qos interactive --account desi_g
     source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
     python desipipe_pngunit-xl_mocks.py          # create the tasks
-    desipipe spawn -q pngunit_xl_mocks --spawn   # spawn the jobs
+    desipipe spawn -q pngunit_xl_mocks --spawn   # spawn the jobs (runs in this allocation)
+    desipipe queues -q pngunit_xl_mocks          # check the queue
+    desipipe tasks  -q pngunit_xl_mocks          # inspect task states / errors
 """
+
 from desipipe import Queue, Environment, TaskManager, setup_logging
-
 from clustering_statistics import tools
-
 setup_logging()
 
 BDIR = '/global/cfs/cdirs/desicollab/users/adrigut/PNGxHOD/dev_mocks/catalogs/DA2/v2.0/PNGUNITXL'
 FNLS = ['fnl0', 'fnl20', 'fnlm20']
 TRACERS = ['LRG', 'QSO']
 REGIONS = ['NGC', 'SGC']
-NRAN = 18                  # randoms numbered 0..17
+NRAN_MAX = 18              # randoms numbered 0..17
 VERSION = 'pngunit-xl'     # label only used to build the output filename/dir
 ANALYSIS = 'local_png'
+WEIGHT  = 'default-fkp-oqe'
 PROJECT = f'{ANALYSIS}/base'
 
-
-def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, nran=NRAN,
-              version=VERSION, project=PROJECT, analysis=ANALYSIS):
+def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, version=VERSION, 
+              project=PROJECT, analysis=ANALYSIS, weight=WEIGHT, nran_max=NRAN_MAX):
     """Measure P(k) for each (fNL, region), then combine NGC+SGC -> GCcomb.
     Self-contained: everything here runs on the compute nodes."""
     import os
@@ -45,18 +35,30 @@ def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, nran=NRAN,
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     try: jax.distributed.initialize()
     except (RuntimeError, ValueError): pass
-    from clustering_statistics import (tools, setup_logging, compute_stats_from_options,
-                                       postprocess_stats_from_options)
+    from clustering_statistics import tools, setup_logging, compute_stats_from_options, postprocess_stats_from_options
     setup_logging()
-
     bdir = Path(bdir)
     zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
-    get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=tools.base_stats_dir, project=project)
+    stats_dir = tools.base_stats_dir
+    # if you don't have write access to cfs, save to local scratch instead, for example:
+    # stats_dir = Path(os.environ['SCRATCH']) / 'measurements' 
+    get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project)
+    #
     cache = {}
-
+    _filled = tools.fill_fiducial_options(dict(catalog=dict(tracer=tracer, zrange=zranges)), analysis=analysis)
+    p0 = _filled['catalog'][tracer].get('FKP_P0')
+    nran = _filled['catalog'][tracer].get('nran')
+    nran = min(nran, nran_max)
+    
+    def prepare_catalog(catalog, kind='data', _base=tools.prepare_catalog, **kw):
+        if 'randoms' in kind:
+            cats = catalog if isinstance(catalog, (list, tuple)) else [catalog]
+            for c in cats:
+                if 'NX' not in c.columns() and 'WEIGHT_FKP' in c.columns():
+                    c['NX'] = (1.0 / c['WEIGHT_FKP'] - 1.0) / p0
+        return _base(catalog, kind=kind, **kw)
+        
     def make_get_catalog_fn(fnl, region):
-        # Files are region-specific; compute_stats reads region='ALL' and then masks to
-        # `region` (a no-op here), so the passed region is ignored.
         def get_catalog_fn(kind='data', nran=nran, **kwargs):
             if 'data' in kind:
                 return bdir / 'complete' / fnl / f'{tracer}_complete_{region}_clustering.dat.fits'
@@ -65,34 +67,41 @@ def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, nran=NRAN,
                         for i in range(nran)]
             raise NotImplementedError(f'unsupported catalog kind {kind!r}')
         return get_catalog_fn
-
+        
     for fnl in fnls:
         for region in regions:
             compute_stats_from_options(
                 ['mesh2_spectrum'], analysis=analysis, cache=cache,
                 get_catalog_fn=make_get_catalog_fn(fnl, region),
                 get_stats_fn=functools.partial(get_stats_fn, extra=fnl),
-                catalog=dict(version=version, tracer=tracer, region=region, zrange=zranges, nran=nran),
+                prepare_catalog=prepare_catalog,
+                catalog=dict(version=version, tracer=tracer, region=region,
+                             zrange=zranges, nran=nran, weight=weight, FKP_P0=None),
             )
         # combine NGC + SGC -> GCcomb (sums numerators and normalizations)
         postprocess_stats_from_options(
             ['combine_regions'], analysis=analysis, get_stats_fn=get_stats_fn, extra=fnl,
-            catalog=dict(version=version, tracer=tracer, zrange=zranges),
+            catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight),
             combine_regions={'stats': ['mesh2_spectrum'], 'regions': regions},
         )
-
-
+        
 if __name__ == '__main__':
     queue = Queue('pngunit_xl_mocks')
     queue.clear(kill=False)
     output, error = 'slurm_outputs/pngunit_xl_mocks/slurm-%j.out', 'slurm_outputs/pngunit_xl_mocks/slurm-%j.err'
-    # Uses the desi-clustering bundled with cosmodesi. To run a dev checkout instead, add e.g.
-    # command='export PYTHONPATH=/path/to/your/desi-clustering:$PYTHONPATH' to Environment(...).
     environ = Environment('nersc-cosmodesi')
     tm = TaskManager(queue=queue, environ=environ)
-    tm = tm.clone(scheduler=dict(max_workers=len(TRACERS)),
-                  provider=dict(provider='nersc', time='01:00:00', mpiprocs_per_worker=4,
-                                nodes_per_worker=1, output=output, error=error, constraint='gpu&hbm80g'))
+    # Batch-submission variant (submits separate sbatch jobs); kept for reference.
+    # tm = tm.clone(scheduler=dict(max_workers=len(TRACERS)),
+    #               provider=dict(provider='nersc', time='01:00:00', mpiprocs_per_worker=4,
+    #                             nodes_per_worker=1, output=output, error=error, constraint='gpu&hbm80g'))
+    # Local provider: run the workers inside the current interactive allocation via srun.
+    tm = tm.clone(
+        scheduler=dict(max_workers=1),
+        provider=dict(provider='local',
+              mpiprocs_per_worker=4,
+              mpiexec='srun -n {mpiprocs:d} --gpus-per-task=1 --gpu-bind=none {cmd}'),
+    )
     app = tm.python_app(run_stats)
     for tracer in TRACERS:
         app(tracer=tracer)
