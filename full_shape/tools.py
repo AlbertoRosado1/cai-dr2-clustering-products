@@ -32,7 +32,7 @@ import lsstypes as types
 from lsstypes.utils import get_hartlap2007_factor, get_percival2014_factor, mkdir
 
 from clustering_statistics.tools import (write_stats, float2str, get_full_tracer, get_simple_tracer, _make_tuple,
-                                         get_simple_stats, _unzip_catalog_options, default_mpicomm, setup_logging)
+                                         get_simple_stats, _unzip_catalog_options, base_stats_dir, default_mpicomm, setup_logging)
 from clustering_statistics import tools as clustering_tools
 
 
@@ -202,7 +202,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True
         for name, value in sigmas.items():
             configs[name] = {'prior': {'dist': 'norm', 'loc': value[0], 'scale': value[1], 'limits': [0., 20.]}}
         if marg:
-            for param in params.select(basename=f'*l{ell:d}_*'):
+            for param in params.select(basename=f'*l*_*'):
                 param.update(derived='marg')
         if user_params:
             configs = configs | user_params
@@ -373,8 +373,10 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
         if kw['mode'] is None: kw['mode'] = ''  # no reconstruction
         kw['broadband'] = theory_options.get('broadband', 'pcs2')
+        mode = kw.pop('mode')
+        pt = DampedBAOWigglesPTSpectrum2Poles(mode=mode, smoothing_radius=kw.pop('smoothing_radius'))
         theory = DampedBAOWigglesTracerCorrelation2Poles(pt=pt, **kw)
-        theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=kw['mode'], tracer=data_attrs['tracers'], marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
+        theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=mode, tracer=data_attrs['tracers'], marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
     if theory is None:
         raise ValueError(f'theory not found for {stat} and {repr(theory_options)}')
     return theory
@@ -495,7 +497,7 @@ def _get_covariance_correction_factor(covariance: types.CovarianceMatrix,
     nbins = int(covariance.value().shape[0])
     nobs = covariance.attrs['nobs']
     metadata = {'nbins': nbins, 'corrections': tuple(corrections)}
-    if nobs is None:  # analytic covariance matrix
+    if nobs <= 0:  # analytic covariance matrix
         return factor, metadata | dict(corrections=tuple())
 
     nobs = int(nobs)
@@ -875,7 +877,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         if not covariances:
             raise ValueError('no covariances found')
         covariance = combine_covariances(covariances, data)
-        covariance.attrs['nobs'] = None
+        covariance.attrs['nobs'] = -1
     elif covariance_options['source'] == 'mock':
         # Mock-based covariance
         cache_fn, imocks_exists = get_covariance_cache_fn_from_manifest()
@@ -1081,9 +1083,13 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
     cosmology = get_cosmology(cosmology_options)
     if isinstance(likelihoods_options, dict):
         likelihoods_options = [likelihoods_options]
-    likelihoods = [get_single_likelihood(likelihood_options, cosmology_options=cosmology,
-                                         get_stats_fn=get_stats_fn, get_theory=get_theory,
-                                         cache_dir=cache_dir, cache_mode=cache_mode) for likelihood_options in likelihoods_options]
+    likelihoods = []
+    for likelihood_options in likelihoods_options:
+        stats = likelihood_options.pop('stats', None)
+        likelihood = get_single_likelihood(likelihood_options, cosmology_options=cosmology,
+                                           stats=stats, get_stats_fn=get_stats_fn, get_theory=get_theory,
+                                           cache_dir=cache_dir, cache_mode=cache_mode)
+        likelihoods.append(likelihood)
     return SumLikelihood(*share_params(likelihoods))
 
 
@@ -1195,10 +1201,10 @@ def fill_fiducial_options(options):
 
 def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'),
                                        tracer='LRG', zrange=None, region='GCcomb',
-                                       version='abacus-2ndgen-complete',
-                                       covariance='holi-v1-altmtl',
-                                       stats_dir=Path('/dvs_ro/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe'),
-                                       project='',
+                                       version='abacus-hf-dr2-v2-altmtl',
+                                       covariance='holi-v3-altmtl',
+                                       stats_dir=base_stats_dir,
+                                       project='full_shape/base',
                                        emulator=True):
     """
     Convenience helper that builds a minimal dictionary of likelihood options.
@@ -1248,6 +1254,7 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
         observables.append(observable_options)
     covariance = {'version': covariance, 'stats_dir': stats_dir}
     return fill_fiducial_likelihood_options({'observables': observables, 'covariance': covariance})
+
 
 def generate_box_likelihood_options_helper(
         stats=('mesh2_spectrum',),
