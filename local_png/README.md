@@ -70,6 +70,7 @@ First upload from my machine to SCRATCH:
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/profiles/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/profiles
+rsync -av /Users/edmond/Work/data/desi-clustering/dr2/chains/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/chains
 ```
 
 ### Transfert data from $SCRATCH to desica CFS: 

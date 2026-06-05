@@ -46,7 +46,7 @@ def read_data(data_dir='.', mocks_dir=None,
     return pk, window, cov, mocks
 
 
-def rebin_data(pk, window, cov, mocks, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=[1e-2, 2e-2], nrebin=[2,2], use_ell2=True, rebin_ell2=True, **kwargs):
+def rebin_data(pk, window, cov, mocks, tracer='LRG', kmin=1e-3, kmax=0.08, kpivot=[1e-2, 2e-2], nrebin=[2, 2], use_ell2=True, rebin_ell2=True, **kwargs):
     """ 
     Rebin the data with k > kpivot by a factor nrebin. The quadrupole is rebinned again by a factor nrebin for the full range.
     Then, select data in the k range [kmin, kmax]. If use_ell2 is False, we only keep the monopole.
@@ -463,7 +463,7 @@ def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False,
     chains = [fn_output.replace('*', f'{i}') for i in range(nchains)] if extend_chains else nchains
 
     sampler = EmceeSampler(likelihood, seed=31, chains=chains, save_fn=fn_output)  
-    sampler.run(max_iterations=max_iterations, check_every=check_every)
+    sampler.run(max_iterations=max_iterations, check_every=check_every, progress=True)
 
     return sampler
 
@@ -553,11 +553,23 @@ def get_getdist_plotter(fig_width_inch=5, fontsize=14, legend_fontsize=12, axes_
 def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\rm loc}$', r'$b_1$', r'$s_{n,0}$', r'$\Sigma_s$'], 
                   contour_colors=None, filled=True, contour_ls=None, g=None, fn_output=None, return_fig=False):
     """ Wrapper around getdist's plot_triangle to plot the contours of the different chains."""
+
+    # Compatibility shim: matplotlib >= 3.10 removed QuadContourSet.collections.
+    # In 3.10+ QuadContourSet IS a Collection itself, so returning [self] restores
+    # the iteration pattern used by getdist (for c in cs.collections: c.set_dashes(...)).
+    import matplotlib.contour as _mcontour
+    if not hasattr(_mcontour.QuadContourSet, 'collections'):
+        _mcontour.QuadContourSet.collections = property(lambda self: [self])
+
+    # Avoid getdist print statements about loading chains (burning ..), since we are building the chains ourselves.
+    import getdist.chains
+    getdist.chains.print_load_details = False
+
     from desilike.samples import plotting
-    
+
     if g is None: g = get_getdist_plotter()
-    plotting.plot_triangle(chains, params, legend_labels=legend_labels, 
-                           contour_colors=contour_colors, filled=filled, contour_ls=contour_ls, 
+    plotting.plot_triangle(chains, params, legend_labels=legend_labels,
+                           contour_colors=contour_colors, filled=filled, contour_ls=contour_ls,
                            g=g, show=False, fn=None)
 
     if xlabels is not None:

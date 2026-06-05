@@ -1,3 +1,5 @@
+**/.DS_Store
+
 **/dust
 doc/_build/
 **/__pycache__
@@ -32,9 +34,12 @@ doc/_build/
 
 .vscode/
 
+**/OLD/
+
 # Unit test / coverage reports
 **/.coverage
 **/slurm*
 
 # vibe
 AGENTS.md
+CLAUDE.md
