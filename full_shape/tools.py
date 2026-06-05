@@ -369,20 +369,12 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             prior_basis = theory_options.get('prior_basis', 'physical')
             theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=prior_basis, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'recon_particle2_correlation' in stat:
-        recon_mode = np.asarray(data_attrs.get('recon_mode', None)).flat[0]
-        recon_smoothing_radius = np.asarray(data_attrs.get('recon_smoothing_radius', 15.)).flat[0]
-        if recon_mode is None:
-            recon_mode = ''
-        if recon_smoothing_radius is None:
-            recon_smoothing_radius = 15.
-        if 'mode' in theory_options:
-            recon_mode = theory_options['mode']
-        if 'smoothing_radius' in theory_options:
-            recon_smoothing_radius = theory_options['smoothing_radius']
-        pt = DampedBAOWigglesPTSpectrum2Poles(template=template, mode=recon_mode, smoothing_radius=float(recon_smoothing_radius))
-        bao_kw = {name: theory_options[name] for name in ['broadband_pows'] if name in theory_options}
-        theory = DampedBAOWigglesTracerCorrelation2Poles(pt=pt, **bao_kw)
-        theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=recon_mode, tracer=data_attrs['tracers'], marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
+        kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
+        kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
+        if kw['mode'] is None: kw['mode'] = ''  # no reconstruction
+        kw['broadband'] = theory_options.get('broadband', 'pcs2')
+        theory = DampedBAOWigglesTracerCorrelation2Poles(pt=pt, **kw)
+        theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=kw['mode'], tracer=data_attrs['tracers'], marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
     if theory is None:
         raise ValueError(f'theory not found for {stat} and {repr(theory_options)}')
     return theory
@@ -1085,14 +1077,14 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
     -------
     SumLikelihood
     """
-    from desilike.base import SumLikelihood
+    from desilike.base import SumLikelihood, share_params
     cosmology = get_cosmology(cosmology_options)
     if isinstance(likelihoods_options, dict):
         likelihoods_options = [likelihoods_options]
     likelihoods = [get_single_likelihood(likelihood_options, cosmology_options=cosmology,
                                          get_stats_fn=get_stats_fn, get_theory=get_theory,
                                          cache_dir=cache_dir, cache_mode=cache_mode) for likelihood_options in likelihoods_options]
-    return SumLikelihood(*likelihoods)
+    return SumLikelihood(*share_params(likelihoods))
 
 
 def get_sampler_cls(name):
