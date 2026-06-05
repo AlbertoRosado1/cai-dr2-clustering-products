@@ -51,47 +51,65 @@ def get_fiducial():
 
 def get_cosmology(cosmology_options: dict=None):
     """
-    Construct and return a :mod:`desilike` :class:`Cosmoprimo` calculator.
+    Construct and return a :mod:`desilike` :class:`CosmoprimoCosmology` calculator.
 
     Returns
     -------
-    cosmo : :class:`desilike.theories.Cosmoprimo`
+    cosmo : :class:`desilike.theories.galaxy_clustering.CosmoprimoCosmology`
         Instance with configured priors.
     """
-    from desilike.theories import Cosmoprimo
-    if isinstance(cosmology_options, Cosmoprimo):
+    from desilike import VariableCollection, Parameter
+    from desilike.theories import CosmoprimoCosmology
+    if isinstance(cosmology_options, CosmoprimoCosmology):
         return cosmology_options
     cosmology_options = cosmology_options or {}
     model = cosmology_options.get('model', 'base_ns-fixed')
-    cosmo = Cosmoprimo(engine='class', fiducial=get_fiducial())
     is_fixed_model = model == 'fixed'
-    # Free parameters h, omega_cdm, omega_b, logA with uniform priors
-    # n_s and tau_reio are fixed
-    # A Gaussian prior on omega_b.
-    params = {
-        'H0':       {'derived': True, 'latex': 'H_0'},
-        'Omega_m':  {'derived': True, 'latex': R'\Omega_\mathrm{m}'},
-        'sigma8_m': {'derived': True, 'latex': R'\sigma_{8,\mathrm{m}}'},
-        'sigma8_cb': {'derived': True, 'latex': R'\sigma_{8,\mathrm{cb}}'},
-        'rs_drag': {'derived': True, 'latex': R'r_s'},
-        'tau_reio': {'fixed': True},
-        'n_s':      {'fixed': is_fixed_model or 'ns-fixed' in model},
-        'omega_b':  {'fixed': is_fixed_model, 'prior': {'dist': 'norm', 'loc': 0.02237,  'scale': 0.00037}},
-        'h':        {'fixed': is_fixed_model, 'prior': {'dist': 'uniform', 'limits': [0.5,  0.9]}},
-        'omega_cdm':{'fixed': is_fixed_model, 'prior': {'dist': 'uniform', 'limits': [0.05, 0.2]}},
-        'logA':     {'fixed': is_fixed_model, 'prior': {'dist': 'uniform', 'limits': [2.0,  4.0]}},
-    }
-    if 'w0wa' in model:
-        params['w0_fld'] = {'fixed': is_fixed_model}
-        params['wa_fld'] = {'fixed': is_fixed_model}
-    for name, config in params.items():
-        if config.get('fixed', False):
-            config = {key: value for key, value in config.items() if key != 'prior'}
-        if name in cosmo.init.params:
-            cosmo.init.params[name].update(**config)
-        else:
-            cosmo.init.params[name] = config
-    return cosmo
+    is_ns_fixed = is_fixed_model or 'ns-fixed' in model
+    has_w0wa = 'w0wa' in model
+    fiducial = get_fiducial()
+
+    params = VariableCollection()
+    params.set(Parameter('h', value=fiducial['h'],
+                            prior=dict(limits=[0.5, 0.9]),
+                            ref=dict(dist='norm', loc=fiducial['h'], scale=0.05),
+                            fd_eps=0.03, latex='h'))
+    params.set(Parameter('omega_b', value=fiducial['omega_b'],
+                            prior=dict(dist='norm', loc=0.02237, scale=0.00037),
+                            ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.001),
+                            fd_eps=0.0015, latex=r'\omega_b'))
+    params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
+                            prior=dict(limits=[0.05, 0.2]),
+                            ref=dict(dist='norm', loc=fiducial['omega_cdm'], scale=0.005),
+                            fd_eps=0.01, latex=r'\omega_\mathrm{cdm}'))
+    params.set(Parameter('logA', value=fiducial['logA'],
+                            prior=dict(limits=[2., 4.]),
+                            ref=dict(dist='norm', loc=fiducial['logA'], scale=0.1),
+                            fd_eps=0.05, latex=r'\ln(10^{10}A_s)'))
+    params.set(Parameter('n_s', value=fiducial['n_s'],
+                            prior=dict(limits=[0.7, 1.3]),
+                            ref=dict(dist='norm', loc=fiducial['n_s'], scale=0.01),
+                            fd_eps=0.005, latex='n_s'))
+    params.set(Parameter('m_ncdm', value=fiducial['m_ncdm'], fixed=True,
+                            prior=dict(limits=[0., 5.]),
+                            ref=dict(dist='norm', loc=0.06, scale=0.12, limits=[0., 10.]),
+                            fd_eps=(0.31, 0.15, 0.15), latex=r'm_\mathrm{ncdm}'))
+    params.set(Parameter('w0_fld', value=fiducial['w0_fld'], fixed=True,
+                            prior=dict(limits=[-3., 1.]),
+                            ref=dict(dist='norm', loc=-1., scale=0.08),
+                            fd_eps=0.1, latex=r'w_0'))
+    params.set(Parameter('wa_fld', value=fiducial['wa_fld'], fixed=True,
+                            prior=dict(limits=[-3., 2.]),
+                            ref=dict(dist='norm', loc=0., scale=0.3),
+                            fd_eps=0.3, latex=r'w_a'))
+    if is_fixed_model:
+        for name in params:
+            params[name].update(fixed=True)
+    params['n_s'].update(fixed=is_ns_fixed)
+    if has_w0wa:
+        params['w0_fld'].clone(fixed=is_fixed_model)
+        params['wa_fld'].clone(fixed=is_fixed_model)
+    return CosmoprimoCosmology(engine='class', fiducial=fiducial, params=params)
 
 
 
@@ -131,16 +149,18 @@ def _get_default_ref_from_prior(prior, value=None):
     return None
 
 
-def _get_default_theory_nuisance_priors(model, stat, prior_basis, b3_coev=True, tracer=None, sigma8_fid=1.):
+def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True, tracer=None, sigma8_fid=1., marg=False, ells=None, user_params=None):
     """
-    Build a dictionary of parameter priors.
+    Apply default nuisance-parameter priors to a VariableCollection in-place.
 
     Parameters
     ----------
+    params : VariableCollection
+        Parameter collection for a theory calculator, e.g. ``desilike.base.params(theory)``.
     model : str
         Perturbation theory model tag. When 'EFT', FoG parameters are fixed.
     stat : str
-        Observable; one of ['mesh2_spectrum', 'mesh2_spectrum'].
+        Observable; one of ['mesh2_spectrum', 'mesh3_spectrum', 'recon_particle2_correlation'].
     prior_basis : str
         'physical' or 'physical_aap' uses physical bias parameters (b1p, b2p,...).
         Any other value uses the standard Eulerian basis (b1, b2, ...).
@@ -148,16 +168,20 @@ def _get_default_theory_nuisance_priors(model, stat, prior_basis, b3_coev=True, 
         Fix b3 to its co-evolution value.
     sigma8_fid : float, optional
         Fiducial sigma_8(z_eff), used as prior centre in the physical basis.
+    marg : bool, optional
+        If True, set counter-term and shot-noise parameters to ``derived='marg'``.
+    user_params : dict, optional
+        Per-parameter config dicts that override the defaults.
 
     Returns
     -------
-    params : dict[str, dict]
-        Maps parameter name to a dict of keyword arguments accepted by
-        :meth:`Parameter.update` (e.g. ``{'fixed': True}`` or ``{'prior': {...}}``).
+    params : VariableCollection
+        The same collection, with parameters updated in-place.
     """
-    params = {}
+    configs = {}
     if model == 'bao':
         tracer = get_simple_tracer(tracer)
+        if not isinstance(tracer, str): tracer = tracer[0]
         recon = bool(prior_basis)
         if tracer == 'BGS':
             sigmapar, sigmaper = 10., 6.5
@@ -176,84 +200,105 @@ def _get_default_theory_nuisance_priors(model, stat, prior_basis, b3_coev=True, 
             if recon: sigmapar, sigmaper = 6., 3.
         sigmas = {'sigmas': (2., 2.), 'sigmapar': (sigmapar, 2.), 'sigmaper': (sigmaper, 1.)}
         for name, value in sigmas.items():
-            params[name] = {'prior': {'dist': 'norm', 'loc': value[0], 'scale': value[1], 'limits': [0., 20.]}}
-        return params
-
-    scale_eft = 12.5
-    scale_sn0 = 2.0
-    scale_sn2 = 5.0
-
-    if prior_basis in ['physical', 'physical_aap', 'tcm_chudaykin_aap']:
-        # ── Bias parameters ───────────────────────────────────────────────
-        params['b1p'] = {'prior': {'dist': 'uniform', 'limits': [0.1, 4]}}
-        params['b2p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
-        params['bsp'] = {'prior': {'dist': 'norm', 'loc': -2. / 7. * sigma8_fid**2, 'scale': 5}}
-        if 'mesh2_spectrum' in stat:
-            if b3_coev:
-                params['b3p'] = {'fixed': True}
-            else:
-                params['b3p'] = {'prior': {'dist': 'norm', 'loc': 23. / 42. * sigma8_fid**4, 'scale': sigma8_fid**4},
-                                 'fixed': False}
-            # ── PS counter-terms and shot noise ───────────────────────────────
-            for n in [0, 2, 4]:
-                params[f'alpha{n:d}p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_eft}}
-            params['sn0p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn0}}
-            params['sn2p']  = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn2}}
-            # ── FoG damping ───────────────────────────────────────────────────
-            if 'EFT' in model.upper():
-                params['X_FoG_pp'] = {'fixed': True}
-            else:
-                params['X_FoG_pp'] = {'prior': {'dist': 'uniform', 'limits': [0, 10]}}
-        elif 'mesh3_spectrum' in stat:
-            # ── BS stochastic parameters (only for bs / joint) ────────────────
-            params['c1p']    = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
-            params['c2p']    = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
-            params['Pshotp'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}}
-            params['Bshotp'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}}
-            # ── FoG damping ───────────────────────────────────────────────────
-            if 'EFT' in model.upper():
-                params['X_FoG_bp'] = {'fixed': True}
-            else:
-                params['X_FoG_bp'] = {'prior': {'dist': 'uniform', 'limits': [0, 15]}}
-
+            configs[name] = {'prior': {'dist': 'norm', 'loc': value[0], 'scale': value[1], 'limits': [0., 20.]}}
+        if marg:
+            for param in params.select(basename=f'*l{ell:d}_*'):
+                param.update(derived='marg')
+        if user_params:
+            configs = configs | user_params
+        for basename, config in configs.items():
+            for param in params.select(basename=basename):
+                param.update(**config, fixed=('prior' not in config))
+        for ell in [0, 2, 4]:
+            if ell not in ells:
+                for param in params.select(basename=f'*l{ell:d}_*'):
+                    param.update(fixed=True, derived=False)
+        if len(ells) <= 1:
+            for param in params.select(basename='dbeta'):
+                param.update(fixed=True)
     else:
-        # ── Bias parameters (standard Eulerian basis) ─────────────────────
-        params['b1'] = {'prior': {'dist': 'uniform', 'limits': [1e-5, 10]}}
-        params['b2'] = {'prior': {'dist': 'uniform', 'limits': [-50, 50]}}
-        params['bs'] = {'prior': {'dist': 'uniform', 'limits': [-50, 50]}}
-        if 'mesh2_spectrum' in stat:
-            if b3_coev:
-                params['b3'] = {'fixed': True}
-            else:
-                params['b3'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}, 'fixed': False}
-            # ── PS counter-terms and shot noise ───────────────────────────────
-            for n in [0, 2, 4]:
-                params[f'alpha{n:d}'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_eft}}
-            params['sn0'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn0}}
-            params['sn2']  = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn2}}
-            # ── FoG damping ───────────────────────────────────────────────────
-            if 'EFT' in model.upper():
-                params['X_FoG_p'] = {'fixed': True}
-            else:
-                params['X_FoG_p'] = {'prior': {'dist': 'uniform', 'limits': [0, 10]}}
-        elif 'mesh3_spectrum' in stat:
-            # ── BS stochastic parameters (only for bs / joint) ────────────────
-            shotnoise = 1 / 0.0002118763
-            params['c1']    = {'prior': {'dist': 'norm', 'loc': 66.6, 'scale': 66.6 * 4}}
-            params['c2']    = {'prior': {'dist': 'norm', 'loc': 0,    'scale': 4}}
-            params['Pshot'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': shotnoise * 4}}
-            params['Bshot'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': shotnoise * 4}}
-            # ── FoG damping ───────────────────────────────────────────────────
-            if 'EFT' in model.upper():
-                params['X_FoG_bp'] = {'fixed': True}
-            else:
-                params['X_FoG_bp'] = {'prior': {'dist': 'uniform', 'limits': [0, 15]}}
-    for config in params.values():
-        if config.get('fixed', False):
-            continue
-        ref = _get_default_ref_from_prior(config.get('prior', None), value=config.get('value', None))
-        if ref is not None and 'ref' not in config:
-            config['ref'] = ref
+        scale_eft = 12.5
+        scale_sn0 = 2.0
+        scale_sn2 = 5.0
+
+        if prior_basis in ['physical', 'physical_aap', 'tcm_chudaykin_aap']:
+            # ── Bias parameters ───────────────────────────────────────────────
+            configs['b1p'] = {'prior': {'dist': 'uniform', 'limits': [0.1, 4]}}
+            configs['b2p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
+            configs['bsp'] = {'prior': {'dist': 'norm', 'loc': -2. / 7. * sigma8_fid**2, 'scale': 5}}
+            if 'mesh2_spectrum' in stat:
+                if b3_coev:
+                    configs['b3p'] = {'fixed': True}
+                else:
+                    configs['b3p'] = {'prior': {'dist': 'norm', 'loc': 23. / 42. * sigma8_fid**4, 'scale': sigma8_fid**4},
+                                      'fixed': False}
+                # ── PS counter-terms and shot noise ───────────────────────────────
+                for n in [0, 2, 4]:
+                    configs[f'alpha{n:d}p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_eft}}
+                configs['sn0p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn0}}
+                configs['sn2p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn2}}
+                # ── FoG damping ───────────────────────────────────────────────────
+                if 'EFT' in model.upper():
+                    configs['X_FoG_pp'] = {'fixed': True}
+                else:
+                    configs['X_FoG_pp'] = {'prior': {'dist': 'uniform', 'limits': [0, 10]}}
+            elif 'mesh3_spectrum' in stat:
+                # ── BS stochastic parameters ──────────────────────────────────────
+                configs['c1p']    = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
+                configs['c2p']    = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
+                configs['Pshotp'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}}
+                configs['Bshotp'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}}
+                # ── FoG damping ───────────────────────────────────────────────────
+                if 'EFT' in model.upper():
+                    configs['X_FoG_bp'] = {'fixed': True}
+                else:
+                    configs['X_FoG_bp'] = {'prior': {'dist': 'uniform', 'limits': [0, 15]}}
+        else:
+            # ── Bias parameters (standard Eulerian basis) ─────────────────────
+            configs['b1'] = {'prior': {'dist': 'uniform', 'limits': [1e-5, 10]}}
+            configs['b2'] = {'prior': {'dist': 'uniform', 'limits': [-50, 50]}}
+            configs['bs'] = {'prior': {'dist': 'uniform', 'limits': [-50, 50]}}
+            if 'mesh2_spectrum' in stat:
+                if b3_coev:
+                    configs['b3'] = {'fixed': True}
+                else:
+                    configs['b3'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}, 'fixed': False}
+                # ── PS counter-terms and shot noise ───────────────────────────────
+                for n in [0, 2, 4]:
+                    configs[f'alpha{n:d}'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_eft}}
+                configs['sn0'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn0}}
+                configs['sn2'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn2}}
+                # ── FoG damping ───────────────────────────────────────────────────
+                if 'EFT' in model.upper():
+                    configs['X_FoG_p'] = {'fixed': True}
+                else:
+                    configs['X_FoG_p'] = {'prior': {'dist': 'uniform', 'limits': [0, 10]}}
+            elif 'mesh3_spectrum' in stat:
+                # ── BS stochastic parameters ──────────────────────────────────────
+                shotnoise = 1 / 0.0002118763
+                configs['c1']    = {'prior': {'dist': 'norm', 'loc': 66.6, 'scale': 66.6 * 4}}
+                configs['c2']    = {'prior': {'dist': 'norm', 'loc': 0,    'scale': 4}}
+                configs['Pshot'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': shotnoise * 4}}
+                configs['Bshot'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': shotnoise * 4}}
+                # ── FoG damping ───────────────────────────────────────────────────
+                if 'EFT' in model.upper():
+                    configs['X_FoG_bp'] = {'fixed': True}
+                else:
+                    configs['X_FoG_bp'] = {'prior': {'dist': 'uniform', 'limits': [0, 15]}}
+        for config in configs.values():
+            if config.get('fixed', False):
+                continue
+            ref = _get_default_ref_from_prior(config.get('prior', None), value=config.get('value', None))
+            if ref is not None and 'ref' not in config:
+                config['ref'] = ref
+        if marg:
+            for param in params.select(basename=['alpha*', 'sn*', 'c*']):
+                param.update(derived='marg')
+        if user_params:
+            configs = configs | user_params
+        for basename, config in configs.items():
+            for param in params.select(basename=basename):
+                param.update(**config)
     return params
 
 
@@ -278,8 +323,10 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     theory : BaseCalculator
         Initialized theory object from desilike for the requested statistic.
     """
-    from desilike.theories.galaxy_clustering import (DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, BAOPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles,
-    FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles)
+    from desilike.theories.galaxy_clustering import (DirectSpectrum2Template, ShapeFitSpectrum2Template, BAOSpectrum2Template,
+        REPTVelocileptorsTracerSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSPTSpectrum2Poles,
+        FOLPSTracerSpectrum3Poles, DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles)
+    from desilike.base import params as get_params
     theory_options = dict(theory_options)
     fiducial = get_fiducial()
     template = None
@@ -291,58 +338,51 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     if mpicomm.rank == 0:
         logger.info(f'theory is evaluated at effective redshift {z:.3f}')
     if cosmology_options['template'] == 'direct':
-        template = DirectPowerSpectrumTemplate(fiducial=fiducial, cosmo=cosmology, z=z)
+        template = DirectSpectrum2Template(fiducial=fiducial, cosmo=cosmology, z=z)
     elif cosmology_options['template'] == 'shapefit':
-        template = ShapeFitPowerSpectrumTemplate(fiducial=fiducial, z=z)
+        template = ShapeFitSpectrum2Template(fiducial=fiducial, z=z)
     elif cosmology_options['template'] == 'bao':
-        kw = {name: cosmology_options[name] for name in ['apmode', 'now'] if name in cosmology_options}
-        template = BAOPowerSpectrumTemplate(fiducial=fiducial, z=z, **kw)
+        kw = {name: cosmology_options[name] for name in ['apmode'] if name in cosmology_options}
+        if 'now' in cosmology_options:
+            kw['with_now'] = cosmology_options['now']
+        template = BAOSpectrum2Template(fiducial=fiducial, z=z, **kw)
     if template is None:
         raise ValueError(f'template not found for {stat} and {repr(cosmology_options["template"])}')
     theory = None
     if 'mesh2_spectrum' in stat:
         if theory_options['model'] == 'reptvelocileptors':
-            theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, **theory_options.get('options', {}))
+            theory = REPTVelocileptorsTracerSpectrum2Poles(template=template, **theory_options.get('options', {}))
         elif theory_options['model'] in ['folpsD', 'folpsEFT']:
-            kw = {name: theory_options[name] for name in ['damping', 'prior_basis', 'b3_coev', 'A_full']}
-            theory = FOLPSv2TracerPowerSpectrumMultipoles(template=template, **kw, **theory_options.get('options', {}))
+            A_full = theory_options.get('A_full', True)
+            pt = FOLPSPTSpectrum2Poles(A_full=A_full)
+            kw = {name: theory_options[name] for name in ['damping', 'prior_basis', 'b3_coev'] if name in theory_options}
+            theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, **kw, **theory_options.get('options', {}))
             sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
-            params = _get_default_theory_nuisance_priors(theory_options['model'], stat, prior_basis=kw['prior_basis'], b3_coev=kw['b3_coev'], sigma8_fid=sigma8_fid) | theory_options.get('params', {})
-            for name, config in params.items():
-                for param in theory.init.params.select(basename=name):
-                    param.update(**config)
-            if theory_options['marg']:
-                for param in theory.init.params.select(basename=['alpha*', 'sn*']):
-                    param.update(derived='.auto')
+            prior_basis = kw.get('prior_basis', 'physical')
+            b3_coev = kw.get('b3_coev', True)
+            theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=prior_basis, b3_coev=b3_coev, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'mesh3_spectrum' in stat:
         if theory_options['model'] in ['folpsD', 'folpsEFT']:
-            kw = {name: theory_options[name] for name in ['damping', 'prior_basis']}
-            theory = FOLPSv2TracerBispectrumMultipoles(template=template, **kw, **theory_options.get('options', {}))
+            kw = {name: theory_options[name] for name in ['damping'] if name in theory_options}
+            theory = FOLPSTracerSpectrum3Poles(template=template, **kw, **theory_options.get('options', {}))
             sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
-            params = _get_default_theory_nuisance_priors(theory_options['model'], stat, prior_basis=kw['prior_basis'], sigma8_fid=sigma8_fid) | theory_options.get('params', {})
-            for name, config in params.items():
-                for param in theory.init.params.select(basename=name):
-                    param.update(**config)
+            prior_basis = theory_options.get('prior_basis', 'physical')
+            theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=prior_basis, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'recon_particle2_correlation' in stat:
-        kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
-        kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
-        if kw['mode'] is None: kw['mode'] = ''  # no reconstruction
-        kw['broadband'] = theory_options.get('broadband', 'pcs2')
-        params = _get_default_theory_nuisance_priors(theory_options['model'], stat, prior_basis=kw['mode'], tracer=data_attrs['tracers'][0]) | theory_options.get('params', {})
-        theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles(template=template, **kw)
-        for name, config in params.items():
-            for param in theory.init.params.select(basename=name):
-                param.update(**config, fixed=('prior' not in config))
-        ells = getattr(data, 'ells', [0, 2, 4])
-        for ell in [0, 2, 4]:
-            if ell not in ells:
-                for param in theory.init.params.select(basename=f'*l{ell:d}_*'):
-                    param.update(fixed=True)
-        if len(ells) <= 1:
-            theory.init.params['dbeta'].update(fixed=True)
-        if False: #theory_options['marg']:
-            for param in theory.init.params.select(basename=['al*', 'bl*']):
-                param.update(derived='.auto')
+        recon_mode = np.asarray(data_attrs.get('recon_mode', None)).flat[0]
+        recon_smoothing_radius = np.asarray(data_attrs.get('recon_smoothing_radius', 15.)).flat[0]
+        if recon_mode is None:
+            recon_mode = ''
+        if recon_smoothing_radius is None:
+            recon_smoothing_radius = 15.
+        if 'mode' in theory_options:
+            recon_mode = theory_options['mode']
+        if 'smoothing_radius' in theory_options:
+            recon_smoothing_radius = theory_options['smoothing_radius']
+        pt = DampedBAOWigglesPTSpectrum2Poles(template=template, mode=recon_mode, smoothing_radius=float(recon_smoothing_radius))
+        bao_kw = {name: theory_options[name] for name in ['broadband_pows'] if name in theory_options}
+        theory = DampedBAOWigglesTracerCorrelation2Poles(pt=pt, **bao_kw)
+        theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=recon_mode, tracer=data_attrs['tracers'], marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
     if theory is None:
         raise ValueError(f'theory not found for {stat} and {repr(theory_options)}')
     return theory
@@ -652,7 +692,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                                     theory=windows[0].theory,
                                     attrs=windows[0].attrs)
         return data, window
- 
+
     def _apply_select(observable: types.ObservableTree, select: list=None):
         """
         Apply a selection (k-range, ell selection) to an observable.
@@ -962,7 +1002,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     -------
     ObservablesGaussianLikelihood
     """
-    from desilike.observables.galaxy_clustering import TracerSpectrum2PolesObservable, TracerSpectrum3PolesObservable, TracerCorrelation2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable, Spectrum3PolesObservable, Correlation2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     # likelihood_options: {'observables': [observable_options], 'covariance': {}}
     observables_options = likelihood_options['observables']
@@ -980,11 +1020,11 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             suffix = '_' + suffix
         observable_name = stat + suffix
         if 'mesh2_spectrum' in stat:
-            cls = TracerSpectrum2PolesObservable
+            cls = Spectrum2PolesObservable
         elif 'mesh3_spectrum' in stat:
-            cls = TracerSpectrum3PolesObservable
+            cls = Spectrum3PolesObservable
         elif 'particle2_correlation' in stat:
-            cls = TracerCorrelation2PolesObservable
+            cls = Correlation2PolesObservable
         else:
             raise NotImplementedError(stat)
         data_attrs = dict(data.attrs) | label
@@ -993,11 +1033,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         if mpicomm.rank == 0:
             logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
         theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
-        namespace = _str_from_observable_options(
-            observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
-        theory_params = theory.init.params
         observable = cls(data=data, window=window, theory=theory, name=observable_name)
-        observable()
         if observable_options['emulator']['name']:
             assert cache_dir is not None, 'cache_dir must be provided for emulator'
             read_cache = cache_dir is not None and 'r' in cache_mode
@@ -1007,29 +1043,24 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             _str_cosmology = str_from_cosmology_options(observable_options['theory']['cosmology'], level=100)
             _str_cosmology += '_' + observable_options['emulator']['name']
             _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'catalog': 2})
-            cache_fn = cache_dir / f'emulator_{_str_cosmology}' / f'emulator_{_str_theory}_{_hash}.npy'
-            from desilike.emulators import EmulatedCalculator, Emulator, TaylorEmulatorEngine
-            emulated_pt = None
+            cache_fn = cache_dir / f'emulator_{_str_cosmology}' / f'emulator_{_str_theory}_{_hash}.h5'
+            from desilike.base import compile as desilike_compile, replace
+            from desilike.emulators import TaylorEmulator
             if read_cache and cache_fn.exists():
                 logger.info(f'Reading cached emulator {cache_fn}')
-                emulated_pt = EmulatedCalculator.load(cache_fn)
+                emulator = TaylorEmulator.read(str(cache_fn))
             else:
                 logger.info(f'Fitting emulator {cache_fn}')
-                emulator = Emulator(
-                    theory.pt,
-                    engine=TaylorEmulatorEngine(method='finite', order=observable_options['emulator'].get('order', 3)),
-                )
-                emulator.set_samples()
+                pt_graph = desilike_compile(theory.pt)
+                emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
-                emulated_pt = emulator.to_calculator()
                 if write_cache:
-                    emulated_pt.save(cache_fn)
-            theory.init.update(pt=emulated_pt)
-            theory.init.params.update(theory_params)
-            for param in theory.init.params:
-                param.update(namespace=namespace)
+                    mkdir(cache_fn.parent)
+                    emulator.write(str(cache_fn))
+            emulated_pt = emulator.to_calculator()
+            replace(observable, theory.pt, emulated_pt)
         observables.append(observable)
-    return ObservablesGaussianLikelihood(observables, covariance=covariance.value())
+    return ObservablesGaussianLikelihood(observables, covariance=covariance)
 
 
 def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: dict=None, get_stats_fn=clustering_tools.get_stats_fn,
@@ -1054,20 +1085,20 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
     -------
     SumLikelihood
     """
-    from desilike.likelihoods import SumLikelihood
+    from desilike.base import SumLikelihood
     cosmology = get_cosmology(cosmology_options)
     if isinstance(likelihoods_options, dict):
         likelihoods_options = [likelihoods_options]
     likelihoods = [get_single_likelihood(likelihood_options, cosmology_options=cosmology,
                                          get_stats_fn=get_stats_fn, get_theory=get_theory,
                                          cache_dir=cache_dir, cache_mode=cache_mode) for likelihood_options in likelihoods_options]
-    return SumLikelihood(likelihoods)
+    return SumLikelihood(*likelihoods)
 
 
 def get_sampler_cls(name):
     """Return sampler class."""
-    from desilike.samplers import EmceeSampler, MCMCSampler, PocoMCSampler
-    translate = {'emcee': EmceeSampler, 'mcmc': MCMCSampler, 'pocomc': PocoMCSampler}
+    from desilike.samplers import EmceeSampler, MetropolisHastingsSampler, PocoMCSampler
+    translate = {'emcee': EmceeSampler, 'mcmc': MetropolisHastingsSampler, 'pocomc': PocoMCSampler}
     return translate[name.lower()]
 
 
@@ -1076,7 +1107,7 @@ def get_profiler_cls(name):
     from desilike.profilers import MinuitProfiler
     translate = {'minuit': MinuitProfiler}
     return translate[name.lower()]
-    
+
 
 def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
     """Propose fiducial fitting options for given statistics and tracer."""
@@ -1454,7 +1485,7 @@ def _str_from_observable_options(options: dict, level: int=None) -> str:
                 else:
                     ell = str(ell)
                 return ell
-                        
+
             for _select in select:
                 _select = dict(_select)
                 label = []
@@ -1555,9 +1586,9 @@ def str_from_options(options: dict, level: int | dict=None):
     return '_'.join(out_str)
 
 
-def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', kind='chain', likelihoods: list=None,
+def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', kind='samples', likelihoods: list=None,
                 sampler: dict=None, profiler: dict=None, cosmology: dict=None, ichain: int=None,
-                level=None, extra='', ext='npy'):
+                level=None, extra='', ext='h5'):
     """
     Construct a file path for fit outputs based on likelihood and run options.
 
@@ -1568,7 +1599,7 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', 
     project : str
         KP analysis to which the measurement corresponds. For example: 'full_shape/base', 'local_png/base', 'bao/base', etc.
     kind : str
-        Fitting product. Options are 'chain', 'profiles', etc.
+        Fitting product. Options are 'samples', 'profiles', etc.
     likelihoods : list
         Likelihood options used to build the filename.
     ichain : int or None
@@ -1576,7 +1607,7 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', 
     extra : str, optional
         Extra suffix to include in the path.
     ext : str, optional
-        File extension. Default is 'npy'.
+        File extension. Default is 'h5'.
 
     Returns
     -------
@@ -1590,8 +1621,11 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', 
     _hash = _hash_options(options)
     extra = f'_{extra}' if extra else ''
     ichain = f'_{ichain:d}' if ichain is not None else ''
-    return fits_dir / f'{_str_from_options}-{_hash}{extra}' / f'{kind}{ichain}.{ext}'
-
+    dirname = fits_dir / f'{_str_from_options}-{_hash}{extra}'
+    basename = f'{kind}{ichain}.{ext}'
+    if ichain == '*':
+        return dirname.glob(basename)
+    return dirname / basename
 
 
 try:
@@ -1606,14 +1640,14 @@ def write_options(filename, options):
 
     class FlowList(list):
         pass
-    
+
     def flow_list_representer(dumper, data):
         return dumper.represent_sequence(
             'tag:yaml.org,2002:seq',
             data,
             flow_style=True,
         )
-    
+
     yaml.add_representer(FlowList, flow_list_representer)
 
     def mark_flow_lists(obj):
@@ -1643,7 +1677,7 @@ def read_options(filename):
         *yaml* loader that correctly parses numbers.
         Taken from https://stackoverflow.com/questions/30458977/yaml-loads-5e-6-as-string-and-not-a-number.
         """
-    
+
     # https://stackoverflow.com/questions/30458977/yaml-loads-5e-6-as-string-and-not-a-number
     YamlLoader.add_implicit_resolver(u'tag:yaml.org,2002:float',
                                      re.compile(u'''^(?:
@@ -1654,12 +1688,12 @@ def read_options(filename):
                                      |[-+]?\\.(?:inf|Inf|INF)
                                      |\\.(?:nan|NaN|NAN))$''', re.X),
                                      list(u'-+0123456789.'))
-    
+
     YamlLoader.add_implicit_resolver('!none', re.compile('None$'), first='None')
 
     def none_constructor(loader, node):
         return None
-    
+
     YamlLoader.add_constructor('!none', none_constructor)
 
     with open(filename, 'r') as file:

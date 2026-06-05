@@ -3,6 +3,9 @@ from pathlib import Path
 import functools
 import argparse
 
+from desilike.base import compile, Prior, Posterior, params as get_params
+from desilike.distributed import get_mpicomm
+
 from full_shape.tools import get_likelihood, fill_fiducial_options, generate_likelihood_options_helper, setup_logging
 from full_shape import tools
 from clustering_statistics import tools as clustering_tools
@@ -10,7 +13,7 @@ from clustering_statistics import tools as clustering_tools
 
 def print_priors(calculator, varied=True, **kwargs):
     print(f"{'param':20} {'prior':50} {'reference':50} derived")
-    for p in calculator.all_params.select(varied=varied, **kwargs):
+    for p in get_params(calculator).select(varied=varied, **kwargs):
         print(f"{p.name:20} {str(p.prior):50} {str(p.ref):50} {p.derived}")
 
 
@@ -49,9 +52,9 @@ def run_fit_from_options(actions,
     likelihood = get_likelihood(likelihoods_options=options['likelihoods'],
                                 cosmology_options=options['cosmology'],
                                 get_stats_fn=get_stats_fn, cache_dir=cache_dir, cache_mode=cache_mode)
-    likelihood()
-    if likelihood.mpicomm.rank == 0:
-        print('likelihood priors:')
+    mpicomm = get_mpicomm()
+    if mpicomm.rank == 0:
+        print('priors:')
         print_priors(likelihood)
     fn = get_fits_fn(kind='config', **options, ext='yaml')
     tools.write_options(fn, options)
@@ -61,25 +64,24 @@ def run_fit_from_options(actions,
         elif action == 'sample':
             sampler_options = dict(options['sampler'])
             cls = tools.get_sampler_cls(sampler_options.pop('sampler', 'emcee'))
-            resume = sampler_options.pop('resume', False)
-            save_fn = [get_fits_fn(kind='chain', **options, ichain=ichain)\
-                       for ichain in range(sampler_options['nchains'])]
-            sampler_kwargs = dict(sampler_options['init'], save_fn=save_fn)
-            if resume:
-                missing = [fn for fn in save_fn if not Path(fn).exists()]
-                if missing:
-                    missing_str = ', '.join(str(fn) for fn in missing)
-                    raise FileNotFoundError(f'cannot resume sampling; missing chain file(s): {missing_str}')
-                sampler_kwargs['chains'] = save_fn
-            sampler = cls(likelihood, **sampler_kwargs)
-            sampler.run(**sampler_options['run'])
+            nchains = sampler_options.pop('nchains', 1)
+            directory = get_fits_fn(kind='samples', **options).parent
+            posterior = compile(Posterior(likelihood))
+            sampler = cls(posterior, nchains=nchains, directory=directory,
+                          **sampler_options.get('init', {}))
+            sampler.run(**sampler_options.get('run', {}))
         elif action == 'profile':
             profiler_options = dict(options['profiler'])
             cls = tools.get_profiler_cls(profiler_options.pop('profiler', 'minuit'))
             save_fn = get_fits_fn(kind='profiles', **options)
-            profiler = cls(likelihood, **profiler_options['init'], save_fn=save_fn)
-            profiler.maximize(**profiler_options['maximize'])
-            if profiler.mpicomm.rank == 0:
+            from desilike.base import copy
+            likelihood_profiler = copy(likelihood)
+            for param in get_params(likelihood_profiler).select(solved=True):
+                param.update(derived='best')
+            posterior_profiler = compile(Posterior(likelihood_profiler))
+            profiler = cls(posterior_profiler, save_fn=save_fn, **profiler_options.get('init', {}))
+            profiler.maximize(**profiler_options.get('maximize', {}))
+            if mpicomm.rank == 0:
                 print(profiler.profiles.to_stats(tablefmt='pretty'))
         else:
             raise NotImplementedError(f'{action} not implemented')
