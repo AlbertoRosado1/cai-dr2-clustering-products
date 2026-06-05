@@ -96,12 +96,12 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     cache : dict, optional
         Cache to store intermediate results (binning class and parent/reference random catalog).
         See :func:`spectrum2_tools.compute_mesh2_spectrum`, :func:`spectrum3_tools.compute_mesh3_spectrum`,
-        and func:`tools.read_clustering_catalog` for details.
+        and func:`tools.read_catalog` for details.
     get_stats_fn : callable, optional
         Function to get the filename for storing the measurement.
     get_catalog_fn : callable, optional
         Function to get the filename for reading the catalog.
-        If provided, it is given to ``read_clustering_catalog`` and ``read_full_catalog``.
+        If provided, it is given to ``read_catalog``.
     read_catalog : callable, optional
         Function to read the catalog.
     prepare_catalog : callable, optional

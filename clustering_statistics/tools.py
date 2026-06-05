@@ -7,7 +7,6 @@ Main functions
 * `get_catalog_fn`: Construct input catalog filenames from analysis options.
 * `get_stats_fn`: Construct standardized output filenames for statistics.
 * `read_clustering_catalog`: Load and filter survey clustering catalogs.
-* `read_full_catalog`: Load full catalogs needed for specialized workflows.
 * `write_stats`: Serialize measured statistics to disk.
 """
 
