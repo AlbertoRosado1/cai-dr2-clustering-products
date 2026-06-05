@@ -534,7 +534,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
-        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
+        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "LGE": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxLGE": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
 
         if simple_tracers[0] not in ["BGS", "LRG", "LGE", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
@@ -1023,18 +1023,20 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return [cat_dir / f'{tracer}_complete_{iran:d}_clustering.ran.{ext}' for iran in nrans]
 
         elif version == 'abacus-2ndgen-dr2-altmtl':
+            ext = 'fits'
             if 'BGS' in tracer:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummitBGS_v2'
                 if kind == 'full_data' and 'BGS_ANY' in tracer:
                     tracer = 'BGS_ANY'
                 if kind == 'full_data' and 'BGS_BRIGHT' in tracer:
                     tracer = 'BGS_BRIGHT'
+                if tracer == 'BGS_BRIGHT-02':
+                    ext = 'h5'
             else:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummit_v4_1'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
             cat_dir = base_dir / f'altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
-            ext = 'fits'
 
         elif version == 'abacus-hf-dr2-v2-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
@@ -1630,8 +1632,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
         parent_randoms_fn = expand['parent_randoms_fn']
         if not isinstance(parent_randoms_fn, (tuple, list)):
             parent_randoms_fn = [parent_randoms_fn]
-        if mpicomm.rank == 0:
-            logger.info('Expanding randoms')
+            
+        if mpicomm.rank == 0: logger.info(f'Expanding randoms with {from_data=} and {from_randoms=}')
+        
         # WARNING: order matters!
         parent_randoms = []
         for ifn, fn in enumerate(parent_randoms_fn):

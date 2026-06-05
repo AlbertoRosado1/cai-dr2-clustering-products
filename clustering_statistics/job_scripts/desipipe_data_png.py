@@ -155,9 +155,11 @@ def collect_argparser():
     parser.add_argument('--interactive', action='store_true', help='Whether to run in interactive mode (without spawning jobs with desipipe).')
     
     parser.add_argument('--tracers', nargs='+', type=str, default=None, help='Which tracer to run..')
+    parser.add_argument('--zranges', nargs='+', type=str, default=None, help='Provide --zranges zmin1 zmax1 zmin2 zmax2 if you want to compute things on (zmin1,zmax1) and (zmin2,zmax2) and ect...')
+    parser.add_argument('--regions', nargs='+', type=str, default=None, help='Which regions to compute..', 
+                        choices=['NGC', 'SGC', 'N', 'NGCnoN', 'SGCnoDES', 'DES'] + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]])
     
     parser.add_argument('--blinded', action='store_true', help='Run with blinded data or not.')
-    parser.add_argument('--fm_window', action='store_true', help='Compute the forward model of the window function. This is a heavier computation, so we keep it optional and separate for now.')
 
     parser.add_argument('--geo', action='store_true', help='Compute the forward model of the window function for geometrical part only.')
     parser.add_argument('--ric', action='store_true', help='Include RIC in the forward model of the window.')
@@ -172,22 +174,17 @@ def collect_argparser():
 if __name__ == '__main__':
     """
     # To run interactively on NERSC, use the following commands:
-
-    # salloc -N 1 -C "gpu" -t 02:00:00 --gpus 4 --qos interactive --account desi_g
-    # source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main  # don't forget this to load environment variables
-    # module unload desi-clustering
-    # srun -n 4 python desipipe_data_png.py --interactive --blinded
-    
-    # For Edmond:
     salloc -N 1 -C "gpu&hbm80g" -t 04:00:00 --gpus 4 --qos interactive --account desi_g
     source /global/homes/e/edmondc/.bash_profile
     export HDF5_USE_FILE_LOCKING=TRUE
 
+    # run power spectrum / analytical window / analytical covariance:
     srun -n 4 python desipipe_data_png.py --interactive --blinded --tracer LRG LRG_zcmb
     
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0 2
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --ric --ellsout 0 2
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --ric --amr --ellsout 0 2
+    # run forward model of the window for IC contributions:
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --geo --ellsout 0 2 --tracer LRGxELGnotqso
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --ellsout 0 2 --tracer QSO
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer LRGxELGnotqso
 
     """
     from clustering_statistics import setup_logging, tools
@@ -204,13 +201,12 @@ if __name__ == '__main__':
         logger.info("Create queue with jobs inside using desipipe. Don\'t forget to run `desipipe spawn -q data_png --spawn` to launch the jobs!")
         tm, tm80 = setup_queue()
 
+
     def get_run_stats():
         if mode == 'interactive':
             return run_stats
         else: 
-            _tm = tm80
-            #if tracer in ['LRG']: _tm = tm
-            return _tm.python_app(run_stats)
+            return tm80.python_app(run_stats)
 
 
     cat_dir = Path('/global/cfs/cdirs/desi/survey/catalogs/DA2/LSS/loa-v1/LSScats/v2/fNL/')
@@ -231,23 +227,17 @@ if __name__ == '__main__':
         tracers = [tuple(tt.split('x')) if 'x' in tt else tt for tt in args.tracers] 
     else:
         tracers = ['LRG']
-        #tracers = [('ELGnotqso', 'QSO')] #'ELGnotqso', ('LRG', 'QSO'), ('LRG', 'ELGnotqso')
-        #tracers = ['LRG', 'LRG_zcmb', 'ELGnotqso', 'QSO', 'QSO_zcmb', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO')]
-        #tracers = ['LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO_zcmb', ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]  # NGC+SGC = 2h30
-        #tracers = ['ELGnotqso', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO')]
 
-    #regions = ['NGC', 'SGC']
-    regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'SGCnoDES', 'DES'] #+ ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]]
+    tracers_available = ['LRG', 'LRG_zcmb', 'ELGnotqso', 'ELGnotqso_zcmb', 'QSO', 'QSO_zcmb', ('LRG', 'QSO'), ('LRG', 'ELGnotqso'), ('ELGnotqso', 'QSO'), ('LRG_zcmb', 'QSO_zcmb'), ('LRG_zcmb', 'ELGnotqso_zcmb'), ('ELGnotqso_zcmb', 'QSO_zcmb')]
+    assert (tracers not in tracers_available), f'Please use one available tracer: {[tt if not isinstance(tt, tuple) else 'x'.join(tt) for tt in tracers_available]}'
 
+    regions = args.regions if args.regions is not None else ['NGC', 'SGC']
 
-    for tracer in tracers:         
-        #zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')[:1]
-
-        zranges = [(0.4, 1.1), (0.4, 1.0), (0.4, 0.9), (0.4, 0.8)]
+    for tracer in tracers:
+        # if len(zranges) is odd, it will not consider the last one.
+        zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')[:1] if args.zranges is None else list(zip(zranges[::2], zranges[1::2]))
 
         weights = ['default-fkp-oqe', 'default-fkp'][:1]
-        logger.info(f'{tracer=}, {zranges=}, {weights=}')
-        
         # Choice of imaging systematics avaialble in the catalogs: https://desi.lbl.gov/trac/wiki/keyprojects/Y3-DR/LSScat/imaging_systematics
         if tracer in ['LRG_zcmb']:
             weights += ['default-fkp-oqe-wsys-imlin_finezbin_allebvcmb']
@@ -256,15 +246,22 @@ if __name__ == '__main__':
         # elif tracer in ['ELGnotqso']:
         #     weights += ['default-fkp-oqe-wsys-imlin_finezbin_nodebv']
 
+        logger.info(f'{tracer=}, {zranges=}, {weights=}')
+
+
+        # Computing forward model of the window?
+        fm_window = args.geo or args.ric or args.amr
+
 
         # Compute power spectrum, window matrix, analytical covariance: 
-        if not args.fm_window:
+        if not fm_window:
             stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][:1]
             postprocess = ['combine_regions']
             logger.info(f'Running stats {stats} and postprocess {postprocess}')
             get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, regions=regions, stats=stats)            
             if postprocess:
                 postprocess_stats(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, postprocess=postprocess, stats=stats)
+
 
         # Compute RIC/AMR correction to the window matrix:
         else:
@@ -278,8 +275,13 @@ if __name__ == '__main__':
             total_regions, total_zranges = tools.propose_fiducial(kind='window_mesh2_spectrum_fm', tracer=tracer)['total_region_zrange']
             logger.info(f"Use region={total_regions} and zrange={total_zranges} for reading the catalogs.")
 
+            # Remark: in case of cross-correlation, the catalogs will be read with the same zranges ! 
+            # For instance with LRGxQSO -> LRG will be with 0.8 < z < 1.3. This will trigger a warning in desiwing because there are some objects with z > 1.1, that will not be used to compute imaging systematic weights.
+            # This is not a problem because the power spectrum will be computed only with z < z_required=1.1 < 1.3
+
             # Update options for forward window:
-            kwargs = {'geo': args.geo, 'ric': args.ric, 'amr': args.amr, 'ellsout': args.ellsout, 
+            kwargs = {'geo': args.geo, 'ric': args.ric, 'amr': args.amr, 'ellsout': args.ellsout,
+                      #'amr_regions_zranges':  
                       'spectrum_regions_zranges': list(itertools.product(regions, zranges))}
             logger.info(f"window_mesh2_spectrum_fm kwargs: {kwargs}")
 

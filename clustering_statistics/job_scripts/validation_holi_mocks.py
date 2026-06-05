@@ -63,8 +63,8 @@ if __name__ == '__main__':
 
     stats_dir = Path(os.getenv('SCRATCH')) / 'covariance_holi_mocks'
     #stats_dir = Path("/global/cfs/projectdirs/desi/mocks/cai/mock-benchmark-dr2/summary_statistics/cutsky/")
-    stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][:0]
-    postprocess = ['combine_regions'][:1]
+    stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum']
+    postprocess = ['combine_regions']
 
     version = 'holi-v3-altmtl'
 

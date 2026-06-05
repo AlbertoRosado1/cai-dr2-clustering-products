@@ -164,7 +164,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 _catalog_options.setdefault('reshuffle', {})  # to pass on complete data
 
             # Read data and random catalogs
-            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=True), kind='data', **_catalog_options)
+            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=True), kind='data', **(_catalog_options | dict(keep_columns=True)))
             binned_weight.update(data[tracer].attrs)  # update with any additional info from prepared data catalog
             #_catalog_options.pop('complete', None)
             #_catalog_options.pop('reshuffle', None)
