@@ -1539,7 +1539,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
         Low-level function to read a file into a Catalog (defaults to internal _read_catalog).
     keep_columns : list, tuple, bool or None, optional
         If True, keep all columns. If None (default), keep the minimal columns
-        ['RA', 'DEC', 'Z', 'NX', 'TARGETID'] plus any columns with 'WEIGHT' in their name.
+        ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION'] plus any columns with 'WEIGHT' in their name.
         If a list/tuple, keep exactly those columns (INDWEIGHT is always included later).
     **kwargs : dict
         Additional keyword arguments forwarded to `get_catalog_fn` (e.g. tracer, region, version, imock).
@@ -1556,7 +1556,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
     if isinstance(keep_columns, bool) and keep_columns:
         keep_all_columns = True
     elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES', 'WEIGHT_NTILE']
+        keep_columns = ['RA', 'DEC', 'Z', 'POSITION', 'NX', 'TARGETID', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES', 'WEIGHT_NTILE']
     else:
         assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
         keep_columns = list(keep_columns)
@@ -2037,7 +2037,7 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
         Binned weights to apply. Keys are column names, values are weight arrays.
     keep_columns : list, optional
         If True, keep all columns.
-        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID'].
+        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION'].
         Else, a list of column names to keep in the output catalog.
         Note: INDWEIGHT is always included.
     mpicomm : MPI.Comm, optional

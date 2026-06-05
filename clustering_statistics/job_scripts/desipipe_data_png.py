@@ -65,6 +65,30 @@ def setup_queue():
     return tm, tm80
 
 
+def _update_regression_maps(options, weight):
+    """ update the template / redshift range / photometric range as function of the weight used. """
+    # work only for the auto now:
+    if isinstance(weight, tuple):
+        logger.error('NOT READY FOR CROSS-CORRELATION...')
+        # see: https://github.com/cosmodesi/desi-clustering/blob/67b0926114af5d987f593ddbef725cb829bbe548/clustering_statistics/tools.py#L596
+        sys.exit(3)
+
+    else:
+        if 'wsys-imlin_finezbin_allebvcmb' in weight: 
+            logger.info(f'Update templates for {weight=}')
+            photoregions = ["N", "S"]
+            regression_zranges = [(0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0), (1.0, 1.1)]
+
+            options['window_mesh2_spectrum_fm']['regression_maps'] = ['STARDENS', 'PSFSIZE_G', 'PSFSIZE_R', 'PSFSIZE_Z', 'GALDEPTH_G', 'GALDEPTH_R', 'GALDEPTH_Z', 'HI', 'PSFDEPTH_W1', 'EBV_DIFF_GR', 'EBV_DIFF_RZ', 'ZCMB']
+            options['window_mesh2_spectrum_fm']['amr_regions_zranges'] = list(itertools.product(photoregions, regression_zranges))
+
+        else:
+            logger.error(f'Not ready for {weight=}...')
+            sys.exit(3)
+
+    return options
+        
+
 def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], weights=['default-fkp'], 
               regions=['NGC','SGC'], stats=['mesh2_spectrum'], **kwargs):
     """" Everything inside this function will be executed on the compute nodes; This function must be self-contained; 
@@ -96,7 +120,7 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
 
             if 'window_mesh2_spectrum_fm' in stats:
                 options['catalog']['nran'] = 1  # not enough memory to do with more randoms ... 
-                options['catalog']['keep_columns'] = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'WEIGHT_FKP']  # add WEIGHT_FKP for the foward model
+                options['catalog']['keep_columns'] = ['RA', 'DEC', 'Z', 'POSITION', 'NX', 'TARGETID', 'WEIGHT_FKP']  # add WEIGHT_FKP for the foward model
 
                 options['window_mesh2_spectrum_fm'] = {}
                 # for ell=0: 4 is the max that I can fit in memory with nran=1 / for ell=2 -> I need to go down to 3...
@@ -114,10 +138,11 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
                 options['window_mesh2_spectrum_fm']['seeds'] = [50, 20, 77, 80, 97, 6, 52, 64, 76, 81]
 
                 options['window_mesh2_spectrum_fm']['theory_rebin'] = 10 # reduce the number of points -> greatly improve the computation time.
+                
+                if 'wsys' in weight:
+                    options = _update_regression_maps(options, weight)
 
-                # update tje template as function of the weight use here:
-                #options['window_mesh2_spectrum_fm']['regression_maps'] = xxx
-            
+
             compute_stats_from_options(stats, get_stats_fn=get_stats_fn, cache=cache, analysis='local_png', **options)
 
 
@@ -186,6 +211,10 @@ if __name__ == '__main__':
     srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --ellsout 0 2 --tracer QSO
     srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer LRGxELGnotqso
 
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --tracer LRG --region NGCnoN SGCnoDES
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --geo --ellsout 0 2 --tracer LRG --region NGCnoN SGCnoDES
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer LRG --region NGCnoN SGCnoDES
+
     """
     from clustering_statistics import setup_logging, tools
     from mpi4py import MPI
@@ -239,12 +268,16 @@ if __name__ == '__main__':
 
         weights = ['default-fkp-oqe', 'default-fkp'][:1]
         # Choice of imaging systematics avaialble in the catalogs: https://desi.lbl.gov/trac/wiki/keyprojects/Y3-DR/LSScat/imaging_systematics
-        if tracer in ['LRG_zcmb']:
+        if tracer == 'LRG_zcmb':
             weights += ['default-fkp-oqe-wsys-imlin_finezbin_allebvcmb']
         elif tracer == ('LRG_zcmb', 'QSO'):
             weights += [('default-fkp-oqe-wsys-imlin_finezbin_allebvcmb', 'default-fkp-oqe')]
-        # elif tracer in ['ELGnotqso']:
-        #     weights += ['default-fkp-oqe-wsys-imlin_finezbin_nodebv']
+        elif tracer == 'ELGnotqso':
+            weights += ['default-fkp-oqe-wsys-imlin', 'default-fkp-oqe-wsys-imlin_finezbin_nodebv'][:1]
+        elif tracer in [('LRG', 'ELGnotqso'), ('LRG_zcmb', 'ELGnotqso')]:
+            weights += [('default-fkp-oqe', 'default-fkp-oqe-wsys-imlin')]         
+        elif tracer == ('ELGnotqso', 'QSO'):
+            weights += [('default-fkp-oqe-wsys-imlin', 'default-fkp-oqe')]
 
         logger.info(f'{tracer=}, {zranges=}, {weights=}')
 
@@ -255,7 +288,7 @@ if __name__ == '__main__':
 
         # Compute power spectrum, window matrix, analytical covariance: 
         if not fm_window:
-            stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][:1]
+            stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][1:2]
             postprocess = ['combine_regions']
             logger.info(f'Running stats {stats} and postprocess {postprocess}')
             get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, regions=regions, stats=stats)            
@@ -275,8 +308,9 @@ if __name__ == '__main__':
             total_regions, total_zranges = tools.propose_fiducial(kind='window_mesh2_spectrum_fm', tracer=tracer)['total_region_zrange']
             logger.info(f"Use region={total_regions} and zrange={total_zranges} for reading the catalogs.")
 
-            # Remark: in case of cross-correlation, the catalogs will be read with the same zranges ! 
-            # For instance with LRGxQSO -> LRG will be with 0.8 < z < 1.3. This will trigger a warning in desiwing because there are some objects with z > 1.1, that will not be used to compute imaging systematic weights.
+            # Remark: in case of cross-correlation, the catalogs will be read with the same zranges !  This will trigger a warning in desiwing:
+            # For instance with LRGxQSO -> LRG will be with 0.8 < z < 1.3 -> warning because there are some objects with z > 1.1, 
+            # that will not be used to compute imaging systematic weights.
             # This is not a problem because the power spectrum will be computed only with z < z_required=1.1 < 1.3
 
             # Update options for forward window:
