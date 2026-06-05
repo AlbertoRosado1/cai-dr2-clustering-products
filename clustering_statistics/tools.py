@@ -534,7 +534,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
-        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
+        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "LGE": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxLGE": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
 
         if simple_tracers[0] not in ["BGS", "LRG", "LGE", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
@@ -1023,18 +1023,20 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return [cat_dir / f'{tracer}_complete_{iran:d}_clustering.ran.{ext}' for iran in nrans]
 
         elif version == 'abacus-2ndgen-dr2-altmtl':
+            ext = 'fits'
             if 'BGS' in tracer:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummitBGS_v2'
                 if kind == 'full_data' and 'BGS_ANY' in tracer:
                     tracer = 'BGS_ANY'
                 if kind == 'full_data' and 'BGS_BRIGHT' in tracer:
                     tracer = 'BGS_BRIGHT'
+                if tracer == 'BGS_BRIGHT-02':
+                    ext = 'h5'
             else:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummit_v4_1'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
             cat_dir = base_dir / f'altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
-            ext = 'fits'
 
         elif version == 'abacus-hf-dr2-v2-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
@@ -1970,7 +1972,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     catalog : Catalog, list
         Catalog object or list of Catalog objects (if ``concatenate`` is False).
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
-        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     """
     FKP_P0, zrange, region, weight = (kwargs.get(key, None) for key in ['FKP_P0', 'zrange', 'region', 'weight'])
 
@@ -1978,7 +1980,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     if isinstance(keep_columns, bool) and keep_columns:
         keep_all_columns = True
     elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     else:
         assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
 
@@ -1992,11 +1994,12 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     for i, catalog in enumerate(catalogs):
         catalog = mask_catalog(catalog, kind, zrange=zrange, region=region)
         catalog = set_catalog_weights(catalog, kind, weight=weight, FKP_P0=FKP_P0, binned_weight=binned_weight, log=i == 0)
-        if kind in ['data', 'randoms']:
+        if kind in ['data', 'randoms'] and (keep_all_columns or 'POSITION' in keep_columns):
             catalog = set_positions_from_rdz(catalog)
-        rdzw.append(catalog)
         if not keep_all_columns:
+            keep_columns = list(keep_columns) + ['INDWEIGHT', 'BITWEIGHT'] # always keep INDWEIGHT and BITWEIGHT (if present) as the docstring says
             catalog = catalog[[column for column in catalog if column in keep_columns]]
+        rdzw.append(catalog)
     if concatenate:
         if len(rdzw) == 1: return rdzw[0]
         return Catalog.concatenate(rdzw)
@@ -2056,11 +2059,13 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
     catalog : Catalog, list
         Catalog object or list of Catalog objects (if ``concatenate`` is False).
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
-        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     """
     catalogs = read_catalog(kind=kind, concatenate=concatenate, get_catalog_fn=get_catalog_fn,
                             expand=expand, reshuffle=reshuffle, complete=complete, mpicomm=mpicomm, read=_read_catalog,
-                            keep_columns=keep_columns, **kwargs)
+                            keep_columns=True if keep_columns is True else None, **kwargs)
+    # for the read_catalog, it doesn't always work to have the same keep_columns, as more columns can be needed in the prepare_catalog steps (masking, setting weights or positions). if keep_columns is True, we keep all columns at the read_catalog step and it works. if keep_columns is None, we use the default set of columns and this also works. if keep_columns is a custom list, this code gives keep_columns=None for the read_catalog step as well, which should not give errors and should generally work as long as the custom keep_columns set passed to this function is narrower than the default set of columns (which is reasonable to expect from the docstring)
+    # the keep_columns argument is passed to prepare_catalog to control the final output columns
     catalogs = prepare_catalog(catalogs, kind=kind, set_positions_from_rdz=set_positions_from_rdz,
                                mask_catalog=mask_catalog, set_catalog_weights=set_catalog_weights,
                                binned_weight=binned_weight, keep_columns=keep_columns, **kwargs)
