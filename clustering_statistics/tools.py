@@ -1630,8 +1630,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
         parent_randoms_fn = expand['parent_randoms_fn']
         if not isinstance(parent_randoms_fn, (tuple, list)):
             parent_randoms_fn = [parent_randoms_fn]
-        if mpicomm.rank == 0:
-            logger.info('Expanding randoms')
+            
+        if mpicomm.rank == 0: logger.info(f'Expanding randoms with {from_data=} and {from_randoms=}')
+        
         # WARNING: order matters!
         parent_randoms = []
         for ifn, fn in enumerate(parent_randoms_fn):
