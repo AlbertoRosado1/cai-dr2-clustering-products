@@ -2889,6 +2889,9 @@ def add_photometric_template_values(
                 sysmaps["SKY_RES_R"] = sky_r[region]
             if "SKY_RES_Z" in need_maps:
                 sysmaps["SKY_RES_Z"] = sky_z[region]
+
+        if "ZCMB" in need_maps:
+            sysmaps["ZCMB"] = common.mk_zcmbmap()
         # Drop unused, reorder, cast to float64 if needed and return as regular numpy array
         return np.lib.recfunctions.structured_to_unstructured(sysmaps[need_maps].as_array()).astype(float)
 
