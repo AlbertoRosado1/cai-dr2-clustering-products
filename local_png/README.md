@@ -4,26 +4,34 @@
 * Chaussidon+24: https://arxiv.org/abs/2411.17623
 * Rosado-Marin+26: https://arxiv.org/abs/2604.05213
 
+* Supporting papers: 
+    * xxx
+    * xxx
+    * xxx
+
 ## TODO: 
-* same with the data 
 * Add description of the tools in this repo and how it works.
 
 ----
 ## Measurements:
 
 ### Data:
-Blinded Data: `/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/`
+* Blinded Data: `/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/blinded/`
 
 
 ### Mocks:
-Holi Mocks: `/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl`
 
-For additional measurements on mocks: 
- * Script: `https://github.com/cosmodesi/desi-clustering/blob/main/clustering_statistics/job_scripts/desipipe_holi_mocks.py`. 
- * There is a block (lines 149-156) you can uncomment that has the 'local_png' options. 
- * To run with reshuffle, you just set `onthefly='reshuffle'`. 
- * This script can be run as an interactive job or as a Slurm job, by changing the mode option.
- * You can change `max_mocks_per_batch` to ~50 if you only measure the Pks, that way you can process 50 mocks per job.
+* Holi Mocks: `/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl`
+    * Reference: xxx.
+    * Script: `https://github.com/cosmodesi/desi-clustering/blob/main/clustering_statistics/job_scripts/desipipe_holi_mocks.py`. 
+    * There is a block (lines 149-156) you can uncomment that has the 'local_png' options (You can change `max_mocks_per_batch` to ~50 if only Pk measurements). 
+    * To run with reshuffle, you just set `onthefly='reshuffle'`. 
+
+* PNG-Mocks: `/global/cfs/cdirs/desicollab/users/adrigut/PNGxHOD/dev_mocks/catalogs/DA2/v2.0/` (cutsky complete DR3 mocks)
+   * Reference: Adame+26 (in CWR)
+   * Documentation: `https://desi.lbl.gov/trac/wiki/CosmoSimsWG/DESI-PNG`
+   * Script: `https://github.com/cosmodesi/desi-clustering/blob/edmond-dev/clustering_statistics/job_scripts/desipipe_pngunit-xl_mocks.py`
+
 
 ----
 ## Fitting local PNG:
@@ -33,7 +41,7 @@ For additional measurements on mocks:
 ----
 ## Data Management: 
 
-I (Edmond) prefers to work locally for the inference as we are on an easy fit situation.
+I (Edmond) prefers to work locally for the inference as we are on an easy fit situation. Note that the following give you also where the data are on NERSC!
 
 ### Download the measurements on my machine: 
 
@@ -60,6 +68,12 @@ rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering
 cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl
 rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/glam-uchuu-v2-altmtl/ .
 ```
+
+* PNG-Mocks: 
+<!-- ```bash
+cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/xxx
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/xxx/ .
+``` -->
 
 ### Upload data on NERSC:
 
