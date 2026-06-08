@@ -32,7 +32,8 @@ import lsstypes as types
 from lsstypes.utils import get_hartlap2007_factor, get_percival2014_factor, mkdir
 
 from clustering_statistics.tools import (write_stats, float2str, get_full_tracer, get_simple_tracer, _make_tuple,
-                                         get_simple_stats, _unzip_catalog_options, base_stats_dir, default_mpicomm, setup_logging)
+                                         get_simple_stats, _unzip_catalog_options, base_stats_dir, default_mpicomm,
+                                         rebinning_matrix, setup_logging)
 from clustering_statistics import tools as clustering_tools
 
 
@@ -973,6 +974,35 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     return likelihood
 
 
+def rebin_spectrum3_window(window, data=None):
+    """Rebin spectrum3 window. TBC"""
+    if data is None:
+        data = window.observable
+    # Simplify window matrix
+    ostep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in data)
+    tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window.theory)
+    rebin = int(ostep / tstep)
+    assert rebin >= 1
+    # First rebin to observable binning
+    rebin1 = rebinning_matrix(window.theory, new_coords=window.theory.select(k=slice(0, None, rebin)),
+                                interp_order=3, diag=None)
+    # Then compact non-diagonal term
+    rebin2 = rebinning_matrix(rebin1.theory, new_coords=window.theory.select(k=slice(0, None, 2)),
+                                interp_order=3, diag='separate')
+    window = window.clone(value=window.value() @ rebin1.value() @ rebin2.value(), theory=rebin2.theory)
+    return window
+
+
+def select_window_theory(window, data):
+    """Restrict window theory to a range close to observed data."""
+    coord_name = list(next(iter(data)).coords())
+    assert len(coord_name) == 1
+    coord_name = coord_name[0]
+    data_limits = min(pole.edges(coord_name).min() for pole in data), max(pole.edges(coord_name).max() for pole in data)
+    window = window.at.theory.select(coord_name=(data_limits[0] / 1.5, data_limits[1] * 1.5))
+    return window
+
+
 @default_mpicomm
 def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=None,
                           cosmology_options: dict=None, get_stats_fn=clustering_tools.get_stats_fn,
@@ -1032,6 +1062,12 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         else:
             raise NotImplementedError(stat)
         theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
+
+        if cls == Spectrum3PolesObservable:
+            # Compactify window theory
+            window = rebin_spectrum3_window(window, data=data)
+        window = select_window_theory(window, data)
+
         observable = cls(data=data, window=window, theory=theory, name=observable_name)
         if observable_options['emulator']['name']:
             assert cache_dir is not None, 'cache_dir must be provided for emulator'

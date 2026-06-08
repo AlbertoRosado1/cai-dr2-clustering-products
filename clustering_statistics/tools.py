@@ -945,7 +945,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'full_data':
                 return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
             if kind == 'full_randoms':
-                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]  
+                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
 
         elif version == 'holi-v1-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -1063,7 +1063,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                     if '-' in tracer:
                         mag = tracer.split('-')[-1]
                         mag_cut = f'_Mr_{mag}'
-                    else: 
+                    else:
                         mag_cut = ''
                     if kind == 'data':
                         return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_0000_clustering.dat.{ext}')
@@ -1632,9 +1632,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
         parent_randoms_fn = expand['parent_randoms_fn']
         if not isinstance(parent_randoms_fn, (tuple, list)):
             parent_randoms_fn = [parent_randoms_fn]
-            
+
         if mpicomm.rank == 0: logger.info(f'Expanding randoms with {from_data=} and {from_randoms=}')
-        
+
         # WARNING: order matters!
         parent_randoms = []
         for ifn, fn in enumerate(parent_randoms_fn):
@@ -2646,7 +2646,7 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, remove_contaminan
                 mask &= data['Z'] < 1.5
             zfrac = 0.966
             zrange = (0.4, 1.1)
-            
+
         if tracer.startswith('BGS'):
             if True: #'ANY' in tracer:
                 fit_a = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_a.dat"))
@@ -3027,3 +3027,100 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
         value.append(row)
     window_mean = window_mean.clone(value=np.block(value))
     return window_mean
+
+
+def rebinning_matrix(current_theory: types.ObservableTree, new_coords: types.ObservableTree=None, interp_order: int=3, diag: str=None):
+    """Build a window matrix that rebins ``current_theory`` onto a new coordinate grid.
+
+    Parameters
+    ----------
+    current_theory : types.ObservableTree
+        Observable tree whose coordinate grid defines the *theory*
+        side of the window matrix.  Every leaf must have exactly one coordinate
+        dimension, and that coordinate must be a tensor product of 1-D grids
+        (i.e. ``coords`` is the meshgrid of separable 1-D axes).
+    new_coords : int or array-like or None, optional
+        Target coordinate grid for the *theory* side of the window matrix.
+
+        - ``None`` (default): keep the same grid as ``current_theory``.
+        - ``types.ObservableTree``: new *theory* for the window matrix
+        - array-like: explicit per-axis 1-D arrays (same length as the number
+          of coordinate dimensions).
+    interp_order : int, optional
+        Polynomial order of the spline used by ``matrix_spline_interp``
+        (default 3, i.e. cubic).
+    diag : {None, 'separate'}, optional
+        Controls how the diagonal (same-point) contribution is handled.
+
+        - ``None`` (default): the interpolation matrix is used as-is.
+        - ``'separate'``: the diagonal rows of the interpolation matrix are
+          zeroed out and appended as a separate identity block at the end of
+          the matrix columns.  The observable coordinates on the theory side
+          are then extended to include the original current-theory points as
+          extra rows, so the diagonal contribution can be passed through
+          unmodified.
+
+    Returns
+    -------
+    types.WindowMatrix
+        Window matrix with ``value`` the block-diagonal interpolation matrix,
+        ``theory`` the rebinned observable tree (new coordinate grid), and
+        ``observable`` set to ``current_theory``.
+    """
+    import numbers
+    import scipy as sp
+    from lsstypes import ObservableLike
+    from lsstypes.utils import matrix_spline_interp
+
+    assert diag in [None, 'separate']
+    coord_name = list(next(iter(current_theory)).coords())
+    assert len(coord_name) == 1
+    coord_name = coord_name[0]
+
+    def per_axis_coords(theory):
+        coords = np.concatenate([pole.coords(coord_name) for pole in theory.flatten(level=None)], axis=0)
+        return [np.unique(coord) for coord in coords.T]
+
+    current_coords = per_axis_coords(current_theory)
+    if new_coords is None:
+        new_coords = current_coords
+    elif isinstance(new_coords, ObservableLike):
+        new_coords = per_axis_coords(new_coords)
+
+    def flatten_coords(*coords):
+        coords_flat = np.meshgrid(*coords, indexing='ij')
+        return np.column_stack([coord.ravel() for coord in coords_flat])
+
+    new_coords_flat = flatten_coords(*new_coords)
+
+    value = []
+    for label, pole in current_theory.items(level=None):
+        _current_coords = next(iter(pole.coords().values()))
+        current_coords = [np.unique(current_coord) for current_coord in _current_coords.T]
+        assert np.allclose(flatten_coords(*current_coords), _current_coords)
+        matrices1d = [matrix_spline_interp(new_coord, current_coord, interp_order=interp_order) for new_coord, current_coord in zip(new_coords, current_coords)]
+        matrixnd = matrices1d[0]
+        for matrix1d in matrices1d[1:]:
+            matrixnd = np.kron(matrixnd, matrix1d)
+        if diag == 'separate':
+            shape = tuple(len(coord) for coord in current_coords)
+            assert all(ss == shape[0] for ss in shape[1:])
+            multi_index = tuple(np.arange(s) for s in shape)
+            diag_index = np.ravel_multi_index(multi_index, dims=shape)
+            # zero-out diagonal contribution
+            matrixnd[diag_index, :] = 0.
+            # then add the diagonal contribution
+            matrixdiag = np.zeros(matrixnd.shape[:1] + (len(diag_index),))
+            matrixdiag[diag_index, np.arange(len(diag_index))] = 1.
+            matrixnd = np.concatenate([matrixnd, matrixdiag], axis=-1)
+        value.append(matrixnd)
+
+    def f(pole):
+        coord_values = new_coords_flat
+        if diag == 'separate':
+            coord_values = np.concatenate([new_coords_flat, np.column_stack(current_coords)], axis=0)
+        return types.ObservableLeaf(value=np.zeros(len(coord_values)), **{coord_name: coord_values}, coords=[coord_name])
+
+    new_theory = current_theory.map(lambda pole: f(pole), level=None)
+    value = sp.linalg.block_diag(*value)
+    return types.WindowMatrix(value=value, theory=new_theory, observable=current_theory)

@@ -84,7 +84,7 @@ def time_posterior(posterior):
 def test_likelihood_full_shape(save=False, load=False):
     from desilike import compile, Posterior, get_params
     options = {}
-    tracers = ['LRG2', 'LRG3']
+    tracers = ['LRG2', 'LRG3'][:1]
     options['likelihoods'] = [generate_likelihood_options_helper(tracer=tracer) for tracer in tracers]
     save_dir = Path('_save')
 
@@ -110,8 +110,8 @@ def test_likelihood_full_shape(save=False, load=False):
             for observable_options in likelihood_options['observables']:
                 observable_options['emulator']['order'] = 2
         likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache')
-        for param in get_params(likelihood).select(solved=True):
-            param.update(derived='best')
+        #for param in get_params(likelihood).select(solved=True):
+        #    param.update(derived='best')
         posterior = compile(Posterior(likelihood))
         assert np.isfinite(posterior())
         time_posterior(posterior)
@@ -1039,8 +1039,8 @@ def test_run_fit_from_options_resume_true_requires_existing_chains(monkeypatch, 
 if __name__ == '__main__':
 
     setup_logging()
-    test_likelihood_bao(load=True)
-    #test_likelihood_full_shape(load=True)
+    #test_likelihood_bao(load=True)
+    test_likelihood_full_shape(load=True)
     #test_covariance()
     #test_str()
     #test_covariance()
