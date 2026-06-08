@@ -156,7 +156,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True
     Parameters
     ----------
     params : VariableCollection
-        Parameter collection for a theory calculator, e.g. ``desilike.base.params(theory)``.
+        Parameter collection for a theory calculator, e.g. ``desilike.get_params(theory, level=1)``.
     model : str
         Perturbation theory model tag. When 'EFT', FoG parameters are fixed.
     stat : str
@@ -181,7 +181,6 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True
     configs = {}
     if model == 'bao':
         tracer = get_simple_tracer(tracer)
-        if not isinstance(tracer, str): tracer = tracer[0]
         recon = bool(prior_basis)
         if tracer == 'BGS':
             sigmapar, sigmaper = 10., 6.5
@@ -333,6 +332,9 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     theory_options.setdefault('cosmology', {'template': 'direct'})
     cosmology_options = theory_options['cosmology']
     z = data_attrs['z']
+    tracers = data_attrs['tracers']
+    if all(tracer == tracers[0] for tracer in tracers):
+        tracers = tracers[0]
     if 'z' in theory_options:
         z = theory_options['z']
     if mpicomm.rank == 0:
@@ -356,27 +358,28 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             A_full = theory_options.get('A_full', True)
             pt = FOLPSPTSpectrum2Poles(A_full=A_full)
             kw = {name: theory_options[name] for name in ['damping', 'prior_basis', 'b3_coev'] if name in theory_options}
-            theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, **kw, **theory_options.get('options', {}))
+            theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
             sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
             prior_basis = kw.get('prior_basis', 'physical')
             b3_coev = kw.get('b3_coev', True)
-            theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=prior_basis, b3_coev=b3_coev, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, b3_coev=b3_coev, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'mesh3_spectrum' in stat:
         if theory_options['model'] in ['folpsD', 'folpsEFT']:
+            A_full = theory_options.get('A_full', True)
+            pt = FOLPSPTSpectrum2Poles(A_full=A_full)
             kw = {name: theory_options[name] for name in ['damping'] if name in theory_options}
-            theory = FOLPSTracerSpectrum3Poles(template=template, **kw, **theory_options.get('options', {}))
+            theory = FOLPSTracerSpectrum3Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
             sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
             prior_basis = theory_options.get('prior_basis', 'physical')
-            theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=prior_basis, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'recon_particle2_correlation' in stat:
         kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
         if kw['mode'] is None: kw['mode'] = ''  # no reconstruction
         kw['broadband'] = theory_options.get('broadband', 'pcs2')
-        mode = kw.pop('mode')
-        pt = DampedBAOWigglesPTSpectrum2Poles(mode=mode, smoothing_radius=kw.pop('smoothing_radius'))
-        theory = DampedBAOWigglesTracerCorrelation2Poles(pt=pt, **kw)
-        theory.update(params=update_theory_nuisance_priors(get_params(theory), theory_options['model'], stat, prior_basis=mode, tracer=data_attrs['tracers'], marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
+        pt = DampedBAOWigglesPTSpectrum2Poles()
+        theory = DampedBAOWigglesTracerCorrelation2Poles(pt=pt, **kw, ells=[0, 2, 4])
+        theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=kw['mode'], tracer=tracers, marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
     if theory is None:
         raise ValueError(f'theory not found for {stat} and {repr(theory_options)}')
     return theory
@@ -1009,7 +1012,14 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     observables = []
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
-        suffix = 'x'.join(label.get('tracers', []))
+        data_attrs = dict(data.attrs) | label
+        for _, pole in window.observable.items(level=None):
+            data_attrs['z'] = pole.attrs['zeff']
+        namespace = _str_from_observable_options(observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
+        data_attrs['tracers'] = namespace.split('x')
+        suffix = 'x'.join(data_attrs['tracers'])
+        if mpicomm.rank == 0:
+            logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
         if suffix:
             suffix = '_' + suffix
         observable_name = stat + suffix
@@ -1021,11 +1031,6 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             cls = Correlation2PolesObservable
         else:
             raise NotImplementedError(stat)
-        data_attrs = dict(data.attrs) | label
-        for _, pole in window.observable.items(level=None):
-            data_attrs['z'] = pole.attrs['zeff']
-        if mpicomm.rank == 0:
-            logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
         theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
         observable = cls(data=data, window=window, theory=theory, name=observable_name)
         if observable_options['emulator']['name']:
@@ -1054,7 +1059,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             emulated_pt = emulator.to_calculator()
             replace(observable, theory.pt, emulated_pt)
         observables.append(observable)
-    return ObservablesGaussianLikelihood(observables, covariance=covariance)
+    return ObservablesGaussianLikelihood(observables, covariance=covariance.value())
 
 
 def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: dict=None, get_stats_fn=clustering_tools.get_stats_fn,
@@ -1079,7 +1084,7 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
     -------
     SumLikelihood
     """
-    from desilike.base import SumLikelihood, share_params
+    from desilike.base import SumLikelihood
     cosmology = get_cosmology(cosmology_options)
     if isinstance(likelihoods_options, dict):
         likelihoods_options = [likelihoods_options]
@@ -1090,7 +1095,7 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
                                            stats=stats, get_stats_fn=get_stats_fn, get_theory=get_theory,
                                            cache_dir=cache_dir, cache_mode=cache_mode)
         likelihoods.append(likelihood)
-    return SumLikelihood(*share_params(likelihoods))
+    return SumLikelihood(likelihoods)
 
 
 def get_sampler_cls(name):

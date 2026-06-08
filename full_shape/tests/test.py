@@ -66,8 +66,23 @@ def test_bgs1_abacus_altmtl_uses_any02_file_label():
     assert 'mesh2_spectrum_poles_BGS_ANY-02_z0.1-0.4_GCcomb_weight-default-FKP' in str(fn)
 
 
+
+def time_posterior(posterior):
+    import time
+    import jax
+    n = 10
+    key = jax.random.key(42)
+    samples = {param.name: param.ref.sample(key, shape=n + 1) for param in posterior.params.select(varied=True)}
+    posterior = jax.jit(posterior)
+    for i in range(n + 1):
+        jax.block_until_ready(posterior(**{name: sample[i] for name, sample in samples.items()}))
+        if i == 0:
+            t0 = time.time()
+    print((time.time() - t0) / n)
+
+
 def test_likelihood_full_shape(save=False, load=False):
-    from desilike import compile
+    from desilike import compile, Posterior, get_params
     options = {}
     tracers = ['LRG2', 'LRG3']
     options['likelihoods'] = [generate_likelihood_options_helper(tracer=tracer) for tracer in tracers]
@@ -83,25 +98,40 @@ def test_likelihood_full_shape(save=False, load=False):
         for tracer, likelihood_options in zip(tracers, options['likelihoods']):
             stats = get_stats(observables_options=likelihood_options['observables'], covariance_options=likelihood_options['covariance'])
             stats.write(get_stats_fn(tracer=tracer))
-    
+
     for template in ['direct', 'shapefit']:
         options['cosmology'] = {'template': template}
         options = fill_fiducial_options(options)
         if load:
             for tracer, likelihood_options in zip(tracers, options['likelihoods']):
                 likelihood_options['stats'] = types.read(get_stats_fn(tracer))
-                
+
+        for likelihood_options in options['likelihoods']:
+            for observable_options in likelihood_options['observables']:
+                observable_options['emulator']['order'] = 2
         likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache')
-        likelihood = compile(likelihood)
-        print(likelihood.params.select(varied=True))
+        for param in get_params(likelihood).select(solved=True):
+            param.update(derived='best')
+        posterior = compile(Posterior(likelihood))
+        assert np.isfinite(posterior())
+        time_posterior(posterior)
         if template == 'direct':
-            assert 'h' in likelihood.params.select(varied=True)
+            assert 'h' in posterior.params.select(varied=True)
         elif template == 'shapefit':
-            assert 'df' in likelihood.params.select(varied=True)
+            assert 'df' in posterior.params.select(varied=True)
+        from desilike.profilers import MinuitProfiler
+        profiler = MinuitProfiler(posterior, seed=42)
+        profiler.maximize()
+        profiles = profiler.profiles
+        print(profiles.best)
+        print(profiles.to_stats(tablefmt='pretty'))
+        best = profiles.choice(index='argmax').select(input=True).best
+        compile(likelihood)(**best)
+        likelihood.likelihoods[0].observables[0].plot(fn='./_tests/plot.png')
 
 
 def test_likelihood_bao(save=False, load=False):
-    from desilike import compile
+    from desilike import compile, Posterior, get_params
 
     save_dir = Path('_save')
     stats_dir = Path('/dvs_ro/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/desipipe')
@@ -120,7 +150,7 @@ def test_likelihood_bao(save=False, load=False):
         for tracer, likelihood_options in zip(tracers, options['likelihoods']):
             get_stats(observables_options=likelihood_options['observables'], covariance_options=likelihood_options['covariance']).write(get_stats_fn(tracer))
 
-    for template in ['bao', 'direct']:
+    for template in ['bao', 'direct'][:1]:
         options = {'cosmology': {'template': template},
                    'likelihoods': [generate_likelihood_options_helper(stats=['recon_particle2_correlation'], tracer=tracer, version='data-dr2-v1.1', project='', stats_dir=stats_dir, emulator=template == 'direct') for tracer in tracers]}
         for likelihood_options in options['likelihoods']:
@@ -129,18 +159,24 @@ def test_likelihood_bao(save=False, load=False):
         if load:
             for tracer, likelihood_options in zip(tracers, options['likelihoods']):
                 likelihood_options['stats'] = types.read(get_stats_fn(tracer))
-        likelihood = compile(get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache', cache_mode='w'))
-        assert np.isfinite(likelihood())
+        likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache', cache_mode='w')
+        for param in get_params(likelihood).select(solved=True):
+            param.update(derived=False)
+        posterior = compile(Posterior(likelihood))
+        assert np.isfinite(posterior())
+        time_posterior(posterior)
+
         if template == 'direct':
-            assert 'h' in likelihood.params.select(varied=True)
+            assert 'h' in posterior.params.select(varied=True)
         else:
-            assert 'qpar' in likelihood.params.select(varied=True)
+            assert 'qpar' in posterior.params.select(varied=True)
             from desilike.profilers import MinuitProfiler
-            profiler = MinuitProfiler(likelihood, seed=42)
+            profiler = MinuitProfiler(posterior, seed=42)
             profiler.maximize()
             profiles = profiler.profiles
-            best = profiles.choice(index='argmax').best
-            likelihood(**{param: best[param] for param in profiles.params.select(varied=True)})
+            print(profiles.to_stats(tablefmt='pretty'))
+            best = profiles.choice(index='argmax', squeeze=True).select(input=True).best
+            compile(likelihood)(**best)
             likelihood.likelihoods[0].observables[0].plot(fn='./_tests/plot.png')
             likelihood.likelihoods[0].observables[0].plot_bao(fn='./_tests/plot_bao.png')
 
@@ -987,7 +1023,7 @@ def test_run_fit_from_options_resume_true_requires_existing_chains(monkeypatch, 
     monkeypatch.setattr('full_shape.run_fit.tools.write_options', lambda *args, **kwargs: None)
     monkeypatch.setattr('full_shape.run_fit.tools.get_sampler_cls', lambda name: object)
 
-    def fake_get_fits_fn(kind='chain', ichain=None, ext='npy', **kwargs):
+    def fake_get_fits_fn(kind='samples', ichain=None, ext='h5', **kwargs):
         filename = kind if ichain is None else f'{kind}_{ichain}'
         return tmp_path / f'{filename}.{ext}'
 
@@ -1003,8 +1039,8 @@ def test_run_fit_from_options_resume_true_requires_existing_chains(monkeypatch, 
 if __name__ == '__main__':
 
     setup_logging()
-    test_likelihood_bao(save=True, load=True)
-    #test_likelihood_full_shape(save=True, load=True)
+    test_likelihood_bao(load=True)
+    #test_likelihood_full_shape(load=True)
     #test_covariance()
     #test_str()
     #test_covariance()
