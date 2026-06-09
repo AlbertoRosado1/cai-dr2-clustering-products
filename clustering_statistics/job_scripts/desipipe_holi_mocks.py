@@ -76,10 +76,11 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
                            window_mesh3_spectrum={'ibatch': ibatch} if isinstance(ibatch, tuple) else {'computed_batches': ibatch})
             options = fill_fiducial_options(options, analysis=analysis)
             
-            for itracer in options['catalog']:
+            for i, itracer in enumerate(options['catalog']):
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
 
-                add_to_from_data = ['WEIGHT_' + weight.split('wsys-')[-1].upper()] if "wsys" in weight else []
+                if isinstance(weight, tuple): weight_tracer = weight[i]
+                add_to_from_data = ['WEIGHT_' + weight_tracer.split('wsys-')[-1].upper()] if "wsys" in weight_tracer else []
                 options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES'] + add_to_from_data}
 
                 if onthefly == 'complete':
