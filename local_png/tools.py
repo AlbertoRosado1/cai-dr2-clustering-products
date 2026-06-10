@@ -22,8 +22,8 @@ def read_data(data_dir='.', mocks_dir=None,
     logger.info(f'Reading the window with {window_extra=}')
     window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra=window_extra))
 
-    # remove the input theory with k>0.1 to avoid the artifact from Domitille FM window computation that bias the observed theory at large scales..
-    # still under investigation. However, this solution works.
+    # Domitille FM window computation add an artificat on the region k (input space) > k_Nyquist (observable space) that bias the convolved theory at large scales.. (see validation_window.ipynb).
+    # This k > k_Nyquist in the input space is irrelevant. Just remove it ! Here we keep only k < 0.1.
     window = window.at.theory.select(k=(1e-4,0.1))
 
     # Read the analytical covariance matrix:
