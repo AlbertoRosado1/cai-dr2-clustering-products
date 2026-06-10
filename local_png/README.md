@@ -26,6 +26,13 @@
     * Script: `https://github.com/cosmodesi/desi-clustering/blob/main/clustering_statistics/job_scripts/desipipe_holi_mocks.py`. 
     * There is a block (lines 149-156) you can uncomment that has the 'local_png' options (You can change `max_mocks_per_batch` to ~50 if only Pk measurements). 
     * To run with reshuffle, you just set `onthefly='reshuffle'`. 
+    * Note: I computed the ELGnotqso (and cross-correlation) with wsys-imlin with `job_scripts/desipipe_holi_mocks_edmond.py` 
+        * Saved in `$PSCRATCH/cai-dr2-benchmarks/`
+        * Copy those on CFS:
+```bash
+ssh -i $HOME/.ssh/desica desica@perlmutter.nersc.gov
+rsync -av /pscratch/sd/e/edmondc/cai-dr2-benchmarks/local_png/base/holi-v3-altmtl/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl
+```
 
 * PNG-Mocks: `/global/cfs/cdirs/desicollab/users/adrigut/PNGxHOD/dev_mocks/catalogs/DA2/v2.0/` (cutsky complete DR3 mocks)
    * Reference: Adame+26 (in CWR)
