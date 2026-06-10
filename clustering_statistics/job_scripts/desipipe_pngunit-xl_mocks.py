@@ -1,4 +1,8 @@
 """
+Power spectra for the PNGUNIT-XL mocks (local PNG key project), with optional
+shuffled-randoms RIC (radial integral constraint). Toggle it with SHUFFLE_RANDOMS
+below. This script computes P(k) only -- no window functions.
+
 Usage on NERSC:
     salloc -N 1 -C "gpu&hbm80g" -t 02:00:00 --gpus 4 --qos interactive --account desi_g
     source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
@@ -21,34 +25,25 @@ ANALYSIS = 'local_png'
 WEIGHT  = 'default-fkp-oqe'
 PROJECT = f'{ANALYSIS}/base'
 
-# --- which products to compute (toggle independently) ---
-WITH_WINDOW = False        # exact (wide-angle) window matrix, FKP/OQE weights (`window_mesh2_spectrum`)
-WITH_RIC    = False        # RIC correction to the window via the forward model (auto-enables WITH_WINDOW)
-
-# --- forward-model (RIC) window configuration ---
-ELLSOUT = None             # multipoles for the FM window; None -> use those of the spectrum (0, 2)
-N_REALIZATIONS = 10        # number of gaussian realizations for the forward model
-SEEDS = [85, 95, 75, 65, 91, 37, 46, 87, 19, 38]  # one seed per realization (matches fiducial defaults)
-FM_NRAN = 1                # randoms files for the FM read (full footprint -> memory heavy)
-FM_BATCH_SIZE = 3          # parallel window computations in the FM (lower if OOM)
+# --- shuffled-randoms (radial integral constraint) ---
+SHUFFLE_RANDOMS = True  # toggle: resample random redshifts from the mock-data n(z)
+SHUFFLE_SEED    = 42    # base RNG seed (reproducible for a fixed number of MPI ranks)
 
 
 def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, version=VERSION,
               project=PROJECT, analysis=ANALYSIS, weight=WEIGHT, nran_max=NRAN_MAX,
-              with_window=WITH_WINDOW, with_ric=WITH_RIC, ellsout=ELLSOUT,
-              n_realizations=N_REALIZATIONS, seeds=SEEDS, fm_nran=FM_NRAN,
-              fm_batch_size=FM_BATCH_SIZE):
-    """Per fNL: measure P(k) for each region (and, if `with_window`, the exact
-    wide-angle window), combine NGC+SGC -> GCcomb, then (if `with_ric`) compute
-    the forward-model window and add the RIC correction (combine seeds, then
-    combine regions). `with_ric` auto-enables the exact window since the RIC
-    combine reads it from disk.
+              shuffle_randoms=SHUFFLE_RANDOMS, shuffle_seed=SHUFFLE_SEED):
+    """Per fNL: measure P(k) for each region, then combine NGC+SGC -> GCcomb.
+    If `shuffle_randoms`, the random redshifts are resampled from the data within
+    each tracer's photometric sub-regions (radial integral constraint) before the
+    spectrum is measured.
     `tracer` may be a string (auto) or a 2-tuple (cross, e.g. ('LRG','QSO')).
     Self-contained: everything here runs on the compute nodes."""
     import os
     import functools
-    import itertools
     from pathlib import Path
+    import numpy as np
+    from mpi4py import MPI
     import jax
     from jax import config
     config.update('jax_enable_x64', True)
@@ -87,9 +82,10 @@ def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, version=VERSION,
 
     def make_get_catalog_fn(fnl):
         # tracer- AND region-aware: compute_stats passes the per-tracer `tracer` (and `nran`)
-        # in kwargs, and forces region='ALL' when reading the full footprint for the
-        # forward-model window. For 'ALL' we return the NGC and SGC files together; for a
-        # single region we return just that region's files.
+        # in kwargs, and reads region='ALL' (the full footprint) -- which the shuffling
+        # wrapper also uses to draw redshifts from the whole-footprint data. For 'ALL' we
+        # return the NGC and SGC files together; for a single region we return just that
+        # region's files.
         def get_catalog_fn(kind='data', **kwargs):
             tr = kwargs.get('tracer', tracers_t[0])
             reg = kwargs.get('region')
@@ -108,6 +104,68 @@ def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, version=VERSION,
             raise NotImplementedError(f'unsupported catalog kind {kind!r}')
         return get_catalog_fn
 
+    def make_shuffling_read_catalog(seed, regions_by_tracer, _base=tools.read_catalog):
+        # Wrap tools.read_catalog so that, when randoms are read, their redshifts are
+        # resampled from the mock data (the "shuffled randoms" radial integral constraint).
+        def _sample_data_to_randoms(randoms, data, rng, sub_regions):
+            # Reassign each random's REDSHIFT by drawing with replacement from the mock-data
+            # galaxies in the same `select_region` sub-region, so the randoms' radial
+            # selection matches the region-dependent mock-data n(z). 
+            if 'WEIGHT_FKP' in randoms and 'WEIGHT_FKP' not in data:
+                raise ValueError('Randoms carry WEIGHT_FKP but the mock data does not; cannot '
+                                 'keep the FKP weight consistent with the resampled redshift.')
+            do_fkp = ('WEIGHT_FKP' in randoms) and ('WEIGHT_FKP' in data)
+            randoms['Z'] = -randoms.ones()  # placeholder, overwritten below
+            assigned = np.zeros(randoms['RA'].size, dtype='?')
+            for region in sub_regions:
+                mask_data = tools.select_region(data['RA'], data['DEC'], region=region)
+                mask_randoms = tools.select_region(randoms['RA'], randoms['DEC'], region=region)
+                n_data, n_randoms = int(mask_data.sum()), int(mask_randoms.sum())
+                if n_randoms == 0 or n_data == 0:
+                    continue
+                index = rng.choice(n_data, size=n_randoms)
+                randoms['Z'][mask_randoms] = data['Z'][mask_data][index]
+                if do_fkp:
+                    randoms['WEIGHT_FKP'][mask_randoms] = data['WEIGHT_FKP'][mask_data][index]
+                assigned |= mask_randoms
+            if not assigned.all():  # catch any randoms outside the listed sub-regions
+                mask_randoms = ~assigned
+                index = rng.choice(data['Z'].size, size=int(mask_randoms.sum()))
+                randoms['Z'][mask_randoms] = data['Z'][index]
+                if do_fkp:
+                    randoms['WEIGHT_FKP'][mask_randoms] = data['WEIGHT_FKP'][index]
+            if np.any(randoms['Z'] == -1.):
+                raise ValueError('Placeholder z = -1. remains after reshuffling the randoms.')
+
+        def read_catalog(kind='data', **kw):
+            catalog = _base(kind=kind, **kw)
+            if kind != 'randoms':
+                return catalog
+            # this tracer's photometric sub-regions (from propose_photoregions)
+            tr = kw.get('tracer')
+            sub_regions = regions_by_tracer.get(tr, next(iter(regions_by_tracer.values())))
+            # Full data on every rank, drawn over the whole footprint (region='ALL').
+            data_kw = {k: v for k, v in kw.items() if k not in ('concatenate', 'mpicomm', 'kind')}
+            data = _base(kind='data', concatenate=True, mpicomm=MPI.COMM_SELF, **data_kw)
+            cats = catalog if isinstance(catalog, (list, tuple)) else [catalog]
+            for ifn, c in enumerate(cats):
+                rank = c.mpicomm.rank if hasattr(c, 'mpicomm') else 0
+                # per-(file, rank) seed: independent draws across ranks, reproducible
+                # for a fixed number of MPI ranks.
+                rng = np.random.RandomState(seed=seed + ifn + 7919 * rank)
+                _sample_data_to_randoms(c, data, rng, sub_regions)
+            return catalog
+        return read_catalog
+
+    read_catalog = tools.read_catalog
+    if shuffle_randoms:
+        # per-tracer photometric sub-regions from the fiducial `propose_photoregions`
+        # (LRG -> ['N', 'S'], QSO -> ['N', 'SnoDES', 'DES']); same source the data
+        # pipeline uses for the forward-model RIC (`ric_regions`).
+        shuffle_regions_by_tracer = {t: tools.propose_fiducial('window_mesh2_spectrum_fm', tracer=t)['ric_regions']
+                                     for t in tracers_t}
+        read_catalog = make_shuffling_read_catalog(shuffle_seed, shuffle_regions_by_tracer)
+
     for fnl in fnls:
         cache = {}
         # fNL goes into the directory (not `extra`): see module docstring. It is folded into the
@@ -117,67 +175,22 @@ def run_stats(tracer, bdir=BDIR, fnls=FNLS, regions=REGIONS, version=VERSION,
         get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project)
         get_catalog_fn = make_get_catalog_fn(fnl)
 
-        # --- Stage 1: power spectrum (+ exact wide-angle window), FKP/OQE weights ---
-        # The RIC forward model reads the analytical exact window from disk, so compute the
-        # window whenever the window OR the RIC correction is requested.
-        compute_window = with_window or with_ric
-        stage1_stats = ['mesh2_spectrum'] + (['window_mesh2_spectrum'] if compute_window else [])
+        # --- power spectrum P(k), FKP/OQE weights (randoms shuffled when SHUFFLE_RANDOMS) ---
         for region in regions:
             compute_stats_from_options(
-                stage1_stats, analysis=analysis, cache=cache,
+                ['mesh2_spectrum'], analysis=analysis, cache=cache,
                 get_catalog_fn=get_catalog_fn,
                 get_stats_fn=get_stats_fn,
+                read_catalog=read_catalog,  # shuffles random redshifts when SHUFFLE_RANDOMS
                 prepare_catalog=prepare_catalog,
                 catalog=dict(version=fnl_version, tracer=tracer, region=region,
                              zrange=zranges, nran=nran_scalar, weight=weight, FKP_P0=None),
             )
-        # combine NGC + SGC -> GCcomb (spectrum and, if computed, exact window)
+        # combine NGC + SGC -> GCcomb
         postprocess_stats_from_options(
             ['combine_regions'], analysis=analysis, get_stats_fn=get_stats_fn,
             catalog=dict(version=fnl_version, tracer=tracer, zrange=zranges, weight=weight),
-            combine_regions={'stats': stage1_stats, 'regions': regions},
-        )
-
-        if not with_ric:
-            continue
-
-        # --- Stage 2: RIC correction via the forward-model window ---
-        # The FM reads the FULL footprint over the tracer's total z-range; both come from the
-        # fiducial (handles the tuple-valued cross case for LRGxQSO automatically). ric_regions,
-        # ric_nbins, etc. are filled from the fiducial; we only override the run controls below.
-        total_region, total_zrange = tools.propose_fiducial('window_mesh2_spectrum_fm', tracer=tracer)['total_region_zrange']
-        spectrum_regions_zranges = list(itertools.product(regions, zranges))
-        fm_cache = {}
-        fm_options = dict(
-            geo=True, ric=True, amr=False, ellsout=ellsout,
-            n_realizations=n_realizations, seeds=seeds, batch_size=fm_batch_size,
-            spectrum_regions_zranges=spectrum_regions_zranges,
-        )
-        # writes per-seed 'geometry' and 'RIC' windows for each (region, zrange)
-        compute_stats_from_options(
-            ['window_mesh2_spectrum_fm'], analysis=analysis, cache=fm_cache,
-            get_catalog_fn=get_catalog_fn,
-            get_stats_fn=get_stats_fn,
-            prepare_catalog=prepare_catalog,
-            catalog=dict(version=fnl_version, tracer=tracer, region=total_region,
-                         zrange=total_zrange, nran=fm_nran, weight=weight, FKP_P0=None,
-                         keep_columns=['RA', 'DEC', 'Z', 'POSITION', 'NX', 'TARGETID', 'WEIGHT_FKP']),
-            window_mesh2_spectrum_fm=fm_options,
-        )
-
-        # combine seeds: RIC-corrected window = analytical exact window + mean(RIC - geometry), per region
-        for region in regions:
-            postprocess_stats_from_options(
-                ['combine_window_mesh2_spectrum'], analysis=analysis, get_stats_fn=get_stats_fn,
-                catalog=dict(version=fnl_version, tracer=tracer, region=region, zrange=zranges, weight=weight),
-                window_mesh2_spectrum_fm=dict(ellsout=ellsout, n_realizations=n_realizations, seeds=seeds),
-                combine_window_mesh2_spectrum={'effect': 'RIC'},
-            )
-        # combine NGC + SGC -> GCcomb for the RIC-corrected window (tagged extra='RIC')
-        postprocess_stats_from_options(
-            ['combine_regions'], analysis=analysis, get_stats_fn=get_stats_fn, extra='RIC',
-            catalog=dict(version=fnl_version, tracer=tracer, zrange=zranges, weight=weight),
-            combine_regions={'stats': ['window_mesh2_spectrum'], 'regions': regions},
+            combine_regions={'stats': ['mesh2_spectrum'], 'regions': regions},
         )
 
 
