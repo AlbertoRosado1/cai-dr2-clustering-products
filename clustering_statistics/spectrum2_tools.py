@@ -1291,6 +1291,11 @@ def compute_window_mesh2_spectrum_fm(
     # Input power spectrum may be computed in a single region only (NGC), so boxcenter is probably wrong
     mattrs = {name: spectra[0].attrs[name] for name in ["boxsize", "meshsize"]}
 
+    knyq = np.pi / mattrs["boxsize"] * mattrs["cellsize"]
+    if theory.get(0).edges("k").max() > knyq:
+        logger.info("Limiting theory k_max to mesh k_nyquist.")
+        theory = theory.select(k=(0.0, knyq))
+
     with create_sharding_mesh(meshsize=mattrs.get("meshsize", None)):
         if amr:  # Add photometric template values to the catalogs, if AMR is applied, as they are needed for the regression
             # _templates_paths_kwargs depends on the tracer, so do this before further changing get_data_randoms
