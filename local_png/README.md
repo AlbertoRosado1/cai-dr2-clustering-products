@@ -77,10 +77,13 @@ rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/des
 ```
 
 * PNG-Mocks: 
-<!-- ```bash
-cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/xxx
-rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/xxx/ .
-``` -->
+```bash
+cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl
+rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/n/nsailer/measurements/local_png/base/pngunit-xl .
+
+cd /Users/edmond/Work/data/desi-clustering/dr2/profiles/local_png/base/pngunit-xl
+rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/n/nsailer/profiles/local_png/base/pngunit-xl .
+```
 
 ### Upload data on NERSC:
 
@@ -90,6 +93,7 @@ First upload from my machine to SCRATCH:
 ```bash
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl
+rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/profiles/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/profiles
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/chains/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/chains
 ```
@@ -105,8 +109,8 @@ ssh -i $HOME/.ssh/desica desica@perlmutter.nersc.gov
 Then rsync the Scratch to CFS:
 ```bash
 rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
+rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl
 
 rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/profiles/local_png/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/profiles/local_png/
-
 rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/chains/local_png/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/chains/local_png/
 ```
