@@ -590,7 +590,7 @@ def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\r
         plt.show()
 
 
-def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, analytical_covariance=True, 
+def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mocks=None, kmin=1e-3, analytical_covariance=True, 
                            force_profiling=False, base_dir=None, fiducial=None, extra_fn='', return_profiler=False):
     """Run the profiler on a single mock realisation and save the result to disk.
 
@@ -631,6 +631,9 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
             mocks_tt = mocks[tt].copy()  # Avoid modifying the original mock observable.
 
             pk = mocks_tt.pop(imock).select(k=(kmin, 1))  # remove the used mock from the covariance matrix.
+            if (alternative_mocks is not None) and (tt in alternative_mocks) and (alternative_mocks[tt] is not None):
+                # use an alternative mock for the fit, but keep the covariance from the original mocks.
+                pk = alternative_mocks[tt].copy().pop(imock).select(k=(kmin, 1))  
             pks[tt] = pk
             
             window = windows[tt].at.observable.match(pk)
@@ -646,7 +649,13 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
             obs[tt], lik[tt] = get_observable_and_likelihood(pk, window, covariance, tt, zeffs, engine='camb', fix_fnl=False, nickname=tt, **kwargs)
 
         if len(tracers) > 1:
-            lik = build_total_likelihood(tracers, pks, obs, covs if analytical_covariance else mocks, zeffs, fiducial)
+            # remove the used mock from the covariance matrix:
+            mocks_cov = {}
+            for tt in tracers:
+                tmp = mocks[tt].copy()
+                tmp.pop(imock)
+                mocks_cov[tt] = tmp
+            lik = build_total_likelihood(tracers, pks, obs, covs if analytical_covariance else mocks_cov, zeffs, fiducial)
         else:
             obs, lik = obs[tracers[0]], lik[tracers[0]]
 
