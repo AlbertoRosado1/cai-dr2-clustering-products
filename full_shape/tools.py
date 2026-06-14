@@ -73,11 +73,11 @@ def get_cosmology(cosmology_options: dict=None):
     params = VariableCollection()
     params.set(Parameter('h', value=fiducial['h'],
                             prior=dict(limits=[0.5, 0.9]),
-                            ref=dict(dist='norm', loc=fiducial['h'], scale=0.05),
+                            ref=dict(dist='norm', loc=fiducial['h'], scale=0.01),
                             fd_eps=0.03, latex='h'))
     params.set(Parameter('omega_b', value=fiducial['omega_b'],
                             prior=dict(dist='norm', loc=0.02237, scale=0.00037),
-                            ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.001),
+                            ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.0003),
                             fd_eps=0.0015, latex=r'\omega_b'))
     params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
                             prior=dict(limits=[0.05, 0.2]),
@@ -89,7 +89,7 @@ def get_cosmology(cosmology_options: dict=None):
                             fd_eps=0.05, latex=r'\ln(10^{10}A_s)'))
     params.set(Parameter('n_s', value=fiducial['n_s'],
                             prior=dict(limits=[0.7, 1.3]),
-                            ref=dict(dist='norm', loc=fiducial['n_s'], scale=0.01),
+                            ref=dict(dist='norm', loc=fiducial['n_s'], scale=0.1),
                             fd_eps=0.005, latex='n_s'))
     params.set(Parameter('m_ncdm', value=fiducial['m_ncdm'], fixed=True,
                             prior=dict(limits=[0., 5.]),
@@ -292,7 +292,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True
             if ref is not None and 'ref' not in config:
                 config['ref'] = ref
         if marg:
-            for param in params.select(basename=['alpha*', 'sn*', 'c*']):
+            for param in params.select(basename=['alpha*', 'sn*']):
                 param.update(derived='marg')
         if user_params:
             configs = configs | user_params
@@ -366,10 +366,8 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, b3_coev=b3_coev, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'mesh3_spectrum' in stat:
         if theory_options['model'] in ['folpsD', 'folpsEFT']:
-            A_full = theory_options.get('A_full', True)
-            pt = FOLPSPTSpectrum2Poles(A_full=A_full)
-            kw = {name: theory_options[name] for name in ['damping'] if name in theory_options}
-            theory = FOLPSTracerSpectrum3Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
+            kw = {name: theory_options[name] for name in ['damping', 'A_full'] if name in theory_options}
+            theory = FOLPSTracerSpectrum3Poles(template=template, tracers=tracers, **kw, **theory_options.get('options', {}))
             sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
             prior_basis = theory_options.get('prior_basis', 'physical')
             theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
@@ -378,9 +376,9 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
         if kw['mode'] is None: kw['mode'] = ''  # no reconstruction
         kw['broadband'] = theory_options.get('broadband', 'pcs2')
-        pt = DampedBAOWigglesPTSpectrum2Poles()
-        theory = DampedBAOWigglesTracerCorrelation2Poles(pt=pt, **kw, ells=[0, 2, 4])
-        theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=kw['mode'], tracer=tracers, marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
+        theory = DampedBAOWigglesTracerCorrelation2Poles(**kw, ells=[0, 2, 4])
+        # FIXME level=2
+        theory.update(params=update_theory_nuisance_priors(get_params(theory, level=2), theory_options['model'], stat, prior_basis=kw['mode'], tracer=tracers, marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
     if theory is None:
         raise ValueError(f'theory not found for {stat} and {repr(theory_options)}')
     return theory
@@ -983,13 +981,12 @@ def rebin_spectrum3_window(window, data=None):
     tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window.theory)
     rebin = int(ostep / tstep)
     assert rebin >= 1
-    # First rebin to observable binning
-    rebin1 = rebinning_matrix(window.theory, new_coords=window.theory.select(k=slice(0, None, rebin)),
-                                interp_order=3, diag=None)
-    # Then compact non-diagonal term
-    rebin2 = rebinning_matrix(rebin1.theory, new_coords=window.theory.select(k=slice(0, None, 2)),
-                                interp_order=3, diag='separate')
-    window = window.clone(value=window.value() @ rebin1.value() @ rebin2.value(), theory=rebin2.theory)
+    print(rebin)
+    window = window.at.theory.select(k=slice(0, None, rebin))
+    # Compact non-diagonal term
+    rebin = rebinning_matrix(window.theory, new_coords=window.theory.select(k=slice(0, None, 2)),
+                             interp_order=3, diag='separate')
+    window = window.clone(value=window.value() @ rebin.value(), theory=rebin.theory)
     return window
 
 
@@ -1136,15 +1133,15 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
 
 def get_sampler_cls(name):
     """Return sampler class."""
-    from desilike.samplers import EmceeSampler, MetropolisHastingsSampler, PocoMCSampler
-    translate = {'emcee': EmceeSampler, 'mcmc': MetropolisHastingsSampler, 'pocomc': PocoMCSampler}
+    from desilike.samplers import Emcee, Zeus, MH, PocoMC, Nautilus, BlackjaxNUTS, NumpyroNUTS, NumpyroBarkerMH
+    translate = {'emcee': Emcee, 'zeus': Zeus, 'mh': MH, 'pocomc': PocoMC, 'nautilus': Nautilus, 'nuts': BlackjaxNUTS, 'numpyro_nuts': NumpyroNUTS, 'numpyro_barker': NumpyroBarkerMH}
     return translate[name.lower()]
 
 
 def get_profiler_cls(name):
     """Return profiler class."""
-    from desilike.profilers import MinuitProfiler
-    translate = {'minuit': MinuitProfiler}
+    from desilike.profilers import Minuit
+    translate = {'minuit': Minuit}
     return translate[name.lower()]
 
 
@@ -1155,8 +1152,8 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
                         'theory': {},
                         'emulator': {'name': 'taylor', 'order': 3},
                         'window': {}}
-    propose_stat = {'mesh2_spectrum': {'select': [{'ells': ell, 'k': [0.02, 0.2, 0.005]} for ell in [0, 2]]},
-                    'mesh3_spectrum': {'select': [{'ells': (0, 0, 0), 'k': [0.02, 0.12, 0.005]}, {'ells': (2, 0, 2), 'k': [0.02, 0.08, 0.005]}],
+    propose_stat = {'mesh2_spectrum': {'select': [{'ells': ell, 'k': [0.02, 0.2, 0.01]} for ell in [0, 2]]},
+                    'mesh3_spectrum': {'select': [{'ells': (0, 0, 0), 'k': [0.02, 0.12, 0.01]}, {'ells': (2, 0, 2), 'k': [0.02, 0.08, 0.01]}],
                                         'basis': 'sugiyama-diagonal'},
                    'recon_particle2_correlation': {'select': [{'ells': ell, 's': [60., 150., 4.]} for ell in [0, 2]]}}
     base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'damping': 'lor', 'marg': True}
@@ -1185,10 +1182,49 @@ def propose_fiducial_sampler_options(sampler=None):
     """Return dictionary of default sampler configuration."""
     if sampler is None:
         sampler = 'emcee'
-    init = {}
-    if sampler == 'mcmc':
-        init['oversample_power'] = 0
-    fiducial_options = {'sampler': sampler, 'init': init, 'run': {'check': {'max_eigen_gr': 0.03}}, 'nchains': 1}
+    init, run = {}, {}
+    init['rng'] = 42
+    if sampler in ['emcee', 'zeus', 'mhmcmc', 'nuts', 'numpyro_nuts', 'numpyro_barker']:
+        init['nparallel'] = 4
+        run['min_steps'] = 50
+        run['gelman_rubin'] = 1.05
+        run['ess'] = 400
+    if sampler in ['emcee']:
+        init['batch_size'] = 16
+        run['thinning'] = 5
+    if sampler in ['nuts']:
+        init['rescale'] = True
+        init['step_size'] = 0.1
+        #run['adaptation'] = dict(initial_step_size=0.01, target_acceptance_rate=0.8, steps=1000, is_mass_matrix_diagonal=False)
+        run['adaptation'] = dict(initial_step_size=0.01, target_acceptance_rate=0.8, steps=1000, is_mass_matrix_diagonal=False)
+    if sampler in ['numpyro_nuts', 'numpyro_barker']:
+        init['rescale'] = True
+        init['step_size'] = 0.1
+        run['adaptation'] = dict(steps=500, dense_mass=True)
+    if sampler in ['mhmcmc']:
+        run['check_every'] = 1000
+    if sampler in ['nautilus']:
+        init['rescale'] = True
+        init['n_live'] = 1000
+        run['n_eff'] = 200
+        run['verbose'] = True
+    if sampler in ['pocomc']:
+        init['batch_size'] = 64 
+        # Default settings
+        #init['n_effective'] = 512
+        #init['n_active'] = 256
+        #run['n_total'] = 4096  # ESS
+        # n_effective *and* n_active must be high enough to get the tails right
+        # rescale helps (in case variations of one parameter are much smaller than the others)
+        init['rescale'] = True
+        init['n_effective'] = 1024
+        init['n_active'] = 512
+        #init['n_effective'] = 2048
+        #init['n_active'] = 1024
+        init['flow'] = 'nsf6'  # default
+        #init['train_config'] = {'epochs': 10000, 'patience': 50, 'batch_size': 512, 'learning_rate': 1e-3}
+        run['n_total'] = 2048  # ESS
+    fiducial_options = {'sampler': sampler, 'init': init, 'run': run}
     return fiducial_options
 
 
@@ -1626,7 +1662,7 @@ def str_from_options(options: dict, level: int | dict=None):
     return '_'.join(out_str)
 
 
-def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', kind='samples', likelihoods: list=None,
+def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', kind='chain', likelihoods: list=None,
                 sampler: dict=None, profiler: dict=None, cosmology: dict=None, ichain: int=None,
                 level=None, extra='', ext='h5'):
     """

@@ -72,11 +72,11 @@ def time_posterior(posterior):
     import jax
     n = 10
     key = jax.random.key(42)
-    samples = {param.name: param.ref.sample(key, shape=n + 1) for param in posterior.params.select(varied=True)}
+    samples = {param.name: param.ref.sample(key, shape=n + 2) for param in posterior.params.select(varied=True)}
     posterior = jax.jit(posterior)
-    for i in range(n + 1):
+    for i in range(n + 2):
         jax.block_until_ready(posterior(**{name: sample[i] for name, sample in samples.items()}))
-        if i == 0:
+        if i == 1:
             t0 = time.time()
     print((time.time() - t0) / n)
 
@@ -85,11 +85,12 @@ def test_likelihood_full_shape(save=False, load=False):
     from desilike import compile, Posterior, get_params
     options = {}
     tracers = ['LRG2', 'LRG3'][:1]
-    options['likelihoods'] = [generate_likelihood_options_helper(tracer=tracer) for tracer in tracers]
+    options['likelihoods'] = [generate_likelihood_options_helper(stats=['mesh2_spectrum', 'mesh3_spectrum'], tracer=tracer) for tracer in tracers]
     save_dir = Path('_save')
 
     def get_stats_fn(tracer):
         return save_dir / f'likelihood_full_shape_{tracer}.h5'
+    load = False
 
     if save:
         save_dir.mkdir(exist_ok=True)
@@ -99,7 +100,7 @@ def test_likelihood_full_shape(save=False, load=False):
             stats = get_stats(observables_options=likelihood_options['observables'], covariance_options=likelihood_options['covariance'])
             stats.write(get_stats_fn(tracer=tracer))
 
-    for template in ['direct', 'shapefit']:
+    for template in ['direct', 'shapefit'][:1]:
         options['cosmology'] = {'template': template}
         options = fill_fiducial_options(options)
         if load:
@@ -110,26 +111,81 @@ def test_likelihood_full_shape(save=False, load=False):
             for observable_options in likelihood_options['observables']:
                 observable_options['emulator']['order'] = 2
         likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache')
+        print(get_params(likelihood).select(solved=True))
         #for param in get_params(likelihood).select(solved=True):
         #    param.update(derived='best')
         posterior = compile(Posterior(likelihood))
         assert np.isfinite(posterior())
         time_posterior(posterior)
+
         if template == 'direct':
             assert 'h' in posterior.params.select(varied=True)
         elif template == 'shapefit':
             assert 'df' in posterior.params.select(varied=True)
-        from desilike.profilers import MinuitProfiler
-        profiler = MinuitProfiler(posterior, seed=42)
+        from desilike.profilers import Profiler, Minuit
+        profiler = Profiler(posterior, kernel=Minuit(), rng=42)
         profiler.maximize()
         profiles = profiler.profiles
-        print(profiles.best)
         print(profiles.to_stats(tablefmt='pretty'))
-        best = profiles.choice(index='argmax').select(input=True).best
+        best = profiles.choice(index='argmax', squeeze=True).select(input=True).best
         compile(likelihood)(**best)
         likelihood.likelihoods[0].observables[0].plot(fn='./_tests/plot.png')
 
 
+
+def test_likelihood_full_shape(save=False, load=False):
+    from desilike import compile, Posterior, get_params
+    options = {}
+    tracers = ['LRG2', 'LRG3'][:1]
+    options['likelihoods'] = [generate_likelihood_options_helper(stats=['mesh2_spectrum', 'mesh3_spectrum'], tracer=tracer) for tracer in tracers]
+    save_dir = Path('_save')
+
+    def get_stats_fn(tracer):
+        return save_dir / f'likelihood_full_shape_{tracer}.h5'
+    load = False
+
+    if save:
+        save_dir.mkdir(exist_ok=True)
+        options['cosmology'] = {'template': 'direct'}
+        options = fill_fiducial_options(options)
+        for tracer, likelihood_options in zip(tracers, options['likelihoods']):
+            stats = get_stats(observables_options=likelihood_options['observables'], covariance_options=likelihood_options['covariance'])
+            stats.write(get_stats_fn(tracer=tracer))
+
+    for template in ['direct', 'shapefit'][:1]:
+        options['cosmology'] = {'template': template}
+        options = fill_fiducial_options(options)
+        if load:
+            for tracer, likelihood_options in zip(tracers, options['likelihoods']):
+                likelihood_options['stats'] = types.read(get_stats_fn(tracer))
+
+        for likelihood_options in options['likelihoods']:
+            for observable_options in likelihood_options['observables']:
+                observable_options['emulator']['order'] = 2
+        likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache')
+        #print(get_params(likelihood).select(solved=True))
+        for param in get_params(likelihood).select(solved=True):
+            param.update(derived='best')
+        posterior = compile(Posterior(likelihood))
+        assert np.isfinite(posterior())
+        time_posterior(posterior)
+
+        if template == 'direct':
+            assert 'h' in posterior.params.select(varied=True)
+        elif template == 'shapefit':
+            assert 'df' in posterior.params.select(varied=True)
+        from desilike.profilers import Profiler, Minuit
+        profiler = Profiler(posterior, kernel=Minuit(), rng=42)
+        profiler.maximize()
+        profiles = profiler.profiles
+        print(profiles.to_stats(tablefmt='pretty'))
+        best = profiles.choice(index='argmax', squeeze=True).select(input=True).best
+        compile(likelihood)(**best)
+        likelihood.likelihoods[0].observables[0].plot(fn='./_tests/plot.png')
+
+
+
+    
 def test_likelihood_bao(save=False, load=False):
     from desilike import compile, Posterior, get_params
 
@@ -161,7 +217,7 @@ def test_likelihood_bao(save=False, load=False):
                 likelihood_options['stats'] = types.read(get_stats_fn(tracer))
         likelihood = get_likelihood(options['likelihoods'], cosmology_options=options['cosmology'], cache_dir='./_cache', cache_mode='w')
         for param in get_params(likelihood).select(solved=True):
-            param.update(derived=False)
+            param.update(derived='best')
         posterior = compile(Posterior(likelihood))
         assert np.isfinite(posterior())
         time_posterior(posterior)
@@ -1040,7 +1096,7 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_likelihood_bao(load=True)
-    test_likelihood_full_shape(load=True)
+    test_likelihood_full_shape(load=False)
     #test_covariance()
     #test_str()
     #test_covariance()

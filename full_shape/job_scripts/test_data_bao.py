@@ -36,7 +36,7 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', stats_dir
     template = 'bao'
     options = {}
     # use post-reconstruction correlation function
-    options['likelihoods'] = [generate_likelihood_options_helper(stats=['recon_particle2_correlation'], tracer=tracer, version=data, stats_dir=stats_dir, emulator=template == 'direct')]
+    options['likelihoods'] = [generate_likelihood_options_helper(stats=['recon_particle2_correlation'], tracer=tracer, version=data, stats_dir=stats_dir, project='', emulator=template == 'direct')]
     for likelihood_options in options['likelihoods']:
         # rascalc = analytical covariance
         likelihood_options['covariance'] = {'source': 'rascalc', 'version': 'data-dr2-v1.1', 'stats_dir': stats_dir}
@@ -48,10 +48,12 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', stats_dir
     likelihood = get_likelihood(likelihoods_options=options['likelihoods'],
                                 cosmology_options=options['cosmology'], cache_dir=None)
     fn = get_fits_fn(kind='profiles', **options)
+    from desilike import compile
     from desilike.samples import Profiles
-    profiles = Profiles.load(fn)
-    # evaluate likelihood at dictionary of parameters
-    likelihood(**profiles.bestfit.choice(input=True, index='argmax'))
+    profiles = Profiles.read(fn)
+    # Evaluate likelihood at dictionary of parameters
+    best = profiles.choice(index='argmax', squeeze=True).select(input=True).best
+    compile(likelihood)(**best)
     likelihood.likelihoods[0].observables[0].plot(fn=f'./_tests/plot_{tracer}.png')
     likelihood.likelihoods[0].observables[0].plot_bao(fn=f'./_tests/plot_bao_{tracer}.png')
 

@@ -126,8 +126,8 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 if __name__ == '__main__':
 
     stats, postprocess = [], []
-    version = 'abacus-hf-dr2-v2-altmtl'
-    # version = 'glam-uchuu-v2-altmtl'
+    # version = 'abacus-hf-dr2-v2-altmtl'
+    version = 'glam-uchuu-v2-altmtl'
     # version = 'abacus-2ndgen-dr2-complete'
     # version = 'abacus-2ndgen-dr2-altmtl'
     # version = 'data-dr2-v2'
@@ -148,17 +148,17 @@ if __name__ == '__main__':
     # run fiducial full_shape
     #tracers = ['LRG', 'ELG', 'QSO']
     #tracers = ['ELG', 'LRG']
-    #tracers = ['ELG']
+    tracers = ['ELG', 'QSO']
     #tracers = ['QSO']
 
     # run BGS
-    version = 'abacus-2ndgen-dr2-altmtl'
+    #version = 'abacus-2ndgen-dr2-altmtl'
     #tracers = ['BGS_BRIGHT']
-    tracers = ['BGS_BRIGHT-02']
+    #tracers = ['BGS_BRIGHT-02']
     #tracers = ['BGS_ANY-02']
 
     # run data_splits for lensing group with full_shape setup 
-    #stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
@@ -167,8 +167,8 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
     #stats = ['mesh2_spectrum', 'close_pair_correction']
-    stats = ['particle3_correlation'][:0]
-    postprocess = ['combine_regions']
+    #stats = ['particle3_correlation'][:0]
+    postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
     project = f'{analysis}/fiber_assignment_systematics'
