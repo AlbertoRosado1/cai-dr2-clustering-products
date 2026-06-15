@@ -1193,30 +1193,31 @@ def propose_fiducial_sampler_options(sampler=None):
         init['batch_size'] = 16
         run['thinning'] = 5
     if sampler in ['nuts']:
-        init['rescale'] = True
+        init['rescale'] = 'diag'
         init['step_size'] = 0.1
         #run['adaptation'] = dict(initial_step_size=0.01, target_acceptance_rate=0.8, steps=1000, is_mass_matrix_diagonal=False)
         run['adaptation'] = dict(initial_step_size=0.01, target_acceptance_rate=0.8, steps=1000, is_mass_matrix_diagonal=False)
     if sampler in ['numpyro_nuts', 'numpyro_barker']:
-        init['rescale'] = True
+        init['rescale'] = 'diag'
         init['step_size'] = 0.1
         run['adaptation'] = dict(steps=500, dense_mass=True)
     if sampler in ['mhmcmc']:
         run['check_every'] = 1000
     if sampler in ['nautilus']:
-        init['rescale'] = True
+        init['rescale'] = 'diag'
         init['n_live'] = 1000
         run['n_eff'] = 200
         run['verbose'] = True
     if sampler in ['pocomc']:
-        init['batch_size'] = 64 
+        init['batch_size'] = 32
         # Default settings
         #init['n_effective'] = 512
         #init['n_active'] = 256
         #run['n_total'] = 4096  # ESS
         # n_effective *and* n_active must be high enough to get the tails right
         # rescale helps (in case variations of one parameter are much smaller than the others)
-        init['rescale'] = True
+        init['rescale'] = 'diag'
+        #init['prior'] = 2.
         init['n_effective'] = 1024
         init['n_active'] = 512
         #init['n_effective'] = 2048

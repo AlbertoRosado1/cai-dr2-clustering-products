@@ -142,14 +142,16 @@ if __name__ == '__main__':
     if version == 'glam-uchuu-v2-altmtl':
         check_for_existing_measurements = True
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
+        #imocks = [imock for imock in imocks if imock >= 174]
 
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
     #tracers = ['LRG', 'ELG', 'QSO']
     #tracers = ['ELG', 'LRG']
-    tracers = ['ELG', 'QSO']
-    #tracers = ['QSO']
+    #tracers = ['LRG']
+    #tracers = ['ELG', 'QSO'][:1]
+    tracers = ['LRG', 'QSO']
 
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'
@@ -158,7 +160,7 @@ if __name__ == '__main__':
     #tracers = ['BGS_ANY-02']
 
     # run data_splits for lensing group with full_shape setup 
-    stats = ['mesh2_spectrum', 'mesh3_spectrum']
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
@@ -166,7 +168,7 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    #stats = ['mesh2_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'close_pair_correction']
     #stats = ['particle3_correlation'][:0]
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
@@ -181,14 +183,14 @@ if __name__ == '__main__':
     #regions = ['SGCnoDES', 'DES']
     max_mocks_per_batch = 5
 
-    #onthefly = None
+    onthefly = None
     #onthefly = 'complete-nozfail'
     #onthefly = 'complete-renorm'
     #onthefly = 'complete-downsample'
     #onthefly = 'complete-samenz'
     #onthefly = 'complete-fixnz'
     #onthefly = 'complete-fibered'
-    onthefly = 'complete'
+    #onthefly = 'complete'
     #onthefly = 'altmtl'
     
     for tracer in tracers:

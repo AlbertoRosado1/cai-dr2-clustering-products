@@ -99,14 +99,25 @@ def run_fit_from_options(actions,
             if kw.get('rescale', False):
                 profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
                 best, error, covariance = profiles.best, profiles.error, profiles.covariance
-                #kw['covariance'] = covariance
+                kw['covariance'] = covariance
                 #error = {param: covariance.std(param) for param in covariance.names()}
                 for param in get_params(likelihood_sampler):
-                    if param.name in profiles.covariance.names():
+                    if param.name in error:
                         param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
-                        print(param, param.ref)
+            if kw.get('prior', None) is not None:
+                profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
+                kw['prior'] = kw['prior'] * profiles.covariance
             posterior = compile(Posterior(likelihood_sampler))
-            kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance', 'nparallel', 'batch_size']})
+            kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance', 'nparallel', 'prior', 'batch_size']})
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "error",
+                    message="invalid value encountered in divide",
+                    category=RuntimeWarning,
+                )
+                sampler = Sampler(posterior, kernel=kernel, output_dir=output_dir, **kw)
+                sampler.run(**sampler_options.get('run', {}))
             sampler = Sampler(posterior, kernel=kernel, output_dir=output_dir, **kw)
             sampler.run(**sampler_options.get('run', {}))
         else:
