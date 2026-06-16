@@ -154,7 +154,7 @@ def _get_default_ref_from_prior(prior, value=None):
     return None
 
 
-def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution='b3', tracer=None, sigma8_fid=1., marg=False, ells=None, user_params=None):
+def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution='', tracer=None, marg=False, ells=None, user_params=None):
     """
     Apply default nuisance-parameter priors to a VariableCollection in-place.
 
@@ -171,8 +171,6 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
         Any other value uses the standard Eulerian basis (b1, b2, ...).
     coevolution : str
         If b3 in string, fix b3 to its co-evolution value.
-    sigma8_fid : float, optional
-        Fiducial sigma_8(z_eff), used as prior centre in the physical basis.
     marg : bool, optional
         If True, set counter-term and shot-noise parameters to ``derived='marg'``.
     user_params : dict, optional
@@ -223,9 +221,35 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
     else:
         if 'physical' in prior_basis:
             # ── Bias parameters ───────────────────────────────────────────────
+            # These are the default values in desilike, we just repeat them for clarity
             if 'mesh2_spectrum' in stat:
+                configs.update({
+                    'b1p': {'value': 1.5, 'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0.1, 8.]}},
+                    'b2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'bsp': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'b3p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+                    'alpha0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
+                    'alpha2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
+                    'alpha4p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
+                    'ctp': {'value': 0., 'fixed': True, 'prior': {}},
+                    'X_FoGp': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
+                    'sn0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
+                    'sn2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 5.}},
+                })
                 if 'b3' in coevolution:
                     configs['b3p'] = {'fixed': True, 'value': 0.}
+            elif 'mesh3_spectrum' in stat:
+                configs.update({
+                    'b1p': {'value': 1.5, 'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0.1, 8.]}},
+                    'b2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'bsp': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'c1p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+                    'c2p': {'value': 0., 'fixed': True, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'sn0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
+                    'snb0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+                    'X_FoGp': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
+                })
+                
         # ── FoG damping ───────────────────────────────────────────────────
         if 'EFT' in model.upper():
             configs['X_FoG'] = {'fixed': True}
@@ -266,6 +290,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     from desilike.theories.galaxy_clustering import (DirectSpectrum2Template, ShapeFitSpectrum2Template, BAOSpectrum2Template,
         REPTVelocileptorsTracerSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSPTSpectrum2Poles,
         FOLPSTracerSpectrum3Poles, DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles)
+    from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
     from desilike.base import params as get_params
     theory_options = dict(theory_options)
     fiducial = get_fiducial()
@@ -301,14 +326,16 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             kw = {name: theory_options[name] for name in ['damping', 'prior_basis'] if name in theory_options}
             theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
             prior_basis = kw.get('prior_basis', 'physical')
-            coevolution = kw.get('coevolution', 'b3')
-            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            coevolution = kw.get('coevolution', '')
+            kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
+            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'mesh3_spectrum' in stat:
         if theory_options['model'] in ['folpsD', 'folpsEFT']:
             kw = {name: theory_options[name] for name in ['damping', 'A_full'] if name in theory_options}
             theory = FOLPSTracerSpectrum3Poles(template=template, tracers=tracers, **kw, **theory_options.get('options', {}))
             prior_basis = theory_options.get('prior_basis', 'physical')
-            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
+            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'recon_particle2_correlation' in stat:
         kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
@@ -1113,7 +1140,7 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
                    'recon_particle2_correlation': {'select': [{'ells': ell, 's': [60., 150., 4.]} for ell in [0, 2]]}}
     base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'damping': 'lor', 'marg': True}
     base_bao_theory = {'model': 'bao', 'broadband': 'pcs2', 'marg': True}
-    propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'coevolution': 'b3', 'A_full': False},
+    propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'coevolution': '', 'A_full': False},
                       'mesh3_spectrum': base_full_shape_theory | {'A_full': False},
                       'recon_particle2_correlation': base_bao_theory}
     for _stat in propose_stat:
