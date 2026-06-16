@@ -142,7 +142,7 @@ if __name__ == '__main__':
     if version == 'glam-uchuu-v2-altmtl':
         check_for_existing_measurements = True
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
-        #imocks = [imock for imock in imocks if imock >= 174]
+        imocks = [imock for imock in imocks if imock < 168]
 
     stats_dir = tools.base_stats_dir
 

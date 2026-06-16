@@ -72,28 +72,32 @@ def get_cosmology(cosmology_options: dict=None):
 
     params = VariableCollection()
     params.set(Parameter('h', value=fiducial['h'],
-                            prior=dict(limits=[0.5, 0.9]),
+                            prior=dict(limits=[0.2, 1.0]),
                             ref=dict(dist='norm', loc=fiducial['h'], scale=0.01),
                             fd_eps=0.03, latex='h'))
     params.set(Parameter('omega_b', value=fiducial['omega_b'],
-                            prior=dict(dist='norm', loc=0.02237, scale=0.00037),
+                            prior=dict(dist='norm', loc=0.02237, scale=0.00055),
                             ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.0003),
                             fd_eps=0.0015, latex=r'\omega_b'))
     params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
-                            prior=dict(limits=[0.05, 0.2]),
+                            prior=dict(limits=[0.01, 0.99]),
                             ref=dict(dist='norm', loc=fiducial['omega_cdm'], scale=0.005),
                             fd_eps=0.01, latex=r'\omega_\mathrm{cdm}'))
     params.set(Parameter('logA', value=fiducial['logA'],
-                            prior=dict(limits=[2., 4.]),
+                            prior=dict(limits=[1.61, 3.91]),
                             ref=dict(dist='norm', loc=fiducial['logA'], scale=0.1),
                             fd_eps=0.05, latex=r'\ln(10^{10}A_s)'))
     params.set(Parameter('n_s', value=fiducial['n_s'],
-                            prior=dict(limits=[0.7, 1.3]),
+                            prior=dict(dist='norm', loc=0.9649, scale=0.042),
                             ref=dict(dist='norm', loc=fiducial['n_s'], scale=0.1),
                             fd_eps=0.005, latex='n_s'))
-    params.set(Parameter('m_ncdm', value=fiducial['m_ncdm'], fixed=True,
+    params.set(Parameter('m_ncdm', value=fiducial['m_ncdm_tot'], fixed=True,
                             prior=dict(limits=[0., 5.]),
-                            ref=dict(dist='norm', loc=0.06, scale=0.12, limits=[0., 10.]),
+                            ref=dict(dist='norm', loc=fiducial['m_ncdm_tot'], scale=0.12, limits=[0., 10.]),
+                            fd_eps=(0.31, 0.15, 0.15), latex=r'm_\mathrm{ncdm}'))
+    params.set(Parameter('N_ur', value=fiducial['N_ur'], fixed=True,
+                            prior=dict(limits=[0.05, 10.]),
+                            ref=dict(dist='norm', loc=fiducial['N_ur'], scale=0.2, limits=[0., 10.]),
                             fd_eps=(0.31, 0.15, 0.15), latex=r'm_\mathrm{ncdm}'))
     params.set(Parameter('w0_fld', value=fiducial['w0_fld'], fixed=True,
                             prior=dict(limits=[-3., 1.]),
@@ -150,7 +154,7 @@ def _get_default_ref_from_prior(prior, value=None):
     return None
 
 
-def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True, tracer=None, sigma8_fid=1., marg=False, ells=None, user_params=None):
+def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution='b3', tracer=None, sigma8_fid=1., marg=False, ells=None, user_params=None):
     """
     Apply default nuisance-parameter priors to a VariableCollection in-place.
 
@@ -165,8 +169,8 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True
     prior_basis : str
         'physical' or 'physical_aap' uses physical bias parameters (b1p, b2p,...).
         Any other value uses the standard Eulerian basis (b1, b2, ...).
-    b3_coev : bool
-        Fix b3 to its co-evolution value.
+    coevolution : str
+        If b3 in string, fix b3 to its co-evolution value.
     sigma8_fid : float, optional
         Fiducial sigma_8(z_eff), used as prior centre in the physical basis.
     marg : bool, optional
@@ -217,82 +221,18 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, b3_coev=True
             for param in params.select(basename='dbeta'):
                 param.update(fixed=True)
     else:
-        scale_eft = 12.5
-        scale_sn0 = 2.0
-        scale_sn2 = 5.0
-
-        if prior_basis in ['physical', 'physical_aap', 'tcm_chudaykin_aap']:
+        if 'physical' in prior_basis:
             # ── Bias parameters ───────────────────────────────────────────────
-            configs['b1p'] = {'prior': {'dist': 'uniform', 'limits': [0.1, 4]}}
-            configs['b2p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
-            configs['bsp'] = {'prior': {'dist': 'norm', 'loc': -2. / 7. * sigma8_fid**2, 'scale': 5}}
             if 'mesh2_spectrum' in stat:
-                if b3_coev:
-                    configs['b3p'] = {'fixed': True}
-                else:
-                    configs['b3p'] = {'prior': {'dist': 'norm', 'loc': 23. / 42. * sigma8_fid**4, 'scale': sigma8_fid**4},
-                                      'fixed': False}
-                # ── PS counter-terms and shot noise ───────────────────────────────
-                for n in [0, 2, 4]:
-                    configs[f'alpha{n:d}p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_eft}}
-                configs['sn0p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn0}}
-                configs['sn2p'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn2}}
-                # ── FoG damping ───────────────────────────────────────────────────
-                if 'EFT' in model.upper():
-                    configs['X_FoG_pp'] = {'fixed': True}
-                else:
-                    configs['X_FoG_pp'] = {'prior': {'dist': 'uniform', 'limits': [0, 10]}}
-            elif 'mesh3_spectrum' in stat:
-                # ── BS stochastic parameters ──────────────────────────────────────
-                configs['c1p']    = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
-                configs['c2p']    = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 5}}
-                configs['Pshotp'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}}
-                configs['Bshotp'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}}
-                # ── FoG damping ───────────────────────────────────────────────────
-                if 'EFT' in model.upper():
-                    configs['X_FoG_bp'] = {'fixed': True}
-                else:
-                    configs['X_FoG_bp'] = {'prior': {'dist': 'uniform', 'limits': [0, 15]}}
+                if 'b3' in coevolution:
+                    configs['b3p'] = {'fixed': True, 'value': 0.}
+        # ── FoG damping ───────────────────────────────────────────────────
+        if 'EFT' in model.upper():
+            configs['X_FoG'] = {'fixed': True}
         else:
-            # ── Bias parameters (standard Eulerian basis) ─────────────────────
-            configs['b1'] = {'prior': {'dist': 'uniform', 'limits': [1e-5, 10]}}
-            configs['b2'] = {'prior': {'dist': 'uniform', 'limits': [-50, 50]}}
-            configs['bs'] = {'prior': {'dist': 'uniform', 'limits': [-50, 50]}}
-            if 'mesh2_spectrum' in stat:
-                if b3_coev:
-                    configs['b3'] = {'fixed': True}
-                else:
-                    configs['b3'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': 1}, 'fixed': False}
-                # ── PS counter-terms and shot noise ───────────────────────────────
-                for n in [0, 2, 4]:
-                    configs[f'alpha{n:d}'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_eft}}
-                configs['sn0'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn0}}
-                configs['sn2'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': scale_sn2}}
-                # ── FoG damping ───────────────────────────────────────────────────
-                if 'EFT' in model.upper():
-                    configs['X_FoG_p'] = {'fixed': True}
-                else:
-                    configs['X_FoG_p'] = {'prior': {'dist': 'uniform', 'limits': [0, 10]}}
-            elif 'mesh3_spectrum' in stat:
-                # ── BS stochastic parameters ──────────────────────────────────────
-                shotnoise = 1 / 0.0002118763
-                configs['c1']    = {'prior': {'dist': 'norm', 'loc': 66.6, 'scale': 66.6 * 4}}
-                configs['c2']    = {'prior': {'dist': 'norm', 'loc': 0,    'scale': 4}}
-                configs['Pshot'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': shotnoise * 4}}
-                configs['Bshot'] = {'prior': {'dist': 'norm', 'loc': 0, 'scale': shotnoise * 4}}
-                # ── FoG damping ───────────────────────────────────────────────────
-                if 'EFT' in model.upper():
-                    configs['X_FoG_bp'] = {'fixed': True}
-                else:
-                    configs['X_FoG_bp'] = {'prior': {'dist': 'uniform', 'limits': [0, 15]}}
-        for config in configs.values():
-            if config.get('fixed', False):
-                continue
-            ref = _get_default_ref_from_prior(config.get('prior', None), value=config.get('value', None))
-            if ref is not None and 'ref' not in config:
-                config['ref'] = ref
+            configs['X_FoG'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 10]}}
         if marg:
-            for param in params.select(basename=['alpha*', 'sn*']):
+            for param in params.select(basename=['alpha*', 'sn2*', 'sn4*']):
                 param.update(derived='marg')
         if user_params:
             configs = configs | user_params
@@ -358,19 +298,17 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
         elif theory_options['model'] in ['folpsD', 'folpsEFT']:
             A_full = theory_options.get('A_full', True)
             pt = FOLPSPTSpectrum2Poles(A_full=A_full)
-            kw = {name: theory_options[name] for name in ['damping', 'prior_basis', 'b3_coev'] if name in theory_options}
+            kw = {name: theory_options[name] for name in ['damping', 'prior_basis'] if name in theory_options}
             theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
-            sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
             prior_basis = kw.get('prior_basis', 'physical')
-            b3_coev = kw.get('b3_coev', True)
-            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, b3_coev=b3_coev, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            coevolution = kw.get('coevolution', 'b3')
+            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'mesh3_spectrum' in stat:
         if theory_options['model'] in ['folpsD', 'folpsEFT']:
             kw = {name: theory_options[name] for name in ['damping', 'A_full'] if name in theory_options}
             theory = FOLPSTracerSpectrum3Poles(template=template, tracers=tracers, **kw, **theory_options.get('options', {}))
-            sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=z)
             prior_basis = theory_options.get('prior_basis', 'physical')
-            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, sigma8_fid=sigma8_fid, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            theory.update(params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'recon_particle2_correlation' in stat:
         kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
@@ -1131,6 +1069,23 @@ def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: di
     return SumLikelihood(likelihoods)
 
 
+def get_prior(likelihood):
+    import jax.numpy as jnp
+    from desilike import Prior, get_params
+
+    class CustomPrior(Prior):
+      """Hard constraint w0 + wa < 0, on top of individual parameter priors."""
+
+      def __call__(self):
+          self.logpdf = super().__call__()
+          if 'w0_fld' in self.params:
+              w0, wa = self.params['w0_fld'], self.params['wa_fld']
+              self.logpdf = jnp.where(w0.value + wa.value < 0., self.logpdf, -jnp.inf)
+          return self.logpdf
+
+    return CustomPrior(get_params(likelihood))
+
+
 def get_sampler_cls(name):
     """Return sampler class."""
     from desilike.samplers import Emcee, Zeus, MH, PocoMC, Nautilus, BlackjaxNUTS, NumpyroNUTS, NumpyroBarkerMH
@@ -1158,7 +1113,7 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
                    'recon_particle2_correlation': {'select': [{'ells': ell, 's': [60., 150., 4.]} for ell in [0, 2]]}}
     base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'damping': 'lor', 'marg': True}
     base_bao_theory = {'model': 'bao', 'broadband': 'pcs2', 'marg': True}
-    propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'b3_coev': True, 'A_full': False},
+    propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'coevolution': 'b3', 'A_full': False},
                       'mesh3_spectrum': base_full_shape_theory | {'A_full': False},
                       'recon_particle2_correlation': base_bao_theory}
     for _stat in propose_stat:

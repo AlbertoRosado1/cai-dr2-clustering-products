@@ -11,7 +11,7 @@ from desilike.profilers import Profiler
 from desilike.samplers import Sampler
 from desilike.distributed import get_mpicomm
 
-from full_shape.tools import get_likelihood, fill_fiducial_options, generate_likelihood_options_helper, setup_logging
+from full_shape.tools import get_likelihood, get_prior, fill_fiducial_options, generate_likelihood_options_helper, setup_logging
 from full_shape import tools
 from clustering_statistics import tools as clustering_tools
 
@@ -76,7 +76,7 @@ def run_fit_from_options(actions,
             likelihood_profiler = copy(likelihood)
             for param in get_params(likelihood_profiler).select(solved=True):
                 param.update(derived='best')
-            posterior = compile(Posterior(likelihood_profiler))
+            posterior = compile(Posterior(likelihood_profiler, prior=get_prior(likelihood_profiler)))
             kw = dict(profiler_options.get('init', {}))
             kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance']})
             profiler = Profiler(posterior, kernel=kernel, output_fn=profiles_fn, **kw)
@@ -107,7 +107,7 @@ def run_fit_from_options(actions,
             if kw.get('prior', None) is not None:
                 profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
                 kw['prior'] = kw['prior'] * profiles.covariance
-            posterior = compile(Posterior(likelihood_sampler))
+            posterior = compile(Posterior(likelihood_sampler, prior=get_prior(likelihood_sampler)))
             kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance', 'nparallel', 'prior', 'batch_size']})
             import warnings
             with warnings.catch_warnings():

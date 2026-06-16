@@ -4,8 +4,8 @@ To create and spawn the tasks on NERSC, use the following commands:
 ```bash
 salloc -N 1 -C gpu -t 02:00:00 --gpus 4 --qos interactive --account desi_g
 source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
-python validation_abacus_mocks.py --dataset abacus-2ndgen-dr2-complete --tracers LRG1 --stats mesh2_spectrum mesh3_spectrum --todo profile sample
-srun -n 4 python validation_abacus_mocks.py --dataset abacus-2ndgen-dr2-complete --tracers LRG1 LRG2 LRG3 ELG2 --stats mesh2_spectrum mesh3_spectrum --theory_model folpsEFT --cosmo_params base_ns-fixed --todo sample --nchains 4
+python validation_abacus_mocks.py --dataset abacus-2ndgen-dr2-complete --tracers LRG1 --stats mesh2_spectrum mesh3_spectrum --todo build
+srun -n 4 python validation_abacus_mocks.py --dataset abacus-2ndgen-dr2-complete --tracers LRG1 LRG2 LRG3 ELG2 --stats mesh2_spectrum mesh3_spectrum--todo sample --nchains 4
 ```
 """
 import argparse
@@ -28,6 +28,7 @@ DEFAULT_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clusteri
 DEFAULT_PROJECT = 'full_shape/base'
 #DEFAULT_CACHE_DIR = Path(__file__).resolve().parent / '_cache'
 DEFAULT_CACHE_DIR = Path(os.environ['SCRATCH']) / 'desi-clustering/full_shape/job_scripts/_cache'
+
 LOCAL_SAFE_THREAD_ENV = {
     'OMP_NUM_THREADS': '1',
     'OPENBLAS_NUM_THREADS': '1',
