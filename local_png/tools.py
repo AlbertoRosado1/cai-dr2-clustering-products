@@ -8,7 +8,7 @@ logger = logging.getLogger('PNG fitting tools')
 
 def read_data(data_dir='.', mocks_dir=None, 
               tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', 
-              window_extra='', weight_type_mocks=None, **kwargs):
+              window_extra='', **kwargs):
     """ 
     Read the data from the clustering statistics output. This is a wrapper of clustering_statistics.tools.get_stats_fn.
     """
@@ -36,14 +36,12 @@ def read_data(data_dir='.', mocks_dir=None,
     # Read the mocks:
     mocks = None
     if mocks_dir is not None: 
-        weight_type_mocks = weight_type_mocks or weight_type
-        if 'nmocks' in kwargs:
-            nmocks = kwargs['nmocks']
-            logger.info(f"Reading {nmocks} mocks for tracer {tracer} with weight type {weight_type_mocks}.")
-        else:
-            nmocks = 1000 if weight_type_mocks == 'default-fkp-oqe' else 100
+        weight_type_mocks = kwargs.get('weight_type_mocks', weight_type)
+        nmocks = kwargs.get('nmocks', 1000 if weight_type_mocks == 'default-fkp-oqe' else 100)
+        tracer_mocks = kwargs.get('tracer_mocks', tracer)
+        logger.info(f"Reading {nmocks=} for {tracer=} with {tracer_mocks=} {weight_type_mocks=}.")
 
-        fns_mock = [get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=mocks_dir, project='holi-v3-altmtl', tracer=tracer, region=region, zrange=zrange, 
+        fns_mock = [get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=mocks_dir, project='holi-v3-altmtl', tracer=tracer_mocks, region=region, zrange=zrange, 
                                  weight=weight_type_mocks, imock=imock) for imock in range(nmocks)]    
         mocks = [lsstypes.read(fn) for fn in fns_mock]
 
@@ -193,7 +191,8 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
 
 
 
-def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, fix_fnl=False, engine='class', scale_covariance=1, nickname=None, **kwargs):
+def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, 
+                                  drop_ell2_cross=False, fix_fnl=False, engine='class', scale_covariance=1, nickname=None, **kwargs):
     """
     Get the observable and likelihood for a given tracer. Each multipole is treated as a different observable, but they share the same parameters in the theory.
 
@@ -227,6 +226,10 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
     if len(tracers) == 1: tracers *= 2
     tracers = (tracers[0][:3], tracers[1][:3])  # LRG_zcmb -> LRG, ELGnotqso -> ELG, ...
     cross_correlation = (tracers[0] != tracers[1])
+
+    if cross_correlation and drop_ell2_cross:
+        logger.info(f"{tracers}: Dropping ell=2 for the cross-correlation to reduce hartlap factor and speed up the fit. (Those data points are very noisy for now...)")
+        pk = pk.get(ells=[0])
 
     observables = []
     for ell in pk.ells:  
@@ -489,7 +492,7 @@ def plot_observables(observables, figsize=(6, 4),ylims=None, show=True, fn_outpu
     fig, axs = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
     fig.subplots_adjust(hspace=0.1)
 
-    translator = {'LRGxLRG': 'L', 'ELGxELG': 'E', 'QSOxQSO': 'Q', 'LRGxELG': 'LxE', 'LRGxQSO': 'LxQ', 'ELGxQSO': 'ExQ'}
+    translator = {'LRGxLRG': 'L', 'LRG': 'L', 'ELGxELG': 'E', 'ELG': 'E', 'QSOxQSO': 'Q', 'QSO': 'Q', 'LRGxELG': 'LxE', 'LRGxQSO': 'LxQ', 'ELGxQSO': 'ExQ'}
 
     for tracer in observables.keys():
         for obs in observables[tracer]:
@@ -590,8 +593,9 @@ def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\r
         plt.show()
 
 
-def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mocks=None, kmin=1e-3, analytical_covariance=True, 
-                           force_profiling=False, base_dir=None, fiducial=None, extra_fn='', return_profiler=False):
+def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mocks=None, kmin=1e-3, drop_ell2_cross=True, 
+                           analytical_covariance=True, 
+                           force_profiling=False, base_dir=None, fiducial=None, extra_fn='', return_profiler=False, save_plot=False):
     """Run the profiler on a single mock realisation and save the result to disk.
 
     Parameters
@@ -629,11 +633,10 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mo
         pks = {}
         for tt in tracers:
             mocks_tt = mocks[tt].copy()  # Avoid modifying the original mock observable.
-
             pk = mocks_tt.pop(imock).select(k=(kmin, 1))  # remove the used mock from the covariance matrix.
             if (alternative_mocks is not None) and (tt in alternative_mocks) and (alternative_mocks[tt] is not None):
                 # use an alternative mock for the fit, but keep the covariance from the original mocks.
-                pk = alternative_mocks[tt].copy().pop(imock).select(k=(kmin, 1))  
+                pk = alternative_mocks[tt].copy().pop(imock).select(k=(kmin, 1))
             pks[tt] = pk
             
             window = windows[tt].at.observable.match(pk)
@@ -646,7 +649,7 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mo
                 # print(len(mocks_tt))
                 covariance = [mm.match(pk) for mm in mocks_tt]
 
-            obs[tt], lik[tt] = get_observable_and_likelihood(pk, window, covariance, tt, zeffs, engine='camb', fix_fnl=False, nickname=tt, **kwargs)
+            obs[tt], lik[tt] = get_observable_and_likelihood(pk, window, covariance, tt, zeffs, engine='camb', drop_ell2_cross=drop_ell2_cross, fix_fnl=False, nickname=tt, **kwargs)
 
         if len(tracers) > 1:
             # remove the used mock from the covariance matrix:
@@ -661,10 +664,13 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mo
 
         profiler = run_profiler(lik, fn_output=fn_profile, sigfigs=5)
 
-        if (kmin == 1e-3) and analytical_covariance and (len(tracers) == 1):
+        if save_plot:
             ylims = [(2e3, 4e4), (2e3, 4e4)] if tracer in ['ELGxELG', 'ELGxQSO'] else None
-            fn_obs = base_dir + f"mock{imock}/bestfit_{tracer}_analytical_cov.png"
-            plot_observables({tracer: obs}, ylims=ylims, fn_output=fn_obs, show=False)
+            fn_obs = base_dir + f"mock{imock}/bestfit_{tracer}_{'' if analytical_covariance else 'mock'}_kmin-{kmin}{extra_fn}.png"
+            if len(tracers) > 1:
+                plot_observables({tt: obs[tt] for tt in tracers}, ylims=ylims, fn_output=fn_obs, show=True)
+            else: 
+                plot_observables({tracer: obs}, ylims=ylims, fn_output=fn_obs, show=True)
 
         if return_profiler:
             return profiler
