@@ -79,11 +79,18 @@ rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/des
 * PNG-Mocks: 
 ```bash
 cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl
+# From CFS:
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl .
+# From Noah's Scratch:
 rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/n/nsailer/measurements/local_png/base/pngunit-xl .
 
 cd /Users/edmond/Work/data/desi-clustering/dr2/profiles/local_png/base/pngunit-xl
+# From Noah's Scratch:
 rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/n/nsailer/profiles/local_png/base/pngunit-xl .
+# From CFS:
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/profiles/local_png/base/pngunit-xl .
 ```
+
 
 ### Upload data on NERSC:
 
