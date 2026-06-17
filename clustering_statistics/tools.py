@@ -1050,7 +1050,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 if 'BGS' in tracer:
                     cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/altmtl/BGS_BRIGHT/MAG-21.35_KP3/")
                 else:
-                    cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
+                    # cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
+                    cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/altmtl/DARK/altmtl0/loa-v1/mock0/LSScats/")
             elif 'complete' in version:
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
                 cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
