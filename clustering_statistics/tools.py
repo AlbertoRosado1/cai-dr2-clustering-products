@@ -447,8 +447,10 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     base = {"catalog": {}, "particle2_correlation": {},  "particle3_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
     propose_fiducial = {
         'BGS': {'nran': 3, 'recon': {'mode': 'recsym', 'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
-        'LRG+LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15.}, 'zrange': (0.4, 1.1)},
-        'LRG+ELG': {'nran': 13, 'recon': {'mode': 'recsym', 'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
+        'LRG+LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15.}, 'zrange': (0.4, 1.1),
+                     'combine': {'biases': [2.0, 1.9], 'P0': 6000, 'dz': 0.01}},
+        'LRG+ELG': {'nran': 13, 'recon': {'mode': 'recsym', 'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1),
+                     'combine': {'biases': [2.0, 1.2], 'P0': 6000, 'dz': 0.01}},
         'LRG': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 2.0, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
         'LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
         'ELG': {'nran': 15, 'recon': {'mode': 'recsym', 'bias': 1.2, 'smoothing_radius': 15., 'zrange': (0.8, 1.6)}},
@@ -475,7 +477,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
                            'ELG': [(0.8, 1.1), (1.1, 1.6)], 'LRG+ELG': [(0.8, 1.1)], 'QSO': [(0.8, 2.1)],
                            'LRGxLGE': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
                            'LRGxELG': [(0.8, 1.1)], 'LRGxQSO': [(0.8, 1.1)], 'ELGxQSO': [(0.8, 1.1), (1.1, 1.6)]}
-        propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'LRG+ELG': 1e4, 'QSO': 6e3}
+        propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'LRG+ELG': 6e3, 'QSO': 6e3}
         propose_meshsizes = {'BGS': 750, 'LRG': 750, 'LGE': 750, 'ELG': 960, 'LRG+ELG': 750, 'QSO': 1152}
         propose_cellsize = 7.5
 
@@ -533,10 +535,11 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
-        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "LGE": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxLGE": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
+        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "LGE": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRG+ELG": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
 
         if simple_tracers[0] not in ["BGS", "LRG", "LGE", "ELG", "QSO"]:
-            raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
+            warnings.warn(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm, skipping")
+            return propose_fiducial[kind]
         propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "LGE": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
 
         propose_regression_zranges = {
