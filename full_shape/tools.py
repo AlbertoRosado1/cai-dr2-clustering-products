@@ -114,6 +114,11 @@ def get_cosmology(cosmology_options: dict=None):
     if has_w0wa:
         params['w0_fld'].clone(fixed=is_fixed_model)
         params['wa_fld'].clone(fixed=is_fixed_model)
+    params.set(Parameter('H0', derived=True, latex='H_0'))
+    params.set(Parameter('Omega_m', derived=True, latex=r'\Omega_\mathrm{m}'))
+    params.set(Parameter('sigma8_m', derived=True, latex=r'\sigma_{8,\mathrm{m}}'))
+    params.set(Parameter('sigma8_cb', derived=True, latex=r'\sigma_{8,\mathrm{cb}}'))
+    params.set(Parameter('rs_drag', derived=True, latex=r'r_s'))
     return CosmoprimoCosmology(engine='class', fiducial=fiducial, params=params)
 
 
