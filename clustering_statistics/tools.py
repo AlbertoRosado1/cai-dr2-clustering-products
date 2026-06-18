@@ -1539,12 +1539,20 @@ def _combine_tracer_catalogs(catalogs, nz_files, biases, P0, zmin, zmax, dz=0.01
 
     fkp_weights = [1. / (1. + cat['NX'] * P0) for cat in catalogs]
 
+    mpicomm = catalogs[0].mpicomm
+    def _global_sum(arr):
+        local = float(np.sum(arr))
+        return mpicomm.allreduce(local) if mpicomm.size > 1 else local
+
     if kind == 'data' and combine is not None:
-        combine['Nd'] = [float(np.sum(cat['WEIGHT'] * fkp)) for cat, fkp in zip(catalogs, fkp_weights)]
+        combine['Nd'] = [_global_sum(cat['WEIGHT'] * fkp) for cat, fkp in zip(catalogs, fkp_weights)]
 
     Nr_before_bias = None
-    if kind == 'randoms' and combine is not None and 'Nd' in combine:
-        Nr_before_bias = [float(np.sum(cat['WEIGHT'] * fkp)) for cat, fkp in zip(catalogs, fkp_weights)]
+    if kind == 'randoms' and combine is not None:
+        if 'Nd' not in combine:
+            warnings.warn('combine["Nd"] not set — data catalogs must be combined before randoms. Skipping random normalization.')
+        else:
+            Nr_before_bias = [_global_sum(cat['WEIGHT'] * fkp) for cat, fkp in zip(catalogs, fkp_weights)]
 
     for i, cat in enumerate(catalogs):
         cat['WEIGHT'] = cat['WEIGHT'] * biases[i]
@@ -1555,7 +1563,7 @@ def _combine_tracer_catalogs(catalogs, nz_files, biases, P0, zmin, zmax, dz=0.01
             normalization = (Nd[i] * Nr_before_bias[0]) / (Nd[0] * Nr_before_bias[i])
             catalogs[i]['WEIGHT'] = catalogs[i]['WEIGHT'] * normalization
 
-    return Catalog.concatenate(catalogs)
+    return Catalog.concatenate(catalogs, intersection=True)
 
 
 def _read_combined_tracer_catalog(kind, combine, get_catalog_fn, concatenate, read, mpicomm,
