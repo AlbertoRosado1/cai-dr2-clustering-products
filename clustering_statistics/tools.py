@@ -1529,13 +1529,12 @@ def _combine_tracer_catalogs(catalogs, nz_files, biases, P0, zmin, zmax, dz=0.01
     beff = np.where(mask, b2nz / bnz, 0.)
     neff = np.where(mask, bnz / beff, 0.)
 
-    for cat in catalogs:
+    for i, cat in enumerate(catalogs):
         z_all = cat['Z']
-        new_nx = np.zeros(len(z_all))
         valid = (z_all >= zmin) & (z_all < zmax)
-        zind = np.clip(((z_all[valid] - zmin) / dz).astype(int), 0, nbins - 1)
-        new_nx[valid] = neff[zind]
-        cat['NX'] = new_nx
+        catalogs[i] = cat[valid]
+        zind = np.clip(((catalogs[i]['Z'] - zmin) / dz).astype(int), 0, nbins - 1)
+        catalogs[i]['NX'] = neff[zind]
 
     fkp_weights = [1. / (1. + cat['NX'] * P0) for cat in catalogs]
 
