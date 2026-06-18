@@ -20,9 +20,9 @@ export HDF5_USE_FILE_LOCKING=TRUE
 
 #srun -n 4 python desipipe_data_png.py --interactive --blinded
 
-#srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --geo --ellsout 0 2
-
-srun -n 4 python desipipe_data_png.py --interactive --blinded --fm_window --ric --ellsout 0 2
+srun -n 4 python desipipe_data_png.py --interactive --blinded --geo --ellsout 0 2 --tracer LRGxELGnotqso &
+#srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --ellsout 0 2 --tracer QSO &
+srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer LRGxELGnotqso &
 
 wait
 

@@ -123,8 +123,14 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
         propose_fiducial['catalog'].update({'cosmo': '000'})
         propose_meshsizes = {'meshsize': 512}
     if 'ezmock' in version:
-        propose_fiducial['catalog'].update({'cosmo': '000', 'boxsize': 6000.})
-        propose_meshsizes = {'meshsize': 800}
+        if 'BGS' in tracer:
+            boxsize = 2000.
+            meshsize = 512
+        else:
+            boxsize = 6000.
+            meshsize = 800
+        propose_fiducial['catalog'].update({'cosmo': '000', 'boxsize': boxsize})
+        propose_meshsizes = {'meshsize': meshsize}
     if 'abacus-hf' in version:
         hod = 'base'
         if 'BGS' in tracer or 'LRG' in tracer:
@@ -215,15 +221,20 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
     """
     if version == 'ezmock':
         stracer = get_simple_tracer(tracer)
-        cat_dir = desi_dir / f'cosmosim/SecondGenMocks/EZmock/CubicBox_6Gpc/{stracer}/z{zsnap:.3f}/'
+        if 'BGS' in tracer:
+            boxsize = '2Gpc'
+        else:
+            boxsize = '6Gpc'
+        cat_dir = desi_dir / f'cosmosim/SecondGenMocks/EZmock/CubicBox_{boxsize}/{stracer}/z{zsnap:.3f}/'
         return [cat_dir / f'{imock:04d}/EZmock_{stracer}_z{zsnap:.3f}_AbacusSummit_base_c000_ph000_{imock:04d}.{isub:d}.fits.gz' for isub in range(64)]
     if version == 'abacus-2ndgen':
         stracer = get_simple_tracer(tracer)
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/CubicBox/{stracer}/z{zsnap:.3f}/AbacusSummit_base_c000_ph{imock:03d}/'
         return cat_dir / f'{stracer}_real_space.fits'
     if version == 'abacus-hf-v1':
-        cat_dir = desi_dir / f'mocks/cai/abacus_HF/{"DR2_v2.0" if version == "v2" else "DR2_v1.0"}/AbacusSummit_base_c{cosmo}_ph{imock:03d}/Boxes'
         stracer = get_simple_tracer(tracer)
+        # cat_dir = desi_dir / f'mocks/cai/abacus_HF/{"DR2_v2.0" if version == "v2" else "DR2_v1.0"}/AbacusSummit_base_c{cosmo}_ph{imock:03d}/Boxes/{stracer}'
+        cat_dir = desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/AbacusSummit_base_c{cosmo}_ph{imock:03d}/Boxes/{stracer}'
         sznap = f'{zsnap:.3f}'.replace('.', 'p')
         return cat_dir / f'abacus_HF_{stracer}_{sznap}_DR2_v1.0_AbacusSummit_base_c000_ph{imock:03d}_clustering.dat.fits'
     if version == 'abacus-hf-v2':

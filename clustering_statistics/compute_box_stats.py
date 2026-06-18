@@ -56,7 +56,7 @@ def compute_box_stats_from_options(stats, cache=None,
         Function to get the filename for storing the measurement.
     get_box_catalog_fn : callable, optional
         Function to get the filename for reading the catalog.
-        If provided, it is given to ``read_box_catalog`` and ``read_full_catalog``.
+        If provided, it is given to ``read_box_catalog``.
     read_box_catalog : callable, optional
         Function to read the box catalog.
     **kwargs : dict

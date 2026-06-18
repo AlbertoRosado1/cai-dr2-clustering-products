@@ -9,6 +9,7 @@ python desipipe_glam-uchuu_mocks.py         # create the list of tasks
 desipipe tasks  -q glam-uchuu_mocks         # check the list of tasks
 desipipe spawn  -q glam-uchuu_mocks --spawn # spawn the jobs
 desipipe queues -q glam-uchuu_mocks         # check the queue
+desipipe spawn  -q glam-uchuu_mocks --spawn --mode no_stream # add --mode no_stream if running >40 jobs in parallel
 ```
 """
 import os
@@ -30,10 +31,10 @@ kwargs = {}
 # environ = Environment('nersc-cosmodesi')
 environ = Environment('nersc-cosmodesi', command='export PYTHONPATH=$HOME/LSScode/dr2-clustering-analysis/:$PYTHONPATH')
 tm = TaskManager(queue=queue, environ=environ)
-tm = tm.clone(scheduler=dict(max_workers=10), provider=dict(provider='nersc', time='02:00:00',
-                            mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu'))
-tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00',
-                            mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
+tm = tm.clone(scheduler=dict(max_workers=30), provider=dict(provider='nersc', time='02:00:00', mpiprocs_per_worker=4, 
+                                                            output=output, error=error, stop_after=1, constraint='gpu'))
+tm80 = tm.clone(provider=dict(provider='nersc', time='02:00:00', mpiprocs_per_worker=4, 
+                              output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
 tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='00:10:00',
                 mpiprocs_per_worker=2250, nodes_per_worker=25, output=output, error=error, stop_after=1, constraint='cpu'))
 
@@ -67,7 +68,8 @@ def run_stats(tracer='LRG', project='', version='glam-uchuu-v2-altmtl', onthefly
     for imock in imocks:
         for region in regions:
             mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
-                              'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
+                              'auw': None}
+                              # 'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
             window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None}
             
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
@@ -129,39 +131,39 @@ if __name__ == '__main__':
     # mode = 'interactive'
     mode = 'slurm'
     # imocks2run = np.arange(2000)
-    imocks2run = np.arange(1000)
+    imocks2run = np.arange(1500)
     if version == 'glam-uchuu-v2-altmtl':
-        # bad_imocks = np.concatenate([300+np.arange(50),[202, 203, 205, 211, 1275]])
-        # bad_imocks = np.loadtxt(f'../helper_scripts/dubious_{version}.txt',dtype=int)
-        bad_imocks = [280, 543, 1275]
-        imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
+        imocks2run = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)
     stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    stats       = ['mesh2_spectrum', 'mesh3_spectrum'] 
-    # stats = ['particle2_correlation']
-    postprocess = ['combine_regions']
-    analysis = 'full_shape'
-    project  = f'{analysis}/base'
-    weight   = 'default-FKP'
-    regions  = ['NGC','SGC']
-    # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
-    tracers = ['BGS_BRIGHT-21.35']
-    max_mocks_per_batch_qso = 20
-    max_mocks_per_batch_others = 10
-    postregions = ['GCcomb']
+    # stats       = ['mesh2_spectrum', 'mesh3_spectrum'] 
+    # # stats = ['particle2_correlation']
+    # postprocess = ['combine_regions']
+    # analysis = 'full_shape'
+    # project  = f'{analysis}/base'
+    # weight   = 'default-FKP'
+    # regions  = ['NGC','SGC']
+    # # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    # tracers = ['BGS_BRIGHT-21.35']
+    # max_mocks_per_batch_qso = 20
+    # max_mocks_per_batch_others = 20
+    # postregions = ['GCcomb']
 
     # run data_splits for lensing group with full_shape setup 
-    # stats   = ['mesh2_spectrum']
-    # analysis = 'full_shape'
-    # project = f'{analysis}/data_splits'
-    # weight  = 'default-FKP'
-    # regions = ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'] #galactic and imaging regions
-    # # regions = regions+['ACT_DR6', 'PLANCK_PR4']+ [f'GAL0{i}' for i in [40, 60]] #lensing regions
-    # tracers  = ['QSO', 'ELG_LOPnotqso', 'LRG']
-    # max_mocks_per_batch_others = max_mocks_per_batch_qso = 5
+    stats   = ['mesh2_spectrum', 'mesh3_spectrum']
+    analysis = 'full_shape'
+    project = f'{analysis}/data_splits'
+    weight  = 'default-FKP'
+    # regions = ['NGC', 'SGC'] # already computed under full_shape/base/
+    regions = ['N', 'NGCnoN', 'S', 'SGCnoDES'] # galactic and imaging regions
+    regions = regions + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]] # lensing regions
+    # tracers = ['QSO', 'ELG_LOPnotqso', 'LRG']
+    tracers = ['BGS_BRIGHT-21.35']
+    max_mocks_per_batch_qso = 30
+    max_mocks_per_batch_others = 15
     # postprocess = ['combine_regions']
-    # postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][:]
+    # postregions = ['GCcomb', 'NS', 'GCcomb_noN', 'GCcomb_noDES'][1:]
 
     # run fiducial local_png
     # stats       = ['mesh2_spectrum']
