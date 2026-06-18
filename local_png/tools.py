@@ -185,14 +185,18 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
             if len(zeffs[tracer]) > 1:
                 zeff = [zeffs[tracer][ell] for ell in [0, 2]]
                 _rescale_bias_params(likelihood, tracer=[f"{tt}{cross_suffix}_ell0", f"{tt}{cross_suffix}_ell2"], zeff=zeff)
-                # logger.warning('we neglect the redshift dependence of the damping term, for now')
-                # Note: the first damping term is fixed to 0:
-                if i == 1: likelihood.all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived='{' + f"{tt}{cross_suffix}_ell0.sigmas" + '}')
-
+                try:
+                    # logger.warning('we neglect the redshift dependence of the damping term, for now')
+                    # Note: the first damping term is fixed to 0 so only need to update the second one.
+                    if i == 1: likelihood.all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived='{' + f"{tt}{cross_suffix}_ell0.sigmas" + '}')
+                except KeyError as e:
+                    # It can happen now when removing the quadrupole from the cross-correlation in the join fit.
+                    # (i could update zeff but okay just add more flexibility here)
+                    logger.debug(f"Skipping derived relationship: {e} (missing parameter)")
 
 
 def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, 
-                                  drop_ell2_cross=False, fix_fnl=False, engine='class', scale_covariance=1, nickname=None, **kwargs):
+                                  fix_fnl=False, engine='class', scale_covariance=1, nickname=None, **kwargs):
     """
     Get the observable and likelihood for a given tracer. Each multipole is treated as a different observable, but they share the same parameters in the theory.
 
@@ -226,10 +230,6 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
     if len(tracers) == 1: tracers *= 2
     tracers = (tracers[0][:3], tracers[1][:3])  # LRG_zcmb -> LRG, ELGnotqso -> ELG, ...
     cross_correlation = (tracers[0] != tracers[1])
-
-    if cross_correlation and drop_ell2_cross:
-        logger.info(f"{tracers}: Dropping ell=2 for the cross-correlation to reduce hartlap factor and speed up the fit. (Those data points are very noisy for now...)")
-        pk = pk.get(ells=[0])
 
     observables = []
     for ell in pk.ells:  
@@ -621,7 +621,10 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mo
     """
     import os
 
-    kwargs = {'LRG_LRGxQSO_ell0.b1': 2.15, 'LRG_LRGxELG_ell0.b1': 2.15, 'ELG_ELGxQSO_ell0.b1': 1.2, 'scale_covariance': 1}
+    # from clustering_statistics.tools import bias
+    # tt1 = short_tracer.split('x')[0]
+    # kwargs = {f'{tt1}_{short_tracer}_ell0.b1': bias(zeffs[region][short_tracer][0], tracer=tt1)}
+    kwargs = {'LRG_LRGxQSO_ell0.b1': 2.25, 'LRG_LRGxELG_ell0.b1': 2.24, 'ELG_ELGxQSO_ell0.b1': 1.42, 'scale_covariance': 1}
 
     fn_profile = base_dir + f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.npy"
     if (os.path.isfile(fn_profile) and force_profiling) or (not os.path.isfile(fn_profile)):
@@ -631,33 +634,31 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mo
 
         obs, lik, zeffs = {}, {}, {}
         pks = {}
+        mocks_cov = {}
         for tt in tracers:
-            mocks_tt = mocks[tt].copy()  # Avoid modifying the original mock observable.
-            pk = mocks_tt.pop(imock).select(k=(kmin, 1))  # remove the used mock from the covariance matrix.
+            mocks_cov[tt] = mocks[tt].copy()  # Avoid modifying the original mock observable.
+
+            pks[tt] = mocks_cov[tt].pop(imock).select(k=(kmin, 1))  # remove the used mock from the covariance matrix.
             if (alternative_mocks is not None) and (tt in alternative_mocks) and (alternative_mocks[tt] is not None):
                 # use an alternative mock for the fit, but keep the covariance from the original mocks.
-                pk = alternative_mocks[tt].copy().pop(imock).select(k=(kmin, 1))
-            pks[tt] = pk
+                pks[tt] = alternative_mocks[tt].copy().pop(imock).select(k=(kmin, 1))
+            if drop_ell2_cross and (tt.split('x')[0] != tt.split('x')[1]):  # if it's a cross-correlation and we want to drop the ell2:
+                logger.info(f"{tt}: Dropping ell=2 for the cross-correlation to reduce hartlap factor and speed up the fit.")
+                pks[tt] = pks[tt].get(ells=[0])  # keep only the monopole for the fit.
             
-            window = windows[tt].at.observable.match(pk)
+            window = windows[tt].at.observable.match(pks[tt])
 
-            zeffs[tt] = {ell: window.observable.get(ell).attrs['zeff'] for ell in pk.ells}  # Keep only the zeff for the used multipoles.
+            zeffs[tt] = {ell: window.observable.get(ell).attrs['zeff'] for ell in pks[tt].ells}  # Keep only the zeff for the used multipoles.
 
             if analytical_covariance:
-                covariance = covs[tt].at.observable.at(observables='spectrum2', tracers=tuple(tt.split("x"))).match(pk)
+                covariance = covs[tt].at.observable.at(observables='spectrum2', tracers=tuple(tt.split("x"))).match(pks[tt])
             else:
-                # print(len(mocks_tt))
-                covariance = [mm.match(pk) for mm in mocks_tt]
+                mocks_cov[tt] = [mm.match(pks[tt]) for mm in mocks_cov[tt]]
+                covariance = mocks_cov[tt]
 
-            obs[tt], lik[tt] = get_observable_and_likelihood(pk, window, covariance, tt, zeffs, engine='camb', drop_ell2_cross=drop_ell2_cross, fix_fnl=False, nickname=tt, **kwargs)
+            obs[tt], lik[tt] = get_observable_and_likelihood(pks[tt], window, covariance, tt, zeffs, engine='camb', fix_fnl=False, nickname=tt, **kwargs)
 
         if len(tracers) > 1:
-            # remove the used mock from the covariance matrix:
-            mocks_cov = {}
-            for tt in tracers:
-                tmp = mocks[tt].copy()
-                tmp.pop(imock)
-                mocks_cov[tt] = tmp
             lik = build_total_likelihood(tracers, pks, obs, covs if analytical_covariance else mocks_cov, zeffs, fiducial)
         else:
             obs, lik = obs[tracers[0]], lik[tracers[0]]
