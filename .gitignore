@@ -32,7 +32,7 @@ doc/_build/
 **/log
 **/tmp
 **/tmp.py
-
+**/*.h5
 .vscode/
 
 **/OLD/

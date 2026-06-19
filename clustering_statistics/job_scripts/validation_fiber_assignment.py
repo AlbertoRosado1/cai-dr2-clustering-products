@@ -48,7 +48,7 @@ def get_stats_fn(*args, extra='', onthefly=None, **kwargs):
     return tools.get_stats_fn(*args, extra='_'.join(extra), **kwargs)
 
 
-def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', regions=['NGC','SGC'], ibatch=None, zranges=None, get_stats_fn=get_stats_fn, **kwargs):
+def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', regions=['NGC', 'SGC'], ibatch=None, zranges=None, get_stats_fn=get_stats_fn, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -142,7 +142,7 @@ if __name__ == '__main__':
     if version == 'glam-uchuu-v2-altmtl':
         check_for_existing_measurements = True
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
-        imocks = [imock for imock in imocks if imock < 168]
+        imocks = [150]
 
     stats_dir = tools.base_stats_dir
 
@@ -150,8 +150,8 @@ if __name__ == '__main__':
     #tracers = ['LRG', 'ELG', 'QSO']
     #tracers = ['ELG', 'LRG']
     #tracers = ['LRG']
-    #tracers = ['ELG', 'QSO'][:1]
-    tracers = ['LRG', 'QSO']
+    tracers = ['ELG', 'QSO'][:1]
+    #tracers = ['LRG', 'QSO']
 
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'

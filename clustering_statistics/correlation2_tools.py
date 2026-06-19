@@ -25,7 +25,7 @@ from .tools import _format_bitweights
 logger = logging.getLogger('particle2_correlation')
 
 
-def compute_particle2_angular_upweights(*get_data):
+def compute_particle2_angular_upweights(*get_data, battrs=None):
     """
     Compute angular upweights (AUW) from fibered and parent data catalogs.
 
@@ -50,8 +50,9 @@ def compute_particle2_angular_upweights(*get_data):
         if jax.process_index() == 0:
             logger.info('All particles on the device')
 
-        theta = 10**np.arange(-5, -1 + 0.1, 0.1)
-        battrs = BinAttrs(theta=theta)
+        if battrs is None:
+            battrs = {'theta': 10**np.arange(-5, -1 + 0.1, 0.1)}
+        battrs = BinAttrs(**battrs)
 
         counts_fibered = _compute_particle2_correlation_close_pair_correction(all_fibered_particles, battrs, auw=None, cut=None, normalize_randoms=False)
         counts_parent = _compute_particle2_correlation_close_pair_correction(all_parent_particles, battrs, auw=None, cut=None, normalize_randoms=False)
