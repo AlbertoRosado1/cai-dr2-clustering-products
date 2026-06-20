@@ -134,11 +134,14 @@ def run_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 1.1], we
                 options['window_mesh2_spectrum_fm']['amr'] = kwargs.get('amr', True)
                 options['window_mesh2_spectrum_fm']['ellsout'] = kwargs.get('ellsout', None)
 
+                options['window_mesh2_spectrum_fm']['theory_rebin'] = 10 # reduce the number of points -> greatly improve the computation time.
+
                 options['window_mesh2_spectrum_fm']['n_realizations'] = 10
                 options['window_mesh2_spectrum_fm']['seeds'] = [50, 20, 77, 80, 97, 6, 52, 64, 76, 81]
+                if tracer == 'QSO':
+                    options['window_mesh2_spectrum_fm']['n_realizations'] += 5  # 10
+                    options['window_mesh2_spectrum_fm']['seeds'] += [84, 31, 2, 79, 15]  #, 84, 43, 28, 98, 12]
 
-                options['window_mesh2_spectrum_fm']['theory_rebin'] = 10 # reduce the number of points -> greatly improve the computation time.
-                
                 if 'wsys' in weight:
                     options = _update_regression_maps(options, weight)
 
@@ -161,6 +164,9 @@ def postprocess_stats(cat_dir=None, stats_dir=None, tracer='LRG', zranges=[0.4, 
             options['window_mesh2_spectrum_fm']['ellsout'] = kwargs.get('ellsout', None)
             options['window_mesh2_spectrum_fm']['n_realizations'] = 10
             options['window_mesh2_spectrum_fm']['seeds'] = [50, 20, 77, 80, 97, 6, 52, 64, 76, 81]
+            if tracer == 'QSO':
+                options['window_mesh2_spectrum_fm']['n_realizations'] += 5  # 10
+                options['window_mesh2_spectrum_fm']['seeds'] += [84, 31, 2, 79, 15]  #, 84, 43, 28, 98, 12]
             
             options['combine_window_mesh2_spectrum'] = {}
             options['combine_window_mesh2_spectrum']['effect'] = 'RIC+AMR' if kwargs['amr'] else 'RIC'
@@ -180,11 +186,14 @@ def collect_argparser():
     parser.add_argument('--interactive', action='store_true', help='Whether to run in interactive mode (without spawning jobs with desipipe).')
     
     parser.add_argument('--tracers', nargs='+', type=str, default=None, help='Which tracer to run..')
-    parser.add_argument('--zranges', nargs='+', type=str, default=None, help='Provide --zranges zmin1 zmax1 zmin2 zmax2 if you want to compute things on (zmin1,zmax1) and (zmin2,zmax2) and ect...')
+    parser.add_argument('--zranges', nargs='+', type=float, default=None, help='Provide --zranges zmin1 zmax1 zmin2 zmax2 if you want to compute things on (zmin1,zmax1) and (zmin2,zmax2) and ect...')
     parser.add_argument('--regions', nargs='+', type=str, default=None, help='Which regions to compute..', 
                         choices=['NGC', 'SGC', 'N', 'NGCnoN', 'SGCnoDES', 'DES'] + ['ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [40, 60]])
     
     parser.add_argument('--blinded', action='store_true', help='Run with blinded data or not.')
+
+    parser.add_argument('--todo', nargs='+', type=str, default=None, help='Which activities to do?', 
+                        choices=['spectrum', 'window', 'covariance', 'geo', 'ric', 'amr'])
 
     parser.add_argument('--geo', action='store_true', help='Compute the forward model of the window function for geometrical part only.')
     parser.add_argument('--ric', action='store_true', help='Include RIC in the forward model of the window.')
@@ -204,16 +213,13 @@ if __name__ == '__main__':
     export HDF5_USE_FILE_LOCKING=TRUE
 
     # run power spectrum / analytical window / analytical covariance:
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --tracer LRG LRG_zcmb
-    
-    # run forward model of the window for IC contributions:
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --geo --ellsout 0 2 --tracer LRGxELGnotqso
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --ellsout 0 2 --tracer QSO
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer LRGxELGnotqso
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --todo spectrum --tracer QSO --region NGC SGC NGCnoN SGCnoDES GAL040 --zranges 0.8 3.5 1.6 3.5
+    srun -n 4 python desipipe_data_png.py --interactive --todo spectrum --tracer LRG_zcmb QSO LRG_zcmbxQSO --region NGC SGC
 
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --tracer LRG --region NGCnoN SGCnoDES
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --geo --ellsout 0 2 --tracer LRG --region NGCnoN SGCnoDES
-    srun -n 4 python desipipe_data_png.py --interactive --blinded --ric --amr --ellsout 0 2 --tracer LRG --region NGCnoN SGCnoDES
+    # run forward model of the window for IC contributions:
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --todo geo --ellsout 0 2 --tracer QSO
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --todo ric --ellsout 0 2 --tracer QSO
+    srun -n 4 python desipipe_data_png.py --interactive --blinded --todo ric amr --ellsout 0 2 --tracer LRGxELGnotqso
 
     """
     from clustering_statistics import setup_logging, tools
@@ -239,6 +245,7 @@ if __name__ == '__main__':
 
 
     cat_dir = Path('/global/cfs/cdirs/desi/survey/catalogs/DA2/LSS/loa-v1/LSScats/v2/fNL/')
+    #cat_dir = Path('/pscratch/sd/e/edmondc/catalogs/DA2/LSS/loa-v1/LSScats/v2/fNL/')
     stats_dir = Path(os.getenv('SCRATCH', '.')) / 'desi-clustering/dr2/summary_statistics/local_png/base/desi-data/loa-v1/v2/fNL/'
 
     if args.blinded:
@@ -248,9 +255,11 @@ if __name__ == '__main__':
         logger.error('NOT READY FOR UNBLINDED DATA YET')
         import sys
         sys.exit(3)
+        logger.warning('HERE WE ARE !!')
     
     logger.info(f'cat_dir: {cat_dir}')
     logger.info(f'stats_dir: {stats_dir}')
+
 
     if args.tracers is not None:
         tracers = [tuple(tt.split('x')) if 'x' in tt else tt for tt in args.tracers] 
@@ -264,7 +273,7 @@ if __name__ == '__main__':
 
     for tracer in tracers:
         # if len(zranges) is odd, it will not consider the last one.
-        zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')[:1] if args.zranges is None else list(zip(zranges[::2], zranges[1::2]))
+        zranges = tools.propose_fiducial(kind='zranges', tracer=tracer, analysis='local_png')[:1] if args.zranges is None else list(zip(args.zranges[::2], args.zranges[1::2]))
 
         weights = ['default-fkp-oqe', 'default-fkp'][:1]
         # Choice of imaging systematics avaialble in the catalogs: https://desi.lbl.gov/trac/wiki/keyprojects/Y3-DR/LSScat/imaging_systematics
@@ -279,16 +288,18 @@ if __name__ == '__main__':
         elif tracer == ('ELGnotqso', 'QSO'):
             weights += [('default-fkp-oqe-wsys-imlin', 'default-fkp-oqe')]
 
+        #weights = ['default-fkp-oqe-wsys-imlin_newzbin2']
+
         logger.info(f'{tracer=}, {zranges=}, {weights=}')
 
 
         # Computing forward model of the window?
-        fm_window = args.geo or args.ric or args.amr
-
+        fm_window = ('geo' in args.todo) or ('ric' in args.todo) or ('amr' in args.todo)
 
         # Compute power spectrum, window matrix, analytical covariance: 
         if not fm_window:
-            stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][1:2]
+            stats_translator = {'spectrum': 'mesh2_spectrum', 'window': 'window_mesh2_spectrum', 'covariance': 'covariance_mesh2_spectrum'}
+            stats = [stats_translator[key] for key in args.todo]
             postprocess = ['combine_regions']
             logger.info(f'Running stats {stats} and postprocess {postprocess}')
             get_run_stats()(cat_dir=cat_dir, stats_dir=stats_dir, tracer=tracer, zranges=zranges, weights=weights, regions=regions, stats=stats)            
@@ -298,10 +309,10 @@ if __name__ == '__main__':
 
         # Compute RIC/AMR correction to the window matrix:
         else:
-            assert not (args.amr and not args.ric), 'Do not run AMR without RIC. Provide --ric --amr.'
+            assert not (('amr' in args.todo) and not ('ric' in args.todo)), 'Do not run AMR without RIC. Provide --ric --amr.'
 
             stats = ['window_mesh2_spectrum_fm']
-            postprocess = ['combine_window_mesh2_spectrum', 'combine_regions'] if args.ric else []
+            postprocess = ['combine_window_mesh2_spectrum', 'combine_regions'] if 'ric' in args.todo else []
             logger.info(f'Running {stats=} and {postprocess=}')
 
             # Collect which region and redshift range are necessary to run the imaging systematic weights (need the full redshift range / footprint ..):
@@ -314,7 +325,7 @@ if __name__ == '__main__':
             # This is not a problem because the power spectrum will be computed only with z < z_required=1.1 < 1.3
 
             # Update options for forward window:
-            kwargs = {'geo': args.geo, 'ric': args.ric, 'amr': args.amr, 'ellsout': args.ellsout,
+            kwargs = {'geo': 'geo' in args.todo, 'ric': 'ric' in args.todo, 'amr': 'amr' in args.todo, 'ellsout': args.ellsout,
                       #'amr_regions_zranges':  
                       'spectrum_regions_zranges': list(itertools.product(regions, zranges))}
             logger.info(f"window_mesh2_spectrum_fm kwargs: {kwargs}")
