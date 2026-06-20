@@ -1562,7 +1562,11 @@ def _combine_tracer_catalogs(catalogs, nz_files, biases, P0, zmin, zmax, dz=0.01
             normalization = (Nd[i] * Nr_before_bias[0]) / (Nd[0] * Nr_before_bias[i])
             catalogs[i]['WEIGHT'] = catalogs[i]['WEIGHT'] * normalization
 
-    return Catalog.concatenate(catalogs, intersection=True)
+    common = set.intersection(*[set(cat.columns()) for cat in catalogs])
+    for cat in catalogs:
+        for col in set(cat.columns()) - common:
+            del cat[col]
+    return Catalog.concatenate(catalogs)
 
 
 def _read_combined_tracer_catalog(kind, combine, get_catalog_fn, concatenate, read, mpicomm,
@@ -1570,7 +1574,7 @@ def _read_combined_tracer_catalog(kind, combine, get_catalog_fn, concatenate, re
                                   keep_columns=None, **kwargs):
     """Read and combine component catalogs for a '+' tracer on the fly."""
     tracer = kwargs['tracer']
-    components = tracer.split('+')
+    components = [get_full_tracer(ct, version=kwargs.get('version')) for ct in tracer.split('+')]
     biases = combine['biases']
     P0 = combine['P0']
     dz = combine.get('dz', 0.01)
