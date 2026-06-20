@@ -19,8 +19,9 @@ def read_data(data_dir='.', mocks_dir=None,
     pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
 
     # Read the window matrix:
-    logger.info(f'Reading the window with {window_extra=}')
-    window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra=window_extra))
+    tracer_window = kwargs.get('tracer_window', tracer)
+    logger.info(f'Reading the window with {tracer_window=}, {weight_type=},{window_extra=}')
+    window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer_window, zrange=zrange, weight=weight_type, region=region, extra=window_extra))
 
     # Domitille FM window computation add an artificat on the region k (input space) > k_Nyquist (observable space) that bias the convolved theory at large scales.. (see validation_window.ipynb).
     # This k > k_Nyquist in the input space is irrelevant. Just remove it ! Here we keep only k < 0.1.
@@ -28,7 +29,8 @@ def read_data(data_dir='.', mocks_dir=None,
 
     # Read the analytical covariance matrix:
     try: 
-        cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
+        tracer_cov = kwargs.get('tracer_cov', tracer)
+        cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum', stats_dir=data_dir, tracer=tracer_cov, zrange=zrange, weight=weight_type, region=region))
     except:
         logger.info('Do not find the analytical covariance matrix. Please provide mocks_dir to estimate the covariance matrix from mocks.')
         cov = None
@@ -593,7 +595,7 @@ def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\r
         plt.show()
 
 
-def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mocks=None, kmin=1e-3, drop_ell2_cross=True, 
+def run_profiling_one_mock(mocks, windows, covs, tracer, region='GCcomb', imock=0, alternative_mocks=None, kmin=1e-3, drop_ell2_cross=True, 
                            analytical_covariance=True, 
                            force_profiling=False, base_dir=None, fiducial=None, extra_fn='', return_profiler=False, save_plot=False):
     """Run the profiler on a single mock realisation and save the result to disk.
@@ -608,6 +610,8 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mo
         Analytical covariance matrix for the tracer.
     tracer : str
         Tracer name (e.g. 'LRGxLRG').
+    region : str, optional
+        Region name (e.g. 'GCcomb'). Default is 'GCcomb'.
     imock : int, optional
         Index of the mock to fit. Default is 0.
     kmin : float, optional
@@ -626,7 +630,7 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, alternative_mo
     # kwargs = {f'{tt1}_{short_tracer}_ell0.b1': bias(zeffs[region][short_tracer][0], tracer=tt1)}
     kwargs = {'LRG_LRGxQSO_ell0.b1': 2.25, 'LRG_LRGxELG_ell0.b1': 2.24, 'ELG_ELGxQSO_ell0.b1': 1.42, 'scale_covariance': 1}
 
-    fn_profile = base_dir + f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.npy"
+    fn_profile = base_dir + f"mock{imock}/bestfit_{tracer}_{region}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.npy"
     if (os.path.isfile(fn_profile) and force_profiling) or (not os.path.isfile(fn_profile)):
         os.makedirs(os.path.dirname(fn_profile), exist_ok=True)
         
