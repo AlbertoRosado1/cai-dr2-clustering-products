@@ -32,7 +32,7 @@ import lsstypes as types
 from . import tools
 from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, _compute_binned_weight, setup_logging
 
-from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction
+from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction, compute_covariance_particle2_correlation
 from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
 
 from .correlation3_tools import compute_particle3_angular_upweights, compute_particle3_correlation, compute_particle3_correlation_close_pair_correction
@@ -363,7 +363,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         spectrum = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], cache=cache, **spectrum_options)
                         # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
                         if not isinstance(spectrum, dict): spectrum = {'raw': spectrum}
-    
+
                         # Write all spectrum variants to disk
                         for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
                             fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
@@ -551,7 +551,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 jax.experimental.multihost_utils.sync_global_devices("window_fm_IO")  # wait for the writer
 
         # Covariance matrix computation
-        funcs = {'covariance_mesh2_spectrum': compute_covariance_mesh2_spectrum}
+        funcs = {'covariance_mesh2_spectrum': compute_covariance_mesh2_spectrum, 'covariance_particle2_correlation': compute_covariance_particle2_correlation}
         for stat, func in funcs.items():
             if stat in stats:
                 covariance_options = dict(options[stat])
@@ -614,6 +614,22 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 fields = {tracer: tools.get_simple_tracer(tracer) for tracer in tracers}
                 theory = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(theory_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
                 theory = types.ObservableTree(list(theory.values()), fields=list(theory.keys()))
+
+                if 'particle2' in stat:
+                    RR_fn = covariance_options.pop('RR', None)
+                    kind_stat = stat.replace('covariance_', '')
+                    if RR_fn is None:
+                        kw = dict(auw=False, cut=False) | options[kind_stat]
+                        fn = {(tracer, tracer): get_stats_fn(kind=kind_stat, catalog=fn_catalog_options[tracer], **kw) for tracer in tracers}
+                        # Add cross-correlation file if multiple tracers
+                        if len(tracers) > 1:
+                            fn[tuple(tracers)] = get_stats_fn(kind=kind_stat, catalog=fn_catalog_options, **kw)
+                    elif not isinstance(fn, dict):
+                        _check_fn(fn, tracers, name=name)
+                    # Load RR for all tracer pairs
+                    RR = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(theory_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
+                    RR = {fields: RR[fields].get('RR') if 'count_names' in RR[fields].labels(return_type='keys') else RR[fields] for fields in RR}
+                    covariance_options['RR'] = types.ObservableTree(list(RR.values()), fields=list(RR.keys()))
 
                 # Compute covariance matrix
                 covariance = func(*[functools.partial(get_data, tracer) for tracer in tracers], theory=theory, fields=list(fields.values()), **covariance_options)

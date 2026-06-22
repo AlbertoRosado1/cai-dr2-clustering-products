@@ -325,7 +325,7 @@ def compute_particle2_correlation(*get_data_randoms, auw=None, cut=None, battrs:
                 counts['RR'] = count2split(*[particles['randoms'] for particles in all_particles])
 
     correlation = (Count2JackknifeCorrelation if kw_jackknife else Count2Correlation)(estimator='landyszalay', **counts)
-    correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)    
+    correlation.attrs.update(zeff=zeff / norm_zeff, norm_zeff=norm_zeff)
     return {key: correlation}
 
 
@@ -456,7 +456,7 @@ def compute_particle2_correlation_close_pair_correction(*get_data_randoms, corre
     -------
     correlation : Count2Correlation or Count2JackknifeCorrelation
     """
-    from cucount.jax import create_sharding_mesh, BinAttrs
+    from cucount.jax import create_sharding_mesh, BinAttrs, SplitAttrs
 
     if jackknife is None: jackknife = {}
     kw_jackknife = dict(jackknife)
@@ -478,7 +478,6 @@ def compute_particle2_correlation_close_pair_correction(*get_data_randoms, corre
             d = {}
             los = 'midpoint'  # guessing line-of-sight
             for coord_name in ['s', 'theta']:
-                coord_name = f'{name}{idim + 1}'
                 if coord_name in edges:
                     edge = edges[coord_name]
                     edge = np.append(edge[:, 0], edge[-1, 1])
@@ -614,8 +613,188 @@ def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, 
             if not particles.get('negative_weight'):
                 negative_weight = wattrs(particles)
                 all_particles[i]['data'] = particles.clone(weights=particles.get('weights') + [negative_weight], index_value=particles.index_value.clone(negative_weight=1))
-    
+
     wattrs = WeightAttrs(bitwise=bitwise, angular=angular)
     particles, combinations = _get_particle_combinations('DD', all_particles, with_repeats=False)
     correction['DD'] = count2split(*particles, wattrs=wattrs)
     return correction
+
+
+def compute_covariance_correlation2_particle(*get_data_randoms, theory=None, RR=None, fields=None,
+                                             split_SS=False, mattrs=None):
+    r"""
+    Compute the 2-point correlation covariance with :mod:`jaxpower`.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions that return dict of 'data' and 'randoms' catalogs.
+        See :func:`prepare_jaxpower_particles` for details.
+    theory : Mesh2SpectrumPoles
+        Theory 2-point spectrum multipoles.
+    fields : tuple, list, optional
+        Field names.
+    mattrs : dict, optional
+        Mesh attributes to define the :class:`jaxpower.ParticleField` objects,
+        'boxsize', 'meshsize' or 'cellsize', 'boxcenter'. If ``None``, default attributes are used.
+
+    Returns
+    -------
+    covariance : CovarianceMatrix
+        The computed 2-point correlation covariance.
+    """
+    from .spectrum2_tools import prepare_jaxpower_particles
+    # Import covariance and window computation tools from jaxpower
+    from jaxpower import create_sharding_mesh, compute_fkp2_covariance_window, interpolate_window_function, compute_spectrum2_covariance, FKPField, compute_fkp2_normalization
+    # Use FFTLog for reliable correlation-to-spectrum conversion
+    fftlog = True
+    # Use default fields (1, 2, ...) if not provided
+    if fields is None:
+        fields = list(range(1, 1 + len(get_data_randoms)))
+    fields = tuple(fields)
+
+    results = {}
+    # Set up distributed computation mesh
+    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
+        # Load and prepare particles
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
+        # Create FKP fields for covariance window computation
+        all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
+        mattrs = all_fkp[0].attrs
+        # Set correlation binning parameters (finer than spectrum binning)
+        kw = dict(edges={'step': mattrs.cellsize.min()}, basis='bessel') if fftlog else dict(edges={})
+        # Add fields for cross-covariance and random splitting seed
+        kw.update(los='local', fields=fields, split=[(42, fkp.randoms.extra['IDS']) for fkp in all_fkp])
+        # Mesh painting parameters: TSC with interlacing
+        kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+        # Compute covariance window function (correlation in configuration space)
+        windows = compute_fkp2_covariance_window(all_fkp, **kw, **kw_paint)
+        #if jax.process_index() == 0: windows.write(f'_tests/window_correlation.h5')
+        if fftlog:
+            # Very robust to this choice of FFTLog grid
+            # Use logarithmic s-grid for interpolation
+            coords = np.logspace(-2, 8, 8 * 1024)
+            # Interpolate window functions to fine s-grid
+            windows = windows.map(lambda window: interpolate_window_function(window, coords=coords), level=1)
+        # Store raw correlation windows for diagnostics
+        results['window_covariance_mesh2_correlation'] = windows
+        all_fkp = [particles['randoms'] for particles in all_particles]
+        # Computing normalization: integral of density^2, splitting randoms ('split') to avoid common noise
+
+        def get_fkp_norm(*all_randoms):
+            kw_norm = {'cellsize': 10., 'split': (42, 'index')}
+            fkp_norm = compute_fkp2_normalization(*all_randoms, bin=bin, **kw_norm)
+            for particles in all_particles:
+                fkp_norm /= particles['randoms'].sum()
+            return fkp_norm
+
+        fkp_norm = get_fkp_norm(*[particles['randoms'] for particles in all_particles])
+        if len(fields) == 1:
+            fkp_norm = {fields[:1] * 2: fkp_norm}
+        else:
+            fkp_norm = {fields[:1] * 2: get_fkp_norm(all_particles[0]['randoms']),
+                        fields[1:] * 2: get_fkp_norm(all_particles[1]['randoms']),
+                        fields: fkp_norm}
+
+    def interp_log(spectrum):
+        k_fftlog = np.logspace(-2., 2., 1024)
+        # extrapolate the outer edges assuming constant log spacing
+        k_edges = np.empty(len(k_fftlog) + 1)
+        k_edges[1:-1] = np.sqrt(k_fftlog[:-1] * k_fftlog[1:])
+        k_edges[0] = k_fftlog[0]**2 / k_edges[1]
+        k_edges[-1] = k_fftlog[-1]**2 / k_edges[-2]
+        poles = []
+        for label, pole in spectrum.items():
+            kin = pole.coords('k')
+            mask_high = k_fftlog > kin[-1]
+            k_mid = k_fftlog[~mask_high]
+            logk_high = np.log10(k_fftlog[mask_high] / kin[-1])
+            damp_high = np.exp(-(k_fftlog[mask_high] / kin[-1] - 1.) ** 2 / 200.)
+            slope_high = (pole[-1] - pole[-2]) / np.log10(kin[-1] / kin[-2])
+            interp_mid = jnp.interp(np.log10(k_mid), np.log10(kin), pole)
+            extrap_high = (pole[-1] + slope_high * logk_high) * damp_high
+            value = jnp.concatenate([interp_mid, extrap_high])
+            poles.append(types.Mesh2SpectrumPole(num_raw=value, k=k_fftlog, k_edges=k_edges, ell=label['ells']))
+        return types.Mesh2SpectrumPoles(poles)
+
+    theory = theory.map(interp_log, level=1)  # apply to all tracers
+    covariances = compute_spectrum2_covariance(windows, theory, flags=['smooth'] + (['fftlog'] if fftlog else []), return_type='list')
+    if split_SS:
+        covariances = covariances[:2]  # leave out SS, added later
+    covariance = covariances[0].clone(value=sum(cov.value() for cov in covariances))
+
+    def compute_SS_contribution(observable, QS):
+
+        from jaxpower.utils import legendre_product
+
+        def get_wj(ww, sedges1, sedges2, q1, q2):
+            s = ww.get(0).coords('s')
+            s1, s2 = np.mean(sedges1, axis=-1), np.mean(sedges2, axis=1)
+            w = sum(legendre_product(q1, q2, q) * ww.get(q).value().real if q in ww.ells else jnp.zeros(()) for q in list(range(abs(q1 - q2), q1 + q2 + 1)))
+            def get_volume(*edges):
+                volume = 4. / 3. * np.pi * (edges[1]**3 - edges[0]**3)
+                return jnp.where(volume < 0., 0., volume)
+
+            sedges_inter = jnp.maximum(sedges1[:, 0], sedges2[None, :, 0]), jnp.minimum(sedges1[:, 1], sedges2[:, 1])
+            volume_inter = get_volume(*sedges_inter)
+            volume_joint = get_volume(*sedges1.T)[:, None] * get_volume(*sedges2.T)
+            return volume_inter / volume_joint * jnp.diag(w)  # FIXME
+
+        pole1 = pole2 = observable
+        ills1 = list(range(len(pole1.ells)))
+        ills2 = list(range(len(pole2.ells)))
+
+        def init():
+            return [[np.zeros((len(pole1.get(pole1.ells[ill1]).coords('s')), len(pole2.get(pole2.ells[ill2]).coords('s')))) for ill2 in ills2] for ill1 in ills1]
+
+        cov_SS = init()
+        for ill1, ill2 in itertools.product(ills1, ills2):
+            ell1, ell2 = pole1.ells[ill1], pole2.ells[ill2]
+            sedges1, sedges2 = pole1.get(ell1).edges('s'), pole2.get(ell2).edges('s')
+            cov_SS[ill1][ill2] += 2 * (2 * ell1 + 1) * (2 * ell2 + 1) * get_wj(QS.select(s=sedges1), sedges1, sedges2, ell1, ell2)
+        return np.block(cov_SS)
+
+    from scipy.linalg import block_diag
+    from jaxpower.cov2 import project_to_correlation
+    from lsstypes.types import compute_RR2_window
+
+    fields = covariance.observable.fields
+    if 'fields' not in RR.labels(return_type='keys'):
+        RR = types.ObservableTree([RR] * len(fields), fields=fields)
+
+    rotation, observable, covariance_SS = [], [], []
+    for label, spectrum in covariance.observable.items():
+        fields = label['fields']
+        RRfield = RR.get(fields=fields)
+        RRfield = RRfield.clone(norm=fkp_norm[fields] / np.mean(RRfield.values('norm')) * RRfield.values('norm'))
+        s, s_edges = RRfield.coords('s'), RRfield.edges('s')
+        projector = project_to_correlation(s_edges, spectrum)
+        ells = spectrum.ells
+        window = compute_RR2_window(RRfield, edges=s_edges, ells=ells, ellsin=ells, kind='RR', resolution=1)
+        projector = np.linalg.solve(window, projector)  # inv(window).dot(projector), deconvolve from the window
+
+        correlation = []
+        for ell in ells:
+            RR0 = RR.select(s=s_edges).value().sum(axis=-1)
+            norm = RR.select(s=s_edges).values('norm').sum(axis=-1)
+            correlation.append(types.Count2CorrelationPole(s=s, s_edges=s_edges, value=np.zeros_like(s),
+                                                           RR0=RR0.value(), norm=norm, ell=ell))
+        correlation = types.Count2CorrelationPoles(correlation)
+        correlation = correlation.clone(value=projector.dot(spectrum.value()))
+        rotation.append(projector)
+        observable.append(correlation)
+        if split_SS:
+            cov_SS = compute_SS_contribution(correlation, windows.get(types='SS', fields=fields * 2))
+            inv_window = np.linalg.inv(window)
+            cov_SS = inv_window.dot(cov_SS).dot(inv_window.T)
+        covariance_SS.append(cov_SS)
+
+    rotation = block_diag(*rotation)
+    observable = types.ObservableTree(observable, fields=fields, observables=['correlation2'] * len(observable))
+    covariance = covariance.clone(value=rotation.dot(covariance.value()).dot(rotation.T), observable=observable)
+    if split_SS:
+        covariance = covariance.clone(value=covariance.value() + block_diag(*covariance_SS))
+
+    # Store in results dict
+    results['raw'] = covariance
+    return results
