@@ -495,7 +495,6 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_fiducial['particle2_correlation'].update(battrs={'s': np.linspace(0., 180., 181), 'mu': (np.linspace(-1., 1., 201), 'midpoint')})
         propose_fiducial['particle3_correlation'].update(battrs={'s': np.linspace(0., 160., 21), 'pole': (list(range(6)), 'firstpoint')}, selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
 
-
     if 'protected' in analysis:
         propose_fiducial['mesh2_spectrum'].update(ells=(0,), edges={'min': 0.02, 'step': 0.001})
         propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0)])
@@ -516,7 +515,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     propose_fiducial['recon_particle2_correlation'] = dict(propose_fiducial['recon_particle2_correlation'])  # break shared reference with particle2_correlation
     propose_fiducial['recon_particle2_correlation']['nran'] = {tracer: propose_recon_corr_nran[st] for tracer, st in zip(tracers, simple_tracers)}
 
-    for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum']:
+    for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum', 'covariance_particle2_correlation']:
         propose_fiducial[name] = {}
 
     if 'png' in analysis:
@@ -528,6 +527,9 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_meshsizes = {'BGS': 864, 'LRG': 864, 'LGE': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10.}
+    propose_fiducial['covariance_particle2_correlation'] = propose_fiducial['covariance_mesh2_spectrum']
+    for name in ['covariance_mesh2_spectrum', 'covariance_particle2_correlation']:
+        propose_fiducial[name.replace('covariance_', 'covariance_recon_')] = propose_fiducial[name]
 
     propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'LGE': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
@@ -773,6 +775,12 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             # spectrum_options | fiducial_options because we override mattrs if given
             options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+        for stat in ['covariance_particle2_correlation']:
+            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+        for stat in ['covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']:
+            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+            options[stat] = fiducial_options | options[stat.replace('recon_', '')] | options.get(stat, {})
         for stat in ['combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum']:
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | options.get(stat, {})
@@ -1626,7 +1634,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                     expand['from_data'] = [] # no need of FRAC_TLOBS_TILES for on-the-fly complete mocks
 
     if kind == 'randoms' and isinstance(expand, dict):
-        # if reshuffling is performed need to extract FRAC_TLOBS_TILES from data to have the correct completeness weight !
+        # if reshuffling is performed need to extract FRAC_TLOBS_TILES from data to have the correct completeness weight!
         from_data = expand.get('from_data', ['FRAC_TLOBS_TILES'] if isinstance(reshuffle, dict) else ['Z', 'WEIGHT_SYS'])
         from_randoms = expand.get('from_randoms', ['RA', 'DEC', 'NTILE'])
         parent_randoms_fn = expand['parent_randoms_fn']
@@ -1859,10 +1867,11 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                     bitwise_weights = None
             else:
                 # equivalent of IIP weights
-                #individual_weight /= (catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES'])
                 individual_weight /= catalog['FRACZ_TILELOCID']
+                if 'compondata' in weight_type:
+                    individual_weight /= catalog['FRAC_TLOBS_TILES']
                 bitwise_weights = None
-        if 'data' in kind and 'parent' in kind and 'bitwise' not in weight_type:
+        if 'data' in kind and 'parent' in kind and 'bitwise' not in weight_type and 'compondata' not in weight_type:
             individual_weight *= catalog['FRAC_TLOBS_TILES']
         catalog = catalog[['RA', 'DEC']]
         catalog['INDWEIGHT'] = individual_weight
@@ -1894,6 +1903,12 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             elif kind == 'randoms':
                 individual_weight = catalog['WEIGHT'] * get_binned_weight(catalog, binned_weight['missing_power'])
 
+        elif 'compondata' in weight_type:
+            if kind == 'data':
+                individual_weight /= catalog['FRAC_TLOBS_TILES']
+            elif kind == 'randoms':
+                individual_weight *= catalog['FRAC_TLOBS_TILES']
+
         if 'FKP' in weight_type.upper():
             if log and mpicomm.rank == 0:
                 if FKP_P0 is None:
@@ -1915,8 +1930,8 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                 logger.info('Dividing individual weights by WEIGHT_SYS')
             individual_weight /= catalog['WEIGHT_SYS']
 
-        if 'comp' in weight_type:
-            individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
+        #if 'comp' in weight_type:
+        #    individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
 
         if 'wsys' in weight_type and not 'noimsys' in weight_type:
             new_wsys = weight_type.split('wsys-')[-1]
@@ -2412,6 +2427,37 @@ def merge_randoms_catalogs(output_fn: str | Path, input_fns: list[str | Path], p
     write_stats(output_fn, merged)
 
 
+def get_renormalization_regions(tracer):
+    """Regions where to renormalize data / randoms."""
+    tracer = get_simple_tracer(tracer)
+    regions = ['N', 'S']
+    if tracer.startswith('QSO'):
+        regions = ['N', 'SnoDES', 'DES']
+    return regions
+
+
+def check_if_requires_renormalization(weight='', **kwargs):
+    return 'compondata' in weight
+
+
+def renormalize_randoms_over_data(randoms, data, tracer=None, regions=None):
+    """Renormalize randoms / data in each region."""
+    sum_data_weights, sum_randoms_weights = [], []
+    if regions is None:
+        regions = get_renormalization_regions(tracer)
+    for region in regions:
+        mask_data = select_region(data['RA'], data['DEC'], region=region)
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        sum_data_weights.append(data['INDWEIGHT'][mask_data].csum())
+        sum_randoms_weights.append(randoms['INDWEIGHT'][mask_randoms].csum())
+
+    sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
+    alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
+    for region, alpha in zip(regions, alphas):
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        randoms['INDWEIGHT'] *= alpha
+
+
 def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     """
     Reshuffled random redshifts from (merged) data.
@@ -2482,9 +2528,7 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
 
     tracer = get_simple_tracer(tracer)
     P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
-    regions = ['N', 'S']
-    if tracer.startswith('QSO'):
-        regions = ['N', 'SnoDES', 'DES']
+    regions = get_renormalization_regions(tracer)
 
     sum_data_weights, sum_randoms_weights = [], []
     column = 'FRAC_TLOBS_TILES'

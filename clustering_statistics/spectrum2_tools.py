@@ -1690,7 +1690,7 @@ def compute_window_mesh2_spectrum_fm(
         return windows
 
 
-def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: types.WindowMatrix, select: dict=None, theory: str='rept', fixed=tuple(), out: types.Mesh2SpectrumPoles=None):
+def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: types.WindowMatrix, select: dict=None, theory: str='rept', update_params=None, out: types.Mesh2SpectrumPoles=None):
     """
     Compute a smooth theory spectrum to assume when building the covariance.
 
@@ -1739,31 +1739,40 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
     z = window.observable.get(ells=0).attrs['zeff']
 
     # Import clustering theory classes from desilike
-    from desilike.theories.galaxy_clustering import FixedSpectrum2Template, KaiserTracerSpectrum2Poles, REPTVelocileptorsTracerSpectrum2Poles
-    from desilike.observables.galaxy_clustering import TracerSpectrum2PolesObservable
+    from desilike.theories.galaxy_clustering import FixedSpectrum2Template, KaiserTracerSpectrum2Poles, REPTVelocileptorsTracerSpectrum2Poles, DampedBAOWigglesTracerSpectrum2Poles
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.profilers import Profiler, Minuit
+    from desilike import compile, get_params, Posterior
 
     # Select theory model (Kaiser or REPT with velocileptors)
-    Theory = {'rept': REPTVelocileptorsTracerSpectrum2Poles, 'kaiser': KaiserTracerSpectrum2Poles}[theory]
+    theory_str = theory
+    Theory = {'recon': DampedBAOWigglesTracerSpectrum2Poles, 'rept': REPTVelocileptorsTracerSpectrum2Poles, 'kaiser': KaiserTracerSpectrum2Poles}[theory_str]
 
     # Create fiducial theory template at measurement redshift
     template = FixedSpectrum2Template(fiducial='DESI', z=z)
     # Instantiate theory model with template
     theory = Theory(template=template)
+    if 'recon' in theory_str:
+        theory.update(mode=np.asarray(data.attrs['recon_mode']).flat[0], smoothing_radius=np.asarray(data.attrs['recon_smoothing_radius']).flat[0])
     # Create observable: combines data, theory, and window function
-    observable = TracerSpectrum2PolesObservable(data=data, window=window, theory=theory)
+    observable = Spectrum2PolesObservable(data=data, window=window, theory=theory)
     # Create likelihood: Gaussian likelihood with computed covariance
     likelihood = ObservablesGaussianLikelihood(observable, covariance=covariance.value())
     # Fix specified parameters
-    for param in fixed:
-        likelihood.all_params[param].update(fixed=True)
+    params = get_params(likelihood)
+    if update_params is not None:
+        for name, update in update_params.items():
+            params[name].update(**update)
 
     # Minimize likelihood to get best-fit theory
-    profiler = Profiler(likelihood, kernel=Minuit(), seed=42)
+    posterior = compile(Posterior(likelihood))    
+    profiler = Profiler(posterior, kernel=Minuit(), rng=42)
     profiles = profiler.maximize()
     # Get best-fit parameters
-    params = profiles.bestfit.choice(index='argmax', input=True)
+    if profiler.mpicomm.rank == 0:
+        print(profiles.to_stats(tablefmt='pretty'))
+    params = profiles.choice(index='argmax', squeeze=True).select(input=True).best
     if out is None:
         # Build smooth theory spectrum from best-fit parameters
         poles = []
@@ -1778,8 +1787,8 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
                     # Zero out shot noise for higher multipoles (only monopole has shot noise)
                     pole = pole.clone(num_shotnoise=np.zeros_like(pole.values("num_shotnoise")))
             # Evaluate theory at k-values from data
-            theory.init.update(k=pole.coords("k"))
-            value = theory(**params)[ill]
+            theory.update(k=pole.coords("k"))
+            value = compile(theory)(params)[ill]
             pole = pole.clone(value=value)
             poles.append(pole)
         # Build spectrum object from theory poles
@@ -1789,8 +1798,8 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
         value = []
         for label, pole in out.items(level=1):
             # Evaluate theory at k-values
-            theory.init.update(k=pole.coords('k'))
-            value.append(theory(**params)[theory.ells.index(label['ells'])])
+            theory.update(k=pole.coords('k'))
+            value.append(compile(theory)(params)[theory.ells.index(label['ells'])])
         smooth = out.clone(value=value)
     return smooth
 

@@ -126,13 +126,13 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 if __name__ == '__main__':
 
     stats, postprocess = [], []
-    # version = 'abacus-hf-dr2-v2-altmtl'
-    version = 'glam-uchuu-v2-altmtl'
+    version = 'abacus-hf-dr2-v2-altmtl'
+    # version = 'glam-uchuu-v2-altmtl'
     # version = 'abacus-2ndgen-dr2-complete'
     # version = 'abacus-2ndgen-dr2-altmtl'
     # version = 'data-dr2-v2'
     check_for_existing_measurements = False
-    imocks = np.arange(25)
+    imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
     #imocks = np.arange(9)

@@ -109,15 +109,6 @@ def run_fit_from_options(actions,
                 kw['prior'] = kw['prior'] * profiles.covariance
             posterior = compile(Posterior(likelihood_sampler, prior=get_prior(likelihood_sampler)))
             kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance', 'nparallel', 'prior', 'batch_size']})
-            import warnings
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "error",
-                    message="invalid value encountered in divide",
-                    category=RuntimeWarning,
-                )
-                sampler = Sampler(posterior, kernel=kernel, output_dir=output_dir, **kw)
-                sampler.run(**sampler_options.get('run', {}))
             sampler = Sampler(posterior, kernel=kernel, output_dir=output_dir, **kw)
             sampler.run(**sampler_options.get('run', {}))
         else:
