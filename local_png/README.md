@@ -26,6 +26,13 @@
     * Script: `https://github.com/cosmodesi/desi-clustering/blob/main/clustering_statistics/job_scripts/desipipe_holi_mocks.py`. 
     * There is a block (lines 149-156) you can uncomment that has the 'local_png' options (You can change `max_mocks_per_batch` to ~50 if only Pk measurements). 
     * To run with reshuffle, you just set `onthefly='reshuffle'`. 
+    * Note: I computed the ELGnotqso (and cross-correlation) with wsys-imlin with `job_scripts/desipipe_holi_mocks_edmond.py` 
+        * Saved in `$PSCRATCH/cai-dr2-benchmarks/`
+        * Copy those on CFS:
+```bash
+ssh -i $HOME/.ssh/desica desica@perlmutter.nersc.gov
+rsync -av /pscratch/sd/e/edmondc/cai-dr2-benchmarks/local_png/base/holi-v3-altmtl/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl
+```
 
 * PNG-Mocks: `/global/cfs/cdirs/desicollab/users/adrigut/PNGxHOD/dev_mocks/catalogs/DA2/v2.0/` (cutsky complete DR3 mocks)
    * Reference: Adame+26 (in CWR)
@@ -70,10 +77,20 @@ rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/des
 ```
 
 * PNG-Mocks: 
-<!-- ```bash
-cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/xxx
-rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/xxx/ .
-``` -->
+```bash
+cd /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl
+# From CFS:
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl .
+# From Noah's Scratch:
+rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/n/nsailer/measurements/local_png/base/pngunit-xl .
+
+cd /Users/edmond/Work/data/desi-clustering/dr2/profiles/local_png/base/pngunit-xl
+# From Noah's Scratch:
+rsync -av edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/n/nsailer/profiles/local_png/base/pngunit-xl .
+# From CFS:
+rsync -av edmondc@perlmutter-p1.nersc.gov:/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/profiles/local_png/base/pngunit-xl .
+```
+
 
 ### Upload data on NERSC:
 
@@ -83,6 +100,7 @@ First upload from my machine to SCRATCH:
 ```bash
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/holi-v3-altmtl
+rsync -av /Users/edmond/Work/data/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/profiles/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/profiles
 rsync -av /Users/edmond/Work/data/desi-clustering/dr2/chains/ edmondc@perlmutter-p1.nersc.gov:/pscratch/sd/e/edmondc/desi-clustering/dr2/chains
 ```
@@ -98,8 +116,8 @@ ssh -i $HOME/.ssh/desica desica@perlmutter.nersc.gov
 Then rsync the Scratch to CFS:
 ```bash
 rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/desi-data/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/desi-data
+rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/local_png/base/pngunit-xl
 
 rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/profiles/local_png/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/profiles/local_png/
-
 rsync -av /pscratch/sd/e/edmondc/desi-clustering/dr2/chains/local_png/ /global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/chains/local_png/
 ```
