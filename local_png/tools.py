@@ -209,8 +209,75 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
                     logger.debug(f"Skipping derived relationship: {e} (missing parameter)")
 
 
+_PNG_CROSS_TWO_REDSHIFT_CLS = None
+
+
+def _get_png_cross_two_redshift_cls():
+    """Lazily build (and cache) the two-redshift local-PNG cross calculator.
+
+    Defined lazily so importing this module does not require desilike. The returned class is a
+    subclass of desilike's ``PNGTracerPowerSpectrumMultipoles`` that evaluates the two tracers of a
+    cross-correlation at two *different* (snapshot) redshifts: the primary template sits at the
+    first tracer's redshift ``z_x`` and the second tracer's redshift ``z_y`` is reached by
+    linear growth-rescaling of the same template's matter power and PNG kernel -- exact for two
+    snapshots that share initial conditions. The matter cross-power is the geometric mean
+    ``D(z_x) D(z_y) P(k, 0) = sqrt(P_dd(z_x) P_dd(z_y))``.
+
+    The FoG keeps desilike's product-of-Lorentzians form; the caller fixes the first tracer's
+    ``sigmas`` to 0 so it reduces to a single Lorentzian (one Sigma), matching the cross convention
+    used elsewhere in ``get_observable_and_likelihood``. In the limit ``z_y == z_x`` this reproduces
+    the standard single-template ``PNGTracerPowerSpectrumMultipoles`` cross.
+    """
+    global _PNG_CROSS_TWO_REDSHIFT_CLS
+    if _PNG_CROSS_TWO_REDSHIFT_CLS is not None:
+        return _PNG_CROSS_TWO_REDSHIFT_CLS
+
+    from desilike.jax import interp1d
+    from desilike.jax import numpy as jnp
+    from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
+
+    class PNGTracerCrossTwoRedshift(PNGTracerPowerSpectrumMultipoles):
+        """Local-PNG cross power spectrum of two tracers at two different snapshot redshifts."""
+
+        def initialize(self, *args, z_y=None, **kwargs):
+            super().initialize(*args, **kwargs)
+            # z_x is the primary template redshift (first tracer); z_y is the second tracer's.
+            self.z_y = float(self.template.z if z_y is None else z_y)
+
+        def calculate(self, **params):
+            # mirrors desilike png.py PNGTracerPowerSpectrumMultipoles.calculate, but evaluates the
+            # first tracer at z_x (= self.template.z) and the second at z_y via growth-rescaling.
+            params = self.decode_params(params, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0.))
+            (b1X, b1Y), (sigmasX, sigmasY), sn0 = [params[name] for name in ['b1', 'sigmas', 'sn0']]
+            jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+            kin, cosmo, pk_dd = self.template.k, self.template.cosmo, self.template.pk_dd  # pk_dd at z_x
+            zx, zy = self.template.z, self.z_y
+            fX, fY = self.template.f, cosmo.growth_rate(zy)
+            Dx, Dy = cosmo.growth_factor(zx), cosmo.growth_factor(zy)
+            pk_dd_y = pk_dd * (Dy / Dx)**2                  # matter power at z_y (linear growth-rescale)
+            pk_dd_cross = (pk_dd * pk_dd_y)**0.5            # geometric mean = D(z_x) D(z_y) P(k, 0)
+            # alpha(k, z) with the 'prim' normalization (as in png.py), per tracer redshift.
+            pk_prim = cosmo.get_primordial(mode='scalar').pk_interpolator()(kin)
+            pphi_prim = 9 / 25 * 2 * jnp.pi**2 / kin**3 * pk_prim / cosmo.h**3
+            alphaX = 1. / (pk_dd / pphi_prim)**0.5
+            alphaY = 1. / (pk_dd_y / pphi_prim)**0.5
+            kin, alphaX, alphaY, pk_dd_cross = kin[1:], alphaX[1:], alphaY[1:], pk_dd_cross[1:]  # drop norm-k
+            alphaX = interp1d(jnp.log10(kap), jnp.log10(kin), alphaX)
+            alphaY = interp1d(jnp.log10(kap), jnp.log10(kin), alphaY)
+            fnl_loc = params['fnl_loc']
+            pX, pY = params['p']
+            bX = b1X + 2. * 1.686 * (b1X - pX) * fnl_loc * alphaX
+            bY = b1Y + 2. * 1.686 * (b1Y - pY) * fnl_loc * alphaY
+            fog = 1. / ((1. + sigmasX**2 * kap**2 * muap**2 / 2.) * (1. + sigmasY**2 * kap**2 * muap**2 / 2.))
+            pkmu = jac * fog * (bX + fX * muap**2) * (bY + fY * muap**2) * interp1d(jnp.log10(kap), jnp.log10(kin), pk_dd_cross) + sn0 / self.nbar
+            self.power = self.to_poles(pkmu)
+
+    _PNG_CROSS_TWO_REDSHIFT_CLS = PNGTracerCrossTwoRedshift
+    return _PNG_CROSS_TWO_REDSHIFT_CLS
+
+
 def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4},
-                                  fix_fnl=False, engine='class', scale_covariance=1, nickname=None, bias_params=None, **kwargs):
+                                  fix_fnl=False, engine='class', scale_covariance=1, nickname=None, bias_params=None, pk_zeff=None, **kwargs):
     """
     Get the observable and likelihood for a given tracer. Each multipole is treated as a different observable, but they share the same parameters in the theory.
 
@@ -227,6 +294,14 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
             multiple cross-correlations that share a tracer (e.g. LRGxELG and ELGxQSO both have ELG).
             With nickname='LRGxELG', ELG parameters become 'ELG_LRGxELG_ell0.b1'. Default is None.
         
+        pk_zeff (float or dict, optional): Redshift at which the power-spectrum template is evaluated
+            (FixedPowerSpectrumTemplate). Use this to evaluate P(k) at a fixed redshift instead of the
+            per-multipole OQE effective redshift carried by `zeffs`. Either a scalar (applied to every
+            tracer and multipole), or a dict keyed by the tracer pair ('LRGxLRG', 'LRGxQSO', ...) or by
+            the 3-letter auto tracer ('LRG', 'QSO'). Keys that are absent fall back to `zeffs`. If None
+            (default), `zeffs` is used as before. This only changes the template redshift; the window
+            (OQE weights) and the `zeffs` used for the bias relations are left untouched.
+
     Kwargs:
          kwargs[f"{tt}_{nickname}_ell0.b1"] (or f"{tt}_ell0.b1" if no nickname) value used to fix
          one of the two b1 in the cross-correlation, otherwise fixed to 1.
@@ -244,24 +319,63 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
     if len(tracers) == 1: tracers *= 2
     tracers = (tracers[0][:3], tracers[1][:3])  # LRG_zcmb -> LRG, ELGnotqso -> ELG, ...
     cross_correlation = (tracers[0] != tracers[1])
+    pair = 'x'.join(tracers)
+
+    def _template_z(ell):
+        """Redshift used to evaluate the P(k) template: `pk_zeff` override if given, else the OQE zeff."""
+        if pk_zeff is None:
+            return zeffs[pair][ell]
+        if not isinstance(pk_zeff, dict):
+            return pk_zeff
+        if pair in pk_zeff:
+            return pk_zeff[pair]
+        if not cross_correlation and tracers[0] in pk_zeff:
+            return pk_zeff[tracers[0]]
+        return zeffs[pair][ell]
+
+    def _cross_two_redshift():
+        """Return ``(z_x, z_y)`` for a two-snapshot-redshift cross, or ``None`` to use a single
+        template. Triggered for a cross when ``pk_zeff`` is a per-tracer dict that gives the two
+        tracers distinct redshifts and does NOT carry an explicit pair key (e.g. 'LRGxQSO'), which
+        would instead request a single effective redshift (handled by ``_template_z``)."""
+        if not (cross_correlation and isinstance(pk_zeff, dict)):
+            return None
+        if pair in pk_zeff:
+            return None
+        if tracers[0] in pk_zeff and tracers[1] in pk_zeff:
+            zx, zy = pk_zeff[tracers[0]], pk_zeff[tracers[1]]
+            if zx != zy:
+                return (zx, zy)
+        return None
+
+    two_z = _cross_two_redshift()
 
     observables = []
-    for ell in pk.ells:  
+    for ell in pk.ells:
         cross_suffix = f'_{nickname}' if (nickname is not None and cross_correlation) else ''
-        if cross_correlation: 
+        if cross_correlation:
             tracers_theo = [f'{tt}{cross_suffix}_ell{ell}' for tt in tracers]
         else:
             tracers_theo = [f'{tt}_ell{ell}' for tt in tracers]
         if not cross_correlation: tracers_theo = tracers_theo[:1]
-        logger.info(f'{tracers_theo=}, {ell=}, zeff={zeffs["x".join(tracers)][ell]:2.4}')
+        if two_z is not None:
+            logger.info(f'{tracers_theo=}, {ell=}, two-redshift cross: z_x={two_z[0]:2.4} ({tracers[0]}), z_y={two_z[1]:2.4} ({tracers[1]})')
+        else:
+            logger.info(f'{tracers_theo=}, {ell=}, zeff={zeffs[pair][ell]:2.4}, template z={_template_z(ell):2.4}')
 
-        # extract only the mulitpole ell: 
+        # extract only the mulitpole ell:
         data = pk.get(ells=[ell])
         wmatrix = window.at.observable.match(data)
 
         # Define Template and Theory:
-        template = FixedPowerSpectrumTemplate(z=zeffs["x".join(tracers)][ell], fiducial=DESI(engine=engine))
-        theory = PNGTracerPowerSpectrumMultipoles(template=template, mode="b-p", tracers=tracers_theo)
+        if two_z is not None:
+            # cross with the two tracers at two different snapshot redshifts (z_x for tracers[0],
+            # z_y for tracers[1]); single Lorentzian enforced below by fixing the first sigmas to 0.
+            template = FixedPowerSpectrumTemplate(z=two_z[0], fiducial=DESI(engine=engine))
+            theory = _get_png_cross_two_redshift_cls()(template=template, z_y=two_z[1], mode="b-p", tracers=tracers_theo)
+        else:
+            template = FixedPowerSpectrumTemplate(z=_template_z(ell), fiducial=DESI(engine=engine))
+            theory = PNGTracerPowerSpectrumMultipoles(template=template, mode="b-p", tracers=tracers_theo)
         # Fix some parameters:
         theory.params['fnl_loc'].update(value=0.0, fixed=fix_fnl)
         if ell == 2: 
