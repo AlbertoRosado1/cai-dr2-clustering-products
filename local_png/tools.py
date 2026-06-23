@@ -239,6 +239,11 @@ def _get_png_cross_two_redshift_cls():
     class PNGTracerCrossTwoRedshift(PNGTracerPowerSpectrumMultipoles):
         """Local-PNG cross power spectrum of two tracers at two different snapshot redshifts."""
 
+        # Inherit desilike's png.yaml: pointing config_fn at the BASE class (not the string
+        # 'png.yaml') triggers desilike's config-inheritance path, so the yaml is resolved relative
+        # to desilike's module instead of this file's directory (see desilike/base.py __new__).
+        config_fn = PNGTracerPowerSpectrumMultipoles
+
         def initialize(self, *args, z_y=None, **kwargs):
             super().initialize(*args, **kwargs)
             # z_x is the primary template redshift (first tracer); z_y is the second tracer's.
@@ -246,15 +251,20 @@ def _get_png_cross_two_redshift_cls():
 
         def calculate(self, **params):
             # mirrors desilike png.py PNGTracerPowerSpectrumMultipoles.calculate, but evaluates the
-            # first tracer at z_x (= self.template.z) and the second at z_y via growth-rescaling.
+            # first tracer at z_x (= self.template.z) and the second at z_y.
             params = self.decode_params(params, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0.))
             (b1X, b1Y), (sigmasX, sigmasY), sn0 = [params[name] for name in ['b1', 'sigmas', 'sn0']]
             jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
             kin, cosmo, pk_dd = self.template.k, self.template.cosmo, self.template.pk_dd  # pk_dd at z_x
-            zx, zy = self.template.z, self.z_y
-            fX, fY = self.template.f, cosmo.growth_rate(zy)
-            Dx, Dy = cosmo.growth_factor(zx), cosmo.growth_factor(zy)
-            pk_dd_y = pk_dd * (Dy / Dx)**2                  # matter power at z_y (linear growth-rescale)
+            zy = self.z_y
+            # Second tracer's f(z_y) and pk_dd(z_y) computed with the SAME convention the template uses
+            # for its own f and pk_dd (power_template.py BasePowerSpectrumExtractor._calculate):
+            #   f = sigma8(theta_cb) / sigma8(delta_cb);  pk_dd from the delta_cb pk_interpolator,
+            # just evaluated at z_y instead of z_x. (cosmo.growth_rate is not exposed for CambEngine.)
+            fo = cosmo.get_fourier()
+            fX = self.template.f                                                     # f(z_x)
+            fY = fo.sigma8_z(zy, of='theta_cb') / fo.sigma8_z(zy, of='delta_cb')      # f(z_y)
+            pk_dd_y = fo.pk_interpolator(of='delta_cb', extrap_kmin=1e-7, extrap_kmax=1e2).to_1d(z=zy)(kin)
             pk_dd_cross = (pk_dd * pk_dd_y)**0.5            # geometric mean = D(z_x) D(z_y) P(k, 0)
             # alpha(k, z) with the 'prim' normalization (as in png.py), per tracer redshift.
             pk_prim = cosmo.get_primordial(mode='scalar').pk_interpolator()(kin)
