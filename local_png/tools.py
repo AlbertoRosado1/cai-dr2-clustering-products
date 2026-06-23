@@ -8,7 +8,7 @@ logger = logging.getLogger('PNG fitting tools')
 
 def read_data(data_dir='.', mocks_dir=None, 
               tracer='LRG', zrange=(0.4, 1.1), weight_type='default-fkp-oqe', region='GCcomb', 
-              window_extra='', weight_type_mocks=None, **kwargs):
+              window_extra='', **kwargs):
     """ 
     Read the data from the clustering statistics output. This is a wrapper of clustering_statistics.tools.get_stats_fn.
     """
@@ -19,8 +19,9 @@ def read_data(data_dir='.', mocks_dir=None,
     pk = lsstypes.read(get_stats_fn(kind='mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
 
     # Read the window matrix:
-    logger.info(f'Reading the window with {window_extra=}')
-    window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region, extra=window_extra))
+    tracer_window = kwargs.get('tracer_window', tracer)
+    logger.info(f'Reading the window with {tracer_window=}, {weight_type=},{window_extra=}')
+    window = lsstypes.read(get_stats_fn(kind='window_mesh2_spectrum', stats_dir=data_dir, tracer=tracer_window, zrange=zrange, weight=weight_type, region=region, extra=window_extra))
 
     # Domitille FM window computation add an artificat on the region k (input space) > k_Nyquist (observable space) that bias the convolved theory at large scales.. (see validation_window.ipynb).
     # This k > k_Nyquist in the input space is irrelevant. Just remove it ! Here we keep only k < 0.1.
@@ -28,7 +29,8 @@ def read_data(data_dir='.', mocks_dir=None,
 
     # Read the analytical covariance matrix:
     try: 
-        cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum', stats_dir=data_dir, tracer=tracer, zrange=zrange, weight=weight_type, region=region))
+        tracer_cov = kwargs.get('tracer_cov', tracer)
+        cov = lsstypes.read(get_stats_fn(kind='covariance_mesh2_spectrum', stats_dir=data_dir, tracer=tracer_cov, zrange=zrange, weight=weight_type, region=region))
     except:
         logger.info('Do not find the analytical covariance matrix. Please provide mocks_dir to estimate the covariance matrix from mocks.')
         cov = None
@@ -36,14 +38,12 @@ def read_data(data_dir='.', mocks_dir=None,
     # Read the mocks:
     mocks = None
     if mocks_dir is not None: 
-        weight_type_mocks = weight_type_mocks or weight_type
-        if 'nmocks' in kwargs:
-            nmocks = kwargs['nmocks']
-            logger.info(f"Reading {nmocks} mocks for tracer {tracer} with weight type {weight_type_mocks}.")
-        else:
-            nmocks = 1000 if weight_type_mocks == 'default-fkp-oqe' else 100
+        weight_type_mocks = kwargs.get('weight_type_mocks', weight_type)
+        nmocks = kwargs.get('nmocks', 1000 if weight_type_mocks == 'default-fkp-oqe' else 100)
+        tracer_mocks = kwargs.get('tracer_mocks', tracer)
+        logger.info(f"Reading {nmocks=} for {tracer=} with {tracer_mocks=} {weight_type_mocks=}.")
 
-        fns_mock = [get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=mocks_dir, project='holi-v3-altmtl', tracer=tracer, region=region, zrange=zrange, 
+        fns_mock = [get_stats_fn(kind='mesh2_spectrum_poles', stats_dir=mocks_dir, project='holi-v3-altmtl', tracer=tracer_mocks, region=region, zrange=zrange, 
                                  weight=weight_type_mocks, imock=imock) for imock in range(nmocks)]    
         mocks = [lsstypes.read(fn) for fn in fns_mock]
 
@@ -93,7 +93,7 @@ def rebin_data(pk, window, cov, mocks, tracer='LRG', kmin=1e-3, kmax=0.08, kpivo
     return pk, window, cov, mocks
 
 
-def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bias=True, nickname=None, available_tracers=None, **kwargs):
+def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bias=True, nickname=None, available_tracers=None, bias_params=None, **kwargs):
     """Apply bias and damping parameter relations between the paramters of the likelihood both for ell=0/2 and auto/cross power spectrum.
 
     Parameters
@@ -101,7 +101,7 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
     likelihood : desilike likelihood
         Likelihood whose parameters are updated in place.
     tracer : str
-        name of the tracers: 'LRGxLRG', 'LRGxQSO', ... 
+        name of the tracers: 'LRGxLRG', 'LRGxQSO', ...
     nickname : str, optional
         Suffix inserted between the tracer shortname and '_ell{ell}' in the cross-correlation theory
         parameter names (e.g. nickname='LRGxELG' -> 'ELG_LRGxELG_ell0'). Must match the nickname used in
@@ -110,6 +110,14 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
         List of tracers for which complete data (including auto-correlations) is available.
         Used to determine which cross-correlation biases can be derived. If None, assumes all
         auto-correlations are available.
+    bias_params : dict or tuple, optional
+        Override for the fiducial b(z) = alpha * (1 + z)**2 + beta model used to relate biases across
+        multipoles and across auto/cross at different effective redshifts. Either a dict mapping the
+        3-letter tracer ('LRG', 'QSO', ...) to (alpha, beta), or a single (alpha, beta) tuple applied to
+        all tracers. For mocks without redshift evolution, pass alpha=0 (e.g. (0., 1.)) so every derived
+        ratio is 1. If None (default), the data-fiducial clustering_statistics.tools.bias is used.
+        Note: this only changes the likelihood; the OQE weights and window matrix (which used the data
+        fiducial b(z)) are left untouched.
 
     Returns
     -------
@@ -118,7 +126,7 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
     """
 
     def _rescale_bias_params(likelihood, tracer, zeff):
-        """ 
+        """
         Fix the bias parameters in the likelihood according to the redshift dependence of the bias.
         Only modifies the parameter if both source and target exist in the likelihood.
 
@@ -127,17 +135,21 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
             tracer: The tracer for which to fix the bias parameters. tracer[0] is source, tracer[1] is target.
             zeff: The effective redshifts.
         """
-        from clustering_statistics import tools        
+        from clustering_statistics import tools
         source_param_name = f"{tracer[0]}.b1"
         target_param_name = f"{tracer[1]}.b1"
-        
+
         # Both parameters must exist to create a derived relationship
         if source_param_name not in likelihood.all_params or target_param_name not in likelihood.all_params:
             logger.debug(f"Skipping derived relationship: {source_param_name} -> {target_param_name} (missing parameter)")
             return
-            
+
         # b(z) = alpha * (1 + z)**2 + beta
-        alpha, beta = tools.bias(1, tracer=tracer[0][:3], return_params=True)  
+        tt = tracer[0][:3]
+        if bias_params is not None:
+            alpha, beta = bias_params[tt] if isinstance(bias_params, dict) else bias_params
+        else:
+            alpha, beta = tools.bias(1, tracer=tt, return_params=True)
         factor = (alpha * (1 + zeff[1])**2 + beta) / (alpha * (1 + zeff[0])**2 + beta)
         likelihood.all_params[target_param_name].update(derived='{' + source_param_name + '}' + f' * {factor}')
         logger.debug(f"Derived relationship: {target_param_name} = {source_param_name} * {factor}")
@@ -187,13 +199,18 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
             if len(zeffs[tracer]) > 1:
                 zeff = [zeffs[tracer][ell] for ell in [0, 2]]
                 _rescale_bias_params(likelihood, tracer=[f"{tt}{cross_suffix}_ell0", f"{tt}{cross_suffix}_ell2"], zeff=zeff)
-                # logger.warning('we neglect the redshift dependence of the damping term, for now')
-                # Note: the first damping term is fixed to 0:
-                if i == 1: likelihood.all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived='{' + f"{tt}{cross_suffix}_ell0.sigmas" + '}')
+                try:
+                    # logger.warning('we neglect the redshift dependence of the damping term, for now')
+                    # Note: the first damping term is fixed to 0 so only need to update the second one.
+                    if i == 1: likelihood.all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived='{' + f"{tt}{cross_suffix}_ell0.sigmas" + '}')
+                except KeyError as e:
+                    # It can happen now when removing the quadrupole from the cross-correlation in the join fit.
+                    # (i could update zeff but okay just add more flexibility here)
+                    logger.debug(f"Skipping derived relationship: {e} (missing parameter)")
 
 
-
-def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4}, fix_fnl=False, engine='class', scale_covariance=1, nickname=None, **kwargs):
+def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG': {0: 0.7, 2: 0.7}}, p={'LRG': 1., 'ELG': 1., 'QSO': 1.4},
+                                  fix_fnl=False, engine='class', scale_covariance=1, nickname=None, bias_params=None, **kwargs):
     """
     Get the observable and likelihood for a given tracer. Each multipole is treated as a different observable, but they share the same parameters in the theory.
 
@@ -271,7 +288,7 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
 
     likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=covariance, 
                                                correct_covariance=correction_covariance, scale_covariance=scale_covariance)
-    fix_likelihood_bias_and_damping(likelihood, tracer='x'.join(tracers), zeffs=zeffs, derived_cross_bias=False, nickname=nickname, **kwargs)
+    fix_likelihood_bias_and_damping(likelihood, tracer='x'.join(tracers), zeffs=zeffs, derived_cross_bias=False, nickname=nickname, bias_params=bias_params, **kwargs)
     likelihood()
 
     return observables, likelihood
@@ -397,7 +414,7 @@ def combine_analytical_covariances(pks, covs, order=['LRGxLRG', 'LRGxQSO', 'QSOx
     return covariance_tot
 
 
-def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale_covariance=1):
+def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale_covariance=1, bias_params=None):
     """ 
     Build the total likelihood for the combined data vector, by stacking the observables and using the combined covariance matrix.
     Were are using order to stack the observable in the same order as the covariance matrix. 
@@ -424,7 +441,7 @@ def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale
     for tracer in order: 
         # We do not link the damping term from the cross-correlation and the auto-correlation
         # Because they are different effective redshifts and we do not know the a priori.
-        fix_likelihood_bias_and_damping(total_likelihood, tracer=tracer, zeffs=zeffs, derived_cross_bias=True, nickname=tracer, available_tracers=order)
+        fix_likelihood_bias_and_damping(total_likelihood, tracer=tracer, zeffs=zeffs, derived_cross_bias=True, nickname=tracer, available_tracers=order, bias_params=bias_params)
     total_likelihood()
 
     return total_likelihood
@@ -489,7 +506,7 @@ def plot_observables(observables, figsize=(6, 4),ylims=None, show=True, fn_outpu
     fig, axs = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, squeeze=True)
     fig.subplots_adjust(hspace=0.1)
 
-    translator = {'LRGxLRG': 'L', 'ELGxELG': 'E', 'QSOxQSO': 'Q', 'LRGxELG': 'LxE', 'LRGxQSO': 'LxQ', 'ELGxQSO': 'ExQ'}
+    translator = {'LRGxLRG': 'L', 'LRG': 'L', 'ELGxELG': 'E', 'ELG': 'E', 'QSOxQSO': 'Q', 'QSO': 'Q', 'LRGxELG': 'LxE', 'LRGxQSO': 'LxQ', 'ELGxQSO': 'ExQ'}
 
     for tracer in observables.keys():
         for obs in observables[tracer]:
@@ -590,8 +607,9 @@ def plot_triangle(chains, params, legend_labels=None, xlabels=[r'$f_{\rm NL}^{\r
         plt.show()
 
 
-def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, analytical_covariance=True, 
-                           force_profiling=False, base_dir=None, fiducial=None, extra_fn='', return_profiler=False):
+def run_profiling_one_mock(mocks, windows, covs, tracer, region='GCcomb', imock=0, alternative_mocks=None, kmin=1e-3, drop_ell2_cross=True, 
+                           analytical_covariance=True, 
+                           force_profiling=False, base_dir=None, fiducial=None, extra_fn='', return_profiler=False, save_plot=False):
     """Run the profiler on a single mock realisation and save the result to disk.
 
     Parameters
@@ -604,6 +622,8 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
         Analytical covariance matrix for the tracer.
     tracer : str
         Tracer name (e.g. 'LRGxLRG').
+    region : str, optional
+        Region name (e.g. 'GCcomb'). Default is 'GCcomb'.
     imock : int, optional
         Index of the mock to fit. Default is 0.
     kmin : float, optional
@@ -617,9 +637,12 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
     """
     import os
 
-    kwargs = {'LRG_LRGxQSO_ell0.b1': 2.15, 'LRG_LRGxELG_ell0.b1': 2.15, 'ELG_ELGxQSO_ell0.b1': 1.2, 'scale_covariance': 1}
+    # from clustering_statistics.tools import bias
+    # tt1 = short_tracer.split('x')[0]
+    # kwargs = {f'{tt1}_{short_tracer}_ell0.b1': bias(zeffs[region][short_tracer][0], tracer=tt1)}
+    kwargs = {'LRG_LRGxQSO_ell0.b1': 2.25, 'LRG_LRGxELG_ell0.b1': 2.24, 'ELG_ELGxQSO_ell0.b1': 1.42, 'scale_covariance': 1}
 
-    fn_profile = base_dir + f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.npy"
+    fn_profile = base_dir + f"mock{imock}/bestfit_{tracer}_{region}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.npy"
     if (os.path.isfile(fn_profile) and force_profiling) or (not os.path.isfile(fn_profile)):
         os.makedirs(os.path.dirname(fn_profile), exist_ok=True)
         
@@ -627,35 +650,44 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
 
         obs, lik, zeffs = {}, {}, {}
         pks = {}
+        mocks_cov = {}
         for tt in tracers:
-            mocks_tt = mocks[tt].copy()  # Avoid modifying the original mock observable.
+            mocks_cov[tt] = mocks[tt].copy()  # Avoid modifying the original mock observable.
 
-            pk = mocks_tt.pop(imock).select(k=(kmin, 1))  # remove the used mock from the covariance matrix.
-            pks[tt] = pk
+            pks[tt] = mocks_cov[tt].pop(imock).select(k=(kmin, 1))  # remove the used mock from the covariance matrix.
+            if (alternative_mocks is not None) and (tt in alternative_mocks) and (alternative_mocks[tt] is not None):
+                # use an alternative mock for the fit, but keep the covariance from the original mocks.
+                pks[tt] = alternative_mocks[tt].copy().pop(imock).select(k=(kmin, 1))
+            if drop_ell2_cross and (tt.split('x')[0] != tt.split('x')[1]):  # if it's a cross-correlation and we want to drop the ell2:
+                logger.info(f"{tt}: Dropping ell=2 for the cross-correlation to reduce hartlap factor and speed up the fit.")
+                pks[tt] = pks[tt].get(ells=[0])  # keep only the monopole for the fit.
             
-            window = windows[tt].at.observable.match(pk)
+            window = windows[tt].at.observable.match(pks[tt])
 
-            zeffs[tt] = {ell: window.observable.get(ell).attrs['zeff'] for ell in pk.ells}  # Keep only the zeff for the used multipoles.
+            zeffs[tt] = {ell: window.observable.get(ell).attrs['zeff'] for ell in pks[tt].ells}  # Keep only the zeff for the used multipoles.
 
             if analytical_covariance:
-                covariance = covs[tt].at.observable.at(observables='spectrum2', tracers=tuple(tt.split("x"))).match(pk)
+                covariance = covs[tt].at.observable.at(observables='spectrum2', tracers=tuple(tt.split("x"))).match(pks[tt])
             else:
-                # print(len(mocks_tt))
-                covariance = [mm.match(pk) for mm in mocks_tt]
+                mocks_cov[tt] = [mm.match(pks[tt]) for mm in mocks_cov[tt]]
+                covariance = mocks_cov[tt]
 
-            obs[tt], lik[tt] = get_observable_and_likelihood(pk, window, covariance, tt, zeffs, engine='camb', fix_fnl=False, nickname=tt, **kwargs)
+            obs[tt], lik[tt] = get_observable_and_likelihood(pks[tt], window, covariance, tt, zeffs, engine='camb', fix_fnl=False, nickname=tt, **kwargs)
 
         if len(tracers) > 1:
-            lik = build_total_likelihood(tracers, pks, obs, covs if analytical_covariance else mocks, zeffs, fiducial)
+            lik = build_total_likelihood(tracers, pks, obs, covs if analytical_covariance else mocks_cov, zeffs, fiducial)
         else:
             obs, lik = obs[tracers[0]], lik[tracers[0]]
 
         profiler = run_profiler(lik, fn_output=fn_profile, sigfigs=5)
 
-        if (kmin == 1e-3) and analytical_covariance and (len(tracers) == 1):
+        if save_plot:
             ylims = [(2e3, 4e4), (2e3, 4e4)] if tracer in ['ELGxELG', 'ELGxQSO'] else None
-            fn_obs = base_dir + f"mock{imock}/bestfit_{tracer}_analytical_cov.png"
-            plot_observables({tracer: obs}, ylims=ylims, fn_output=fn_obs, show=False)
+            fn_obs = base_dir + f"mock{imock}/bestfit_{tracer}_{'' if analytical_covariance else 'mock'}_kmin-{kmin}{extra_fn}.png"
+            if len(tracers) > 1:
+                plot_observables({tt: obs[tt] for tt in tracers}, ylims=ylims, fn_output=fn_obs, show=True)
+            else: 
+                plot_observables({tracer: obs}, ylims=ylims, fn_output=fn_obs, show=True)
 
         if return_profiler:
             return profiler
