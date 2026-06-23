@@ -19,7 +19,7 @@ from clustering_statistics.tools import setup_logging, _compute_binned_weight
 from clustering_statistics.correlation2_tools import prepare_cucount_particles
 
 
-dirname = Path('./kappa_fiber_assignment_tlobs/')
+dirname = Path('./kappa_fiber_assignment/')
 dirname.mkdir(exist_ok=True)
 
 
@@ -40,8 +40,10 @@ def compute_auw(imock):
 
     tracer = 'ELG_LOPnotqso'
     zrange = (1.1, 1.6)
+    #weight = 'default-compondata-FKP'
+    weight = 'default-FKP'
 
-    kw_catalog = dict(version='glam-uchuu-v2-altmtl', tracer=tracer, weight='default-compondata-FKP', region='NGC', nran=2, keep_columns=True, imock=imock, FKP_P0=4e3)
+    kw_catalog = dict(version='glam-uchuu-v2-altmtl', tracer=tracer, weight=weight, region='NGC', nran=2, keep_columns=True, imock=imock, FKP_P0=4e3)
     expand = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=kw_catalog['tracer'], nran=kw_catalog['nran'])}
     if 'compondata' in kw_catalog['weight']:
         expand['from_data'] = ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']
