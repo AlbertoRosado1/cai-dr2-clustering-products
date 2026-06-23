@@ -11,7 +11,7 @@ Dry-run path planning on an interactive node::
 
     srun -n 4 python clustering_statistics/job_scripts/desipipe_catalog_blinding.py \
         --interactive --dry-run --tracer LRG --version data-dr2-v2 \
-        --modes bao rsd fnl --parameters_fn /path/to/catalog_blinding_2026_06.npy \
+        --modes bao rsd fnl --parameters_fn /path/to/<analysis-catalog-blinding-file>.npy \
         --regions NGC --maxr 1
 
 Remove ``--dry-run`` only after checking the printed output paths. By default
@@ -372,8 +372,8 @@ def collect_argparser():
     parser.add_argument("--maxr", type=int, default=None, help="Exclusive upper random index, LSS-style.")
     parser.add_argument("--modes", nargs="+", default=["bao"], choices=["bao", "ap", "rsd", "fnl", "png", "local_png"])
     parser.add_argument("--metadata", default="sealed", choices=["open", "sealed"])
-    parser.add_argument("--parameters_fn", default=None, help="Sealed desiblind catalog_blinding_2026_06.npy file.")
-    parser.add_argument("--save_dir", default=None, help="Directory containing the default catalog blinding secret file.")
+    parser.add_argument("--parameters_fn", default=None, help="Explicit sealed desiblind catalog parameter .npy file; recommended for production.")
+    parser.add_argument("--save_dir", default=None, help="Directory containing desiblind's generic default catalog blinding file.")
     parser.add_argument("--fiducial_f", type=float, default=0.8)
     parser.add_argument("--zeff", type=float, default=None, help="Effective redshift for RSD/fNL blinding. Defaults to desiblind fallback values by tracer.")
     parser.add_argument("--bias", type=float, default=None, help="Tracer bias for RSD/fNL blinding. Defaults to desiblind fallback values by tracer.")
