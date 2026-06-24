@@ -1037,6 +1037,32 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return base_dir / f'forFA{imock:d}.fits'
             cat_dir = base_dir / f'altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
 
+        elif version == 'abacus-hf-dr2-v1':
+            # TODO: This is not correctly implemented yet. This will only work as expected if zsnap coincides with the zrange passed to compute_stats.py.
+            # Reason: compute_stats.py first loads all the catalogs and then perform redshifts cuts as the measurement for that redshift bin is to be computed.
+            # zsnap = {(0.1, 0.4): 0.2, (0.4, 0.6): 0.5, (0.6, 0.8): 0.725, (0.8, 1.1): 0.950, (1.1, 1.6): 0.950, (0.8, 2.1): 1.4}[zrange]
+            stracer = get_simple_tracer(tracer)
+            zsnap = {'ELG': 0.950, 'QSO': 1.4}[stracer]
+            sznap = f'{zsnap:.3f}'.replace('.', 'p')
+            if tracer == 'QSO':
+                szrange = '0p8to3p5'
+            if tracer == 'ELG':
+                szrange = '0p8to1p6'
+                stracer = 'ELG_v5'
+            if tracer == 'LRG':
+                szrange = '0p4to1p1'
+            if tracer == 'BGS':
+                szrange = '0p1to0p4'
+            base_dir = desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/AbacusSummit_base_c000_ph{imock:03d}/CutSky/{stracer}/z{zsnap:.3f}/forclustering'
+            if kind == 'data':
+                return base_dir / f'cutsky_abacusHF_DR2_{tracer}_z{sznap}_zcut_{szrange}_clustering.dat.fits'
+            if kind == 'randoms':
+                # TODO: nran is ignored hear.
+                # Reason: there are only randoms for nran=8-17
+                # return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/raw/rands_intiles_DARK_{iran:d}_NO_imagingmask_withz.fits' for iran in range(8,18)]
+                # return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/imaging_mask_applied/rands_intiles_DARK_{iran:d}_withz.fits' for iran in range(8,18)]
+                return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/imaging_mask_applied/rands_intiles_DARK_{iran:d}_withz.fits' for iran in range(8,18)]
+                
         elif version == 'abacus-hf-dr2-v2-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
