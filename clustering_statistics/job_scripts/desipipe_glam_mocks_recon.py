@@ -107,15 +107,15 @@ if __name__ == '__main__':
     onthefly = None
 
     # uchuu-hf-reference: single reference realization, complete catalog (no altmtl fiber assignment)
-    version = 'uchuu-hf-reference'
-    imocks2run = np.arange(1)
-    jackknife = {'nsplits': 60}
+    # version = 'uchuu-hf-reference'
+    # imocks2run = np.arange(1)
+    # jackknife = {'nsplits': 60}
 
     # # glam-uchuu-v2-altmtl: 500-mock BAO covariance run (no jackknife)
-    # version = 'glam-uchuu-v2-altmtl'
-    # imocks2run = np.arange(1000, 1500)
-    # imocks2run = imocks2run[~np.isin(imocks2run, [280, 543, 1275])]  # skip dubious mocks
-    # jackknife = None
+    version = 'glam-uchuu-v2-altmtl'
+    imocks2run = np.arange(1000, 1500)
+    imocks2run = imocks2run[~np.isin(imocks2run, [280, 543, 1275])]  # skip dubious mocks
+    jackknife = None
 
     # Per-tracer batch sizes (mocks per slurm task), sized to fit each task in the 3 h wall.
     # Measured per-mock cost (NGC+SGC, all zranges): LRG ~27 min, ELG ~28 min, QSO ~6 min.
