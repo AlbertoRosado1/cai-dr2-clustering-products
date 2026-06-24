@@ -612,7 +612,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             window = _read_tracer(products_fn['window'], tracers2)
                             # Fit theory to measurement (preliminary fit for covariance)
                             theory = run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window, theory='recon' if recon else 'rept')
-                            theory_fn[tracers2] = get_stats_fn(kind=theory_stat, catalog=(fn_catalog_options[tracers2[0]] if tracers2[1] == tracers2[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers2}), battrs=['poles'])
+                            theory_fn[tracers2] = get_stats_fn(kind=theory_stat, catalog=(fn_catalog_options[tracers2[0]] if tracers2[1] == tracers2[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers2}))
                             # Write theory to disk
                             tools.write_stats(theory_fn[tracers2], theory)
                     else:
@@ -647,14 +647,14 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     
                     # Write covariance matrix to disk
                     for key, kw in _expand_cut_auw_options(stat, covariance_options).items():
-                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw, battrs=['poles'])
+                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
                         if key in covariance:
                             tools.write_stats(fn, covariance[key])
     
                     # Write intermediate correlation functions to disk
                     for key in covariance:
                         if 'correlation' in key:  # window functions
-                            fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)), battrs=['poles'])
+                            fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)))
                             tools.write_stats(fn, covariance[key])
 
 

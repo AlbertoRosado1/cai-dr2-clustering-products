@@ -1203,7 +1203,10 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
     corr_type = ''.join(list(battrs)) if battrs is not None else None
     jackknife = kwargs.get('jackknife', {}).get('nsplits', None)
     if 'particle2_correlation' in kind:
-        if corr_type is None: corr_type = 'smu'
+        if corr_type is None:
+            corr_type = 'smu'
+            if 'covariance' in kind:
+                corr_type = 'poles'
         if jackknife:
             corr_type = f'{corr_type}_jackknife{jackknife:d}'
         full = f'particle2_correlation_{corr_type}'

@@ -701,35 +701,99 @@ def compute_covariance_particle2_correlation(*get_data_randoms, theory=None, RR=
                         fields[1:] * 2: get_fkp_norm(all_particles[1]['randoms']),
                         fields: fkp_norm}
 
-    def interp_log(spectrum):
-        k_fftlog = np.logspace(-2., 2., 1024)
-        # extrapolate the outer edges assuming constant log spacing
+    def interp_log(spectrum, nmu=6):
+        from scipy.special import eval_legendre
+    
+        #k_fftlog = np.logspace(-2., 2., 1024)
+        k_fftlog = np.logspace(-3., 1.5, 1024)
+    
         k_edges = np.empty(len(k_fftlog) + 1)
         k_edges[1:-1] = np.sqrt(k_fftlog[:-1] * k_fftlog[1:])
         k_edges[0] = k_fftlog[0]**2 / k_edges[1]
         k_edges[-1] = k_fftlog[-1]**2 / k_edges[-2]
         k_edges = np.column_stack([k_edges[:-1], k_edges[1:]])
-        poles = []
+    
+        # collect input multipoles
+        labels, ells, poles = [], [], []
         for label, pole in spectrum.items():
-            kin = pole.coords('k')
-            pole = pole.value()
-            mask_high = k_fftlog > kin[-1]
-            k_mid = k_fftlog[~mask_high]
-            logk_high = np.log10(k_fftlog[mask_high] / kin[-1])
-            damp_high = np.exp(-(k_fftlog[mask_high] / kin[-1] - 1.) ** 2 / 200.)
-            slope_high = (pole[-1] - pole[-2]) / np.log10(kin[-1] / kin[-2])
-            interp_mid = jnp.interp(np.log10(k_mid), np.log10(kin), pole)
-            extrap_high = (pole[-1] + slope_high * logk_high) * damp_high
-            value = jnp.concatenate([interp_mid, extrap_high])
-            poles.append(types.Mesh2SpectrumPole(num_raw=value, k=k_fftlog, k_edges=k_edges, ell=label['ells']))
-        return types.Mesh2SpectrumPoles(poles)
+            labels.append(label)
+            ells.append(label['ells'])
+            kin = np.asarray(pole.coords('k'))
+            poles.append(np.asarray(pole.value()))
+    
+        ells = np.asarray(ells)
+        poles = np.asarray(poles)  # (nell, nk)
+    
+        # Gauss-Legendre mu bins / quadrature nodes
+        mu, wmu = np.polynomial.legendre.leggauss(nmu)
+    
+        # Legendre matrix: L[a, imu] = L_ell_a(mu)
+        leg = np.asarray([eval_legendre(ell, mu) for ell in ells])
+    
+        # multipoles -> P(k, mu)
+        # convention: P(k, mu) = sum_ell P_ell(k) L_ell(mu)
+        pkmu = np.einsum('lk,lm->km', poles, leg)
+    
+        logkin = np.log(kin)
+        logkout = np.log(k_fftlog)
+    
+        def interp_signed_loglog(y):
+            """
+            Log-log interpolation/extrapolation in |y| with sign preserved.
+            Falls back to linear-log if sign changes.
+            """
+            y = np.asarray(y)
+    
+            if np.all(y > 0.) or np.all(y < 0.):
+                sign = np.sign(y[0])
+                logy = np.log(np.abs(y))
+    
+                out = np.interp(logkout, logkin, logy)
+    
+                # left extrapolation
+                slope_low = (logy[1] - logy[0]) / (logkin[1] - logkin[0])
+                mask_low = logkout < logkin[0]
+                out[mask_low] = logy[0] + slope_low * (logkout[mask_low] - logkin[0])
+    
+                # right extrapolation
+                slope_high = (logy[-1] - logy[-2]) / (logkin[-1] - logkin[-2])
+                mask_high = logkout > logkin[-1]
+                out[mask_high] = logy[-1] + slope_high * (logkout[mask_high] - logkin[-1])
+    
+                return sign * np.exp(out)
+    
+            # fallback if P(k, mu) changes sign
+            out = np.interp(logkout, logkin, y)
+    
+            slope_low = (y[1] - y[0]) / (logkin[1] - logkin[0])
+            mask_low = logkout < logkin[0]
+            out[mask_low] = y[0] + slope_low * (logkout[mask_low] - logkin[0])
+    
+            slope_high = (y[-1] - y[-2]) / (logkin[-1] - logkin[-2])
+            mask_high = logkout > logkin[-1]
+            out[mask_high] = y[-1] + slope_high * (logkout[mask_high] - logkin[-1])
+    
+            return out
+    
+        # interpolate/extrapolate each mu bin
+        pkmu_out = np.stack([interp_signed_loglog(pkmu[:, imu]) for imu in range(nmu)], axis=1)  # (nkout, nmu)
+    
+        # P(k, mu) -> multipoles
+        # P_ell(k) = (2ell + 1)/2 int_{-1}^{1} dmu P(k,mu) L_ell(mu)
+        poles_out = []
+        for label, ell in zip(labels, ells):
+            leg = eval_legendre(ell, mu)
+            value = (2 * ell + 1) / 2. * np.einsum('m,km,m->k', wmu, pkmu_out, leg)
+            poles_out.append(types.Mesh2SpectrumPole(num_raw=jnp.asarray(value), k=k_fftlog, k_edges=k_edges, ell=ell))
+        return types.Mesh2SpectrumPoles(poles_out)
 
-    #theory = theory.map(interp_log, level=1)  # apply to all tracers
+    theory = theory.map(interp_log, level=1)  # apply to all tracers
     if jax.process_index() == 0: theory.write('theory.h5')
     covariances = compute_spectrum2_covariance(windows, theory, flags=['smooth'] + (['fftlog'] if fftlog else []), return_type='list')
     if split_SS:
         covariances = covariances[:2]  # leave out SS, added later
     covariance = covariances[0].clone(value=sum(cov.value() for cov in covariances))
+    covariance.write('covariance_pk.h5')
 
     def compute_SS_contribution(observable, QS):
 
