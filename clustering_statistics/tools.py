@@ -447,10 +447,8 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     base = {"catalog": {}, "particle2_correlation": {},  "particle3_correlation": {}, "mesh2_spectrum": {}, "mesh3_spectrum": {}, "window_mesh2_spectrum_fm": {}}
     propose_fiducial = {
         'BGS': {'nran': 3, 'recon': {'mode': 'recsym', 'bias': 1.5, 'smoothing_radius': 15., 'zrange': (0.1, 0.4)}},
-        'LRG+LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15.}, 'zrange': (0.4, 1.1),
-                     'combine': {'biases': [2.0, 1.9], 'P0': 6000, 'dz': 0.01}},
-        'LRG+ELG': {'nran': 13, 'recon': {'mode': 'recsym', 'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1),
-                     'combine': {'biases': [2.0, 1.2], 'P0': 6000, 'dz': 0.01}},
+        'LRG+LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15.}, 'zrange': (0.4, 1.1)},
+        'LRG+ELG': {'nran': 13, 'recon': {'mode': 'recsym', 'bias': 1.6, 'smoothing_radius': 15.}, 'zrange': (0.8, 1.1)},
         'LRG': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 2.0, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
         'LGE': {'nran': 10, 'recon': {'mode': 'recsym', 'bias': 1.9, 'smoothing_radius': 15., 'zrange': (0.4, 1.1)}},
         'ELG': {'nran': 15, 'recon': {'mode': 'recsym', 'bias': 1.2, 'smoothing_radius': 15., 'zrange': (0.8, 1.6)}},
@@ -477,14 +475,12 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
                            'ELG': [(0.8, 1.1), (1.1, 1.6)], 'LRG+ELG': [(0.8, 1.1)], 'QSO': [(0.8, 2.1)],
                            'LRGxLGE': [(0.4, 0.6), (0.6, 0.8), (0.8, 1.1)],
                            'LRGxELG': [(0.8, 1.1)], 'LRGxQSO': [(0.8, 1.1)], 'ELGxQSO': [(0.8, 1.1), (1.1, 1.6)]}
-        propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'LRG+ELG': 6e3, 'QSO': 6e3}
+        propose_FKP_P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'LRG+ELG': 1e4, 'QSO': 6e3}
         propose_meshsizes = {'BGS': 750, 'LRG': 750, 'LGE': 750, 'ELG': 960, 'LRG+ELG': 750, 'QSO': 1152}
         propose_cellsize = 7.5
 
     propose_fiducial.update(zranges=propose_zranges[simple_tracer])
     propose_fiducial['catalog'].update(weight=propose_weight, nran=propose_fiducial['nran'], zranges=propose_zranges[simple_tracer], FKP_P0=[propose_FKP_P0[tracer] for tracer in simple_tracers][0])
-    if 'combine' in propose_fiducial:
-        propose_fiducial['catalog']['combine'] = propose_fiducial['combine']
 
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
         propose_fiducial[stat]['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': propose_cellsize}
@@ -537,11 +533,10 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
-        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "LGE": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRG+ELG": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
+        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "LGE": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxLGE": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
 
         if simple_tracers[0] not in ["BGS", "LRG", "LGE", "ELG", "QSO"]:
-            warnings.warn(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm, skipping")
-            return propose_fiducial[kind]
+            raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
         propose_photoregions = {"BGS": ["N", "S"], "LRG": ["N", "S"], "LGE": ["N", "S"], "ELG": ["N", "S"], "QSO": ["N", "SnoDES", "DES"]}
 
         propose_regression_zranges = {
@@ -1525,127 +1520,6 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
     return randoms
 
 
-def _combine_tracer_catalogs(catalogs, nz_files, biases, P0, zmin, zmax, dz=0.01, kind='data', combine=None):
-    """Combine catalogs from multiple tracers with bias-weighted neff reweighting.
-
-    Following dev/LSS/scripts/combined_catalog.py and dev/LSS/py/LSS/combined_tracer_utils.py.
-    Updates NX to combined neff(z), applies per-tracer bias to WEIGHT, and for randoms
-    normalizes by data/random ratios.
-    """
-    ntracers = len(catalogs)
-    nbins = int(round((zmax - zmin) / dz))
-    zmin_arr = np.linspace(zmin, zmax, nbins, endpoint=False)
-    z_comb = zmin_arr + dz / 2
-
-    nz_comb_all = np.zeros((ntracers, nbins))
-    for i, nz_file in enumerate(nz_files):
-        zmin_t = nz_file[:, 1]
-        nz_t = nz_file[:, 3]
-        dz_t = zmin_t[1] - zmin_t[0]
-        for j in range(nbins):
-            z = z_comb[j]
-            if zmin_t[0] < z < zmin_t[-1] + dz_t:
-                i_t = int((z - zmin_t[0]) / dz_t)
-                if 0 <= i_t < len(nz_t):
-                    nz_comb_all[i, j] = nz_t[i_t]
-
-    biases_arr = np.array(biases)
-    bnz = np.sum(biases_arr[:, None] * nz_comb_all, axis=0)
-    b2nz = np.sum(biases_arr[:, None]**2 * nz_comb_all, axis=0)
-    mask = bnz > 0
-    beff = np.where(mask, b2nz / bnz, 0.)
-    neff = np.where(mask, bnz / beff, 0.)
-
-    for i, cat in enumerate(catalogs):
-        z_all = cat['Z']
-        valid = (z_all >= zmin) & (z_all < zmax)
-        catalogs[i] = cat[valid]
-        zind = np.clip(((catalogs[i]['Z'] - zmin) / dz).astype(int), 0, nbins - 1)
-        catalogs[i]['NX'] = neff[zind]
-
-    fkp_weights = [1. / (1. + cat['NX'] * P0) for cat in catalogs]
-
-    mpicomm = catalogs[0].mpicomm
-    def _global_sum(arr):
-        local = float(np.sum(arr))
-        return mpicomm.allreduce(local) if mpicomm.size > 1 else local
-
-    if kind == 'data' and combine is not None:
-        combine['Nd'] = [_global_sum(cat['WEIGHT'] * fkp) for cat, fkp in zip(catalogs, fkp_weights)]
-
-    Nr_before_bias = None
-    if kind == 'randoms' and combine is not None:
-        if 'Nd' not in combine:
-            warnings.warn('combine["Nd"] not set — data catalogs must be combined before randoms. Skipping random normalization.')
-        else:
-            Nr_before_bias = [_global_sum(cat['WEIGHT'] * fkp) for cat, fkp in zip(catalogs, fkp_weights)]
-
-    for i, cat in enumerate(catalogs):
-        cat['WEIGHT'] = cat['WEIGHT'] * biases[i]
-
-    if Nr_before_bias is not None:
-        Nd = combine['Nd']
-        for i in range(1, ntracers):
-            normalization = (Nd[i] * Nr_before_bias[0]) / (Nd[0] * Nr_before_bias[i])
-            catalogs[i]['WEIGHT'] = catalogs[i]['WEIGHT'] * normalization
-
-    common = set.intersection(*[set(cat.columns()) for cat in catalogs])
-    for cat in catalogs:
-        for col in set(cat.columns()) - common:
-            del cat[col]
-    return Catalog.concatenate(catalogs)
-
-
-def _read_combined_tracer_catalog(kind, combine, get_catalog_fn, concatenate, read, mpicomm,
-                                  expand=None, reshuffle=None, complete=None,
-                                  keep_columns=None, **kwargs):
-    """Read and combine component catalogs for a '+' tracer on the fly."""
-    tracer = kwargs['tracer']
-    components = [get_full_tracer(ct, version=kwargs.get('version')) for ct in tracer.split('+')]
-    biases = combine['biases']
-    P0 = combine['P0']
-    dz = combine.get('dz', 0.01)
-
-    zranges = kwargs.get('zranges', [(0.8, 1.1)])
-    zmin = min(zr[0] for zr in zranges)
-    zmax = max(zr[1] for zr in zranges)
-
-    nz_kwargs = {k: kwargs[k] for k in ['version', 'cat_dir', 'imock'] if k in kwargs}
-    nz_files = [np.loadtxt(get_catalog_fn(kind='nz', tracer=ct, region='NGC', **nz_kwargs)) for ct in components]
-
-    comp_kwargs = dict(kwargs)
-    comp_kwargs.pop('combine', None)
-
-    if kind in ('data', 'full_data') or concatenate:
-        component_catalogs = []
-        for ct in components:
-            ck = dict(comp_kwargs, tracer=ct)
-            cat = read_catalog(kind=kind, get_catalog_fn=get_catalog_fn,
-                               concatenate=True, read=read, mpicomm=mpicomm,
-                               expand=expand, reshuffle=reshuffle, complete=complete,
-                               keep_columns=keep_columns, **ck)
-            component_catalogs.append(cat)
-        return _combine_tracer_catalogs(component_catalogs, nz_files, biases, P0,
-                                        zmin, zmax, dz, kind=kind, combine=combine)
-    else:
-        component_lists = []
-        for ct in components:
-            ck = dict(comp_kwargs, tracer=ct)
-            cats = read_catalog(kind=kind, get_catalog_fn=get_catalog_fn,
-                                concatenate=False, read=read, mpicomm=mpicomm,
-                                expand=expand, reshuffle=reshuffle, complete=complete,
-                                keep_columns=keep_columns, **ck)
-            component_lists.append(cats)
-        nfiles = min(len(cl) for cl in component_lists)
-        combined = []
-        for i in range(nfiles):
-            cats_i = [component_lists[j][i] for j in range(len(components))]
-            combined_i = _combine_tracer_catalogs(cats_i, nz_files, biases, P0,
-                                                  zmin, zmax, dz, kind=kind, combine=combine)
-            combined.append(combined_i)
-        return combined
-
-
 @default_mpicomm
 def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                  expand=None, reshuffle=None, complete=None, mpicomm=None, read=_read_catalog,
@@ -1729,18 +1603,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
     if not isinstance(fns, list): fns = [fns]
     exists = {ff: os.path.exists(ff) for fn in fns for ff in (fn if isinstance(fn, (list, tuple)) else [fn])}
     if not all(exists.values()):
-        combine = kwargs.pop('combine', None)
-        if '+' in str(tracer) and combine is not None:
-            warnings.warn(f'Combined catalog for {tracer} not found, combining component catalogs on-the-fly')
-            return _read_combined_tracer_catalog(kind=kind, combine=combine,
-                                                 get_catalog_fn=get_catalog_fn,
-                                                 concatenate=concatenate, read=read,
-                                                 mpicomm=mpicomm, expand=expand,
-                                                 reshuffle=reshuffle, complete=complete,
-                                                 keep_columns=keep_columns, **kwargs)
         raise IOError(f'Catalogs {[fn for fn, ex in exists.items() if not ex]} do not exist!')
-
-    kwargs.pop('combine', None)
 
     complete_data = None
 
@@ -2078,7 +1941,12 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                 logger.info('Dividing individual weights by WEIGHT_SYS')
             individual_weight /= catalog['WEIGHT_SYS']
 
-        if 'comp' in weight_type:
+        if 'componly_allondata' in weight_type:
+            if kind == 'data':
+                individual_weight = catalog['WEIGHT_COMP'] / catalog['FRAC_TLOBS_TILES']
+            elif kind == 'randoms':
+                individual_weight = np.ones(len(catalog), dtype='f8') 
+        elif 'comp' in weight_type:
             individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
 
         if 'wsys' in weight_type and not 'noimsys' in weight_type:
