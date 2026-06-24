@@ -47,8 +47,10 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
     for imock in imocks:
         for region in regions:
             t0 = time()
-            mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
-                              'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
+            mesh2_spectrum = {}
+            # To get angular upweights and/or get the theta cut uncomment below
+            # mesh2_spectrum = {'cut': True if 'shape' in analysis else None, 
+            #                   'auw': True if 'altmtl' in version and onthefly is None and 'shape' in analysis else None}
             window_mesh2_spectrum = {'cut': True if 'shape' in analysis else None}
             
             options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
@@ -59,7 +61,7 @@ def run_stats(tracer='LRG', project='', version='holi-v3-altmtl', onthefly=None,
             
             for itracer in options['catalog']:
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
-                if version != 'uchuu-hf-reference':
+                if version != 'uchuu-hf-reference' and version != 'abacus-hf-dr2-v1':
                     options['catalog'][itracer]['expand']  = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']), 'from_data': ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES']}
                 if onthefly == 'complete':
                     options['catalog'][itracer]['complete'] = {}
@@ -113,35 +115,38 @@ if __name__ == '__main__':
     # version  = 'abacus-hf-dr2-v2-altmtl'
     # version = 'uchuu-hf-reference'
     version = 'uchuu-hf-altmtl'
-    check_for_existing_measurements = False # True
+    # version = 'abacus-hf-dr2-v1'
+    check_for_existing_measurements = False
     
     # test run 
     # imocks2run = 150 + np.arange(1)
     # imocks2run = np.arange(1)
-    # stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
+    imocks2run = np.arange(25)
+    stats_dir  = Path(os.getenv('SCRATCH')) / 'cai-dr2-benchmarks' 
     
     # official run
     # imocks2run = 150 + np.arange(50)
-    imocks2run = np.arange(1)
+    # imocks2run = np.arange(25)
     # imocks2run = np.arange(50)
     # if version == 'holi-v3-altmtl':
     #     # do not perform measurements on dubious mocks
     #     bad_imocks = np.loadtxt('../helper_scripts/dubious_holi-v3-altmtl.txt',dtype=int)
     #     imocks2run = imocks2run[~np.isin(imocks2run,bad_imocks)]
-    stats_dir  = tools.base_stats_dir
+    # stats_dir  = tools.base_stats_dir
 
     # run fiducial full_shape
-    stats       = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation']
+    # stats       = ['mesh2_spectrum']#, 'mesh3_spectrum', 'particle2_correlation']
     # stats       = ['mesh3_spectrum', 'window_mesh3_spectrum']
-    # stats = ['mesh2_spectrum','mesh3_spectrum']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum']
     postprocess = ['combine_regions']
     analysis = 'full_shape'
     project  = f'{analysis}/base'
     weight   = 'default-FKP'
+    # weight   = 'default'
     regions  = ['NGC','SGC']
     # regions = ['NGC','SGC','N','NGCnoN','S','SGCnoDES','SnoDES','DES','ACT_DR6','PLANCK_PR4','GAL040','GAL060']
-    tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
-    # # tracers  = ['QSO']
+    # tracers  = ['LRG', 'ELG_LOPnotqso', 'QSO']
+    tracers  = ['QSO']
     # tracers  = ['BGS_BRIGHT-21.35']
     max_mocks_per_batch = 1
 
