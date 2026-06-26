@@ -1726,18 +1726,6 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
     # Compute Gaussian covariance (assuming Gaussian density field)
     covariance = compute_spectrum2_covariance(mattrs, data)  # Gaussian, diagonal covariance
 
-    # Apply selection to data (restrict to fitting range)
-    select = select or {'k': (0.02, 10.)}
-    data = data.select(**select)
-    # Match window to data range
-    window = window.at.observable.match(data)
-    # Restrict window theory to coverage of measurement
-    window = window.at.theory.select(k=(0.001, 1.2 * next(iter(data)).coords('k').max()))
-    # Match covariance to data range
-    covariance = covariance.at.observable.match(data)
-    # Extract effective redshift from window
-    z = window.observable.get(ells=0).attrs['zeff']
-
     # Import clustering theory classes from desilike
     from desilike.theories.galaxy_clustering import FixedSpectrum2Template, KaiserTracerSpectrum2Poles, REPTVelocileptorsTracerSpectrum2Poles, DampedBAOWigglesTracerSpectrum2Poles
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
@@ -1749,12 +1737,33 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
     theory_str = theory
     Theory = {'recon': DampedBAOWigglesTracerSpectrum2Poles, 'rept': REPTVelocileptorsTracerSpectrum2Poles, 'kaiser': KaiserTracerSpectrum2Poles}[theory_str]
 
+    # Apply selection to data (restrict to fitting range)
+    # start at kmin = 0.1 for BAO, to constrain broadband terms
+    select = select or {'k': (0.02, 10.)}
+    data = data.select(**select)
+    # Match window to data range
+    window = window.at.observable.match(data)
+    # Restrict window theory to coverage of measurement
+    window = window.at.theory.select(k=(0.001, 1.2 * next(iter(data)).coords('k').max()))
+    # Match covariance to data range
+    covariance = covariance.at.observable.match(data)
+    # Extract effective redshift from window
+    z = window.observable.get(ells=0).attrs['zeff']
+
     # Create fiducial theory template at measurement redshift
     template = FixedSpectrum2Template(fiducial='DESI', z=z)
     # Instantiate theory model with template
     theory = Theory(template=template)
     if 'recon' in theory_str:
         theory.update(mode=np.asarray(data.attrs['recon_mode']).flat[0], smoothing_radius=np.asarray(data.attrs['recon_smoothing_radius']).flat[0])
+        params = get_params(theory)
+        # To avoid spike at low k
+        for param in params.select(basename=['al*_[-4:0]']):
+            param.update(fixed=True)
+        for ell in theory.ells:
+            for ik in range(4):
+                params.set(params['al0_0'].clone(name=f'al{ell:d}_{ik}'))
+        theory.update(params=params)
     # Create observable: combines data, theory, and window function
     observable = Spectrum2PolesObservable(data=data, window=window, theory=theory)
     # Create likelihood: Gaussian likelihood with computed covariance
@@ -1862,11 +1871,6 @@ def compute_covariance_mesh2_spectrum(*get_data_randoms, theory=None, fields=Non
 
     # Convert correlation to power spectrum covariance matrix via FFTLog
     covariance = compute_spectrum2_covariance(windows, theory, flags=['smooth'] + (['fftlog'] if fftlog else []))
-    # Update label names to match observable structure
-    fields = covariance.observable.fields
-    # Create observable tree with proper labels
-    observable = types.ObservableTree(list(covariance.observable), observables=['spectrum2'] * len(fields), tracers=fields)
-    covariance = covariance.clone(observable=observable)
     # Store in results dict
     results['raw'] = covariance
     return results

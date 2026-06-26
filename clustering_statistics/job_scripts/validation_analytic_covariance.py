@@ -87,6 +87,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
+                #options['catalog'][itracer]['nran'] = 2
                 options['catalog'][itracer]['zranges'] = zranges  # override fiducial zranges 
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
@@ -103,7 +104,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     from clustering_statistics import postprocess_stats_from_options
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['covariance_mesh2_spectrum', 'covariance_particle2_correlation']}, mesh2_spectrum={}, window_mesh2_spectrum={}, mesh3_spectrum={}, window_mesh3_spectrum={})
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['covariance_mesh2_spectrum', 'covariance_particle2_correlation', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']}, mesh2_spectrum={}, window_mesh2_spectrum={}, mesh3_spectrum={}, window_mesh3_spectrum={})
     stats_dir_kws = dict(stats_dir=stats_dir, project=project)
     _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly) #, method='smooth_particle')
     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=_get_stats_fn, **options)
@@ -134,12 +135,13 @@ if __name__ == '__main__':
 
     # run data_splits for lensing group with full_shape setup 
     #stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum']
-    stats = ['recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_recon_mesh2_spectrum']
+    #stats = ['recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_recon_mesh2_spectrum']
     #stats = ['recon_mesh2_spectrum', 'covariance_recon_mesh2_spectrum'][1:]
-    #stats = ['particle2_correlation', 'covariance_particle2_correlation']
+    #stats = ['recon_particle2_correlation', 'covariance_recon_particle2_correlation']
+    #stats = ['covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
     #stats = ['particle3_correlation']
-    #stats = []
-    #postprocess = ['combine_regions']
+    stats = []
+    postprocess = ['combine_regions']
     analysis = 'full_shape'
     project = f'{analysis}/analytic_covariance_validation'
     weight = 'default-FKP'

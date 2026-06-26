@@ -140,12 +140,12 @@ if __name__ == '__main__':
         help='Sky region (default: GCcomb).',
     )
     parser.add_argument(
-        '--data', type=str, default='abacus-2ndgen-complete',
-        help='Data product identifier (default: abacus-2ndgen-complete).',
+        '--data', type=str, default='abacus-hf-dr2-v2-altmtl',
+        help='Data product identifier (default: abacus-hf-dr2-v2-altmtl).',
     )
     parser.add_argument(
-        '--covariance', type=str, default='holi-v1-altmtl',
-        help='Covariance mock set (default: holi-v1-altmtl).',
+        '--covariance', type=str, default='holi-v3-altmtl',
+        help='Covariance mock set (default: holi-v3-altmtl).',
     )
     parser.add_argument(
         '--project', type=str, default='',

@@ -788,12 +788,12 @@ def compute_covariance_particle2_correlation(*get_data_randoms, theory=None, RR=
         return types.Mesh2SpectrumPoles(poles_out)
 
     theory = theory.map(interp_log, level=1)  # apply to all tracers
-    if jax.process_index() == 0: theory.write('theory.h5')
+    #if jax.process_index() == 0: theory.write('theory.h5')
     covariances = compute_spectrum2_covariance(windows, theory, flags=['smooth'] + (['fftlog'] if fftlog else []), return_type='list')
     if split_SS:
         covariances = covariances[:2]  # leave out SS, added later
     covariance = covariances[0].clone(value=sum(cov.value() for cov in covariances))
-    covariance.write('covariance_pk.h5')
+    #covariance.write('covariance_pk.h5')
 
     def compute_SS_contribution(observable, QS):
 
@@ -840,8 +840,10 @@ def compute_covariance_particle2_correlation(*get_data_randoms, theory=None, RR=
     for label, spectrum in covariance.observable.items(level=1):
         field = label['fields']
         RRfield = RR.get(fields=field)
+        if hasattr(RRfield, 'realization'):  # jackknife
+            RRfield = RRfield.value(return_type=None)
         RRfield = RRfield.clone(norm=fkp_norm[field] * RRfield.values('norm'))
-        if jax.process_index() == 0: RRfield.write('RRfield.h5')
+        #if jax.process_index() == 0: RRfield.write('RRfield.h5')
         s, s_edges = RRfield.coords('s'), RRfield.edges('s')
 
         # already integrates analytically spectrum to s_edges
@@ -849,7 +851,7 @@ def compute_covariance_particle2_correlation(*get_data_randoms, theory=None, RR=
         ells = spectrum.ells
         window = compute_RR2_window(RRfield, edges=s_edges, ells=ells, ellsin=ells, kind='RR', resolution=1)
         projector = np.linalg.solve(window, projector)  # inv(window).dot(projector), deconvolve from the window
-        if jax.process_index() == 0: window.write('RRwindow.h5')
+        #if jax.process_index() == 0: window.write('RRwindow.h5')
 
         correlation = []
         for ell in ells:
@@ -868,7 +870,7 @@ def compute_covariance_particle2_correlation(*get_data_randoms, theory=None, RR=
             covariance_SS.append(cov_SS)
 
     rotation = block_diag(*rotation)
-    observable = types.ObservableTree(observable, tracers=fields, observables=['correlation2'] * len(observable))
+    observable = types.ObservableTree(observable, fields=fields)
     covariance = covariance.clone(value=rotation.dot(covariance.value()).dot(rotation.T), observable=observable)
     if split_SS:
         covariance = covariance.clone(value=covariance.value() + block_diag(*covariance_SS))

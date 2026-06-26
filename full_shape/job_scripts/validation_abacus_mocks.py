@@ -20,7 +20,7 @@ from full_shape import tools, setup_logging
 setup_logging()
 
 
-THEORY_MODELS = ['folpsD', 'folpsEFT', 'reptvelocileptors']
+THEORY_MODELS = ['folpsD', 'folpsEFT', 'reptvelocileptors', 'comet']
 COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed']
 PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'zeus', 'mhmcmc', 'nuts', 'pocomc', 'nautilus', 'numpyro_nuts', 'numpyro_barker']
@@ -73,6 +73,7 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
             covariance=covariance,
             stats_dir=stats_dir,
             project=project,
+            emulator=theory_model != 'comet',
         )
         for observable_options in likelihood_options['observables']:
             _apply_kranges(observable_options)
@@ -98,7 +99,7 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, project, 
         theory_model=theory_model,
         prior_basis=prior_basis,
     )
-    options['cosmology'] = {'template': template, 'model': cosmo_model}
+    options['cosmology'] = {'template': template, 'model': cosmo_model, 'engine': 'eisenstein_hu' if 'comet' in theory_model else 'class'}
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler=sampler)
     sampler_kw = {'nparallel': nchains}
     for section in ['init', 'run']:
@@ -130,13 +131,14 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
     import os
     from pathlib import Path
     import functools
-    from mpi4py import MPI
-    mpicomm = MPI.COMM_WORLD
     if local_safe_threads:
         _apply_local_safe_threads()
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
     from desilike import distributed
-    distributed.initialize()
+    try: distributed.initialize()
+    except RuntimeError: print('Distributed environment already initialized')
+    else: print('Initializing distributed environment')
+    mpicomm = distributed.get_mpicomm()
     import jax
     from jax import config
     config.update('jax_enable_x64', True)
@@ -167,17 +169,15 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
         likelihood = get_likelihood(likelihoods_options=options['likelihoods'],
                                     cosmology_options=options['cosmology'],
                                     cache_dir=cache_dir)
-        profiles = Profiles.read(get_fits_fn(kind='profiles', **options))
+        fn = get_fits_fn(kind='profiles', **options)
+        profiles = Profiles.read(fn)
         # Evaluate likelihood at dictionary of parameters
         best = profiles.choice(index='argmax', squeeze=True).select(input=True).best
         compile(likelihood)(**best)
         if mpicomm.rank == 0:
-            plot_dir = get_fits_fn(kind='profiles', **options).parent
+            plot_dir = fn.parent
             for ilikelihood, sublikelihood in enumerate(likelihood.likelihoods):
                 for iobservable, observable in enumerate(sublikelihood.observables):
-                    #plot_covariance = sublikelihood.covariance.at.observable.get(observables=observable.name)
-                    #plot_covariance = plot_covariance.at.observable.match(observable.data)
-                    #observable.covariance = plot_covariance
                     observable.plot(fn=plot_dir / f'plot_likelihood{ilikelihood}_observable{iobservable}.png')
 
 

@@ -566,7 +566,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             for stat, func in funcs.items():
                 if stat in stats:
                     covariance_options = dict(options[stat])
-                    theory_stat = stat.replace('covariance_', f'theory_')
+                    theory_stat = stat.replace('covariance_', 'theory_')
                     theory_fn = covariance_options.pop('theory', None)
     
                     def get_data(tracer):
@@ -644,12 +644,19 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     
                     # Compute covariance matrix
                     covariance = func(*[functools.partial(get_data, tracer) for tracer in tracers], theory=theory, fields=list(fields.values()), **covariance_options)
-    
+
+                    def add_label(covariance):
+                        # Add observables label, and fields => tracers
+                        simple_stat = tools.get_simple_stats(stat.replace('covariance_', ''))
+                        # Create observable tree with proper labels
+                        observable = types.ObservableTree(list(covariance.observable), observables=[simple_stat] * len(fields), tracers=covariance.observable.fields)
+                        return covariance.clone(observable=observable)
+
                     # Write covariance matrix to disk
                     for key, kw in _expand_cut_auw_options(stat, covariance_options).items():
                         fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
                         if key in covariance:
-                            tools.write_stats(fn, covariance[key])
+                            tools.write_stats(fn, add_label(covariance[key]))
     
                     # Write intermediate correlation functions to disk
                     for key in covariance:

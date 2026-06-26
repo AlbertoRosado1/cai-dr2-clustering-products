@@ -133,6 +133,8 @@ def get_simple_stats(stats):
     """Given input stats name, return simple stats name; e.g. 'mesh2_spectrum' would result in 'spectrum2'."""
     if stats == 'mesh2_spectrum':
         return 'spectrum2'
+    elif stats == 'recon_mesh2_spectrum':
+        return 'spectrum2recon'
     elif stats == 'mesh3_spectrum':
         return 'spectrum3'
     elif stats == 'particle2_correlation':
@@ -1481,7 +1483,7 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
             data = data.copy()  # shallow copy
         data['TARGETID_DATA'] = data.pop('TARGETID')
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
-            lookup = np.arange(1 + data['TARGETID_DATA'].max())
+            lookup = np.full(1 + data['TARGETID_DATA'].max(), -1, dtype=np.int64)
             lookup[data['TARGETID_DATA']] = np.arange(len(data))
             index = lookup[randoms['TARGETID_DATA']]
         else:
@@ -1868,7 +1870,7 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                 if 'iip' in weight_type:
                     individual_weight *= _compute_iip_weight(bitwise_weights)
                     bitwise_weights = None
-            else:
+            else:  # parent
                 # equivalent of IIP weights
                 individual_weight /= catalog['FRACZ_TILELOCID']
                 if 'compondata' in weight_type:
@@ -1876,7 +1878,6 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                 bitwise_weights = None
         if 'data' in kind and 'parent' in kind and 'bitwise' not in weight_type and 'compondata' not in weight_type:
             individual_weight *= catalog['FRAC_TLOBS_TILES']
-        catalog = catalog[['RA', 'DEC']]
         catalog['INDWEIGHT'] = individual_weight
         if bitwise_weights is not None: catalog['BITWEIGHT'] = bitwise_weights
 

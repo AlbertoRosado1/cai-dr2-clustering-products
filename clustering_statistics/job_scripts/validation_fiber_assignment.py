@@ -48,7 +48,7 @@ def get_stats_fn(*args, extra='', onthefly=None, **kwargs):
     return tools.get_stats_fn(*args, extra='_'.join(extra), **kwargs)
 
 
-def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', regions=['NGC', 'SGC'], ibatch=None, zranges=None, get_stats_fn=get_stats_fn, **kwargs):
+def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', stats=['mesh2_spectrum'], weight='default-FKP', analysis='full_shape', regions=['NGC', 'SGC'], cat_dir=None, ibatch=None, zranges=None, get_stats_fn=get_stats_fn, **kwargs):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -96,7 +96,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
-                #options['catalog'][itracer]['nran'] = 1
+                options['catalog'][itracer]['nran'] = 5
                 #if 'BGS_BRIGHT' in itracer:
                 #    options['catalog'][itracer]['tracer'] = 'BGS_BRIGHT'
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
@@ -109,7 +109,14 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
                     options['catalog'][itracer]['reshuffle'] = {'merged_data_fn': tools.get_catalog_fn(kind='data', **(options['catalog'][itracer] | dict(region='ALL')))}
 
             _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly)
-            compute_stats_from_options(stats, analysis=analysis, get_stats_fn=_get_stats_fn, cache=cache, **options)
+            _get_catalog_fn = tools.get_catalog_fn
+            if cat_dir is not None:
+                def _get_catalog_fn(**kwargs):
+                    imock = kwargs.get('imock')
+                    out_dir = cat_dir / f'mock{imock:d}'
+                    return tools.get_catalog_fn(cat_dir=out_dir, **kwargs)
+            
+            compute_stats_from_options(stats, analysis=analysis, get_catalog_fn=_get_catalog_fn, get_stats_fn=_get_stats_fn, cache=cache, **options)
 
 
 def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='abacus-hf-dr2-v2-altmtl', onthefly=None, imocks=[150], stats_dir=Path(os.getenv('SCRATCH')) / 'measurements', weight='default-FKP', postprocess=['combine_regions'], zranges=None, get_stats_fn=get_stats_fn, **kwargs):
@@ -132,7 +139,8 @@ if __name__ == '__main__':
     # version = 'abacus-2ndgen-dr2-altmtl'
     # version = 'data-dr2-v2'
     check_for_existing_measurements = False
-    imocks = np.arange(14, 25)
+    imocks = np.arange(2)
+    #imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
     #imocks = np.arange(9)
@@ -145,6 +153,10 @@ if __name__ == '__main__':
         imocks = [150]
 
     stats_dir = tools.base_stats_dir
+    cat_dir = None
+    #compweight = 'tilelocid-LRG1'
+    compweight = 'tilelocid-LRG0'
+    cat_dir = tools.base_stats_dir / f'auxiliary_data/fiber_assignment_systematics_ELG_{compweight}' / version
 
     # run fiducial full_shape
     #tracers = ['LRG', 'ELG', 'QSO']
@@ -168,18 +180,18 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'close_pair_correction'][:1]
     #stats = ['particle3_correlation'][:0]
     postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
-    project = f'{analysis}/fiber_assignment_systematics'
+    project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'
     #weight = 'default-FKP-noimsys'
-    #weight = 'default'
-    regions = ['NGC', 'SGC']
+    weight = 'default'
+    regions = ['NGC', 'SGC'][:1]
     #regions = ['SGCnoDES', 'DES']
     max_mocks_per_batch = 5
 
@@ -212,7 +224,7 @@ if __name__ == '__main__':
                 _tm = tmw
             return _tm.python_app(run_stats)
 
-        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess)
+        run_stats_kws = dict(tracer=tracer, stats_dir=stats_dir, project=project, version=version, analysis=analysis, onthefly=onthefly, zranges=zranges, regions=regions, weight=weight, postprocess=postprocess, cat_dir=cat_dir)
 
         if check_for_existing_measurements:
             exists, missing = tools.checks_if_exists_and_readable(get_fn=functools.partial(tools.get_catalog_fn, tracer=tracer[0] if isinstance(tracer, (list, tuple)) else tracer,

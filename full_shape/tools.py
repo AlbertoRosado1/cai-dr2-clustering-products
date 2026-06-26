@@ -38,6 +38,7 @@ from clustering_statistics import tools as clustering_tools
 
 
 logger = logging.getLogger('tools')
+base_fits_dir = Path('/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/fits/')
 
 
 _fiducial = None
@@ -72,7 +73,8 @@ def get_cosmology(cosmology_options: dict=None):
 
     params = VariableCollection()
     params.set(Parameter('h', value=fiducial['h'],
-                            prior=dict(limits=[0.2, 1.0]),
+                            #prior=dict(limits=[0.2, 1.0]),
+                            prior=dict(limits=[0.5, 1.0]),
                             ref=dict(dist='norm', loc=fiducial['h'], scale=0.01),
                             fd_eps=0.03, latex='h'))
     params.set(Parameter('omega_b', value=fiducial['omega_b'],
@@ -119,8 +121,8 @@ def get_cosmology(cosmology_options: dict=None):
     params.set(Parameter('sigma8_m', derived=True, latex=r'\sigma_{8,\mathrm{m}}'))
     params.set(Parameter('sigma8_cb', derived=True, latex=r'\sigma_{8,\mathrm{cb}}'))
     params.set(Parameter('rs_drag', derived=True, latex=r'r_s'))
-    return CosmoprimoCosmology(engine='class', fiducial=fiducial, params=params)
-
+    cosmo = CosmoprimoCosmology(engine=cosmology_options.get('engine', 'class'), fiducial=fiducial, params=params)
+    return cosmo
 
 
 def _get_default_ref_from_prior(prior, value=None):
@@ -193,7 +195,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
         if tracer == 'BGS':
             sigmapar, sigmaper = 10., 6.5
             if recon: sigmapar, sigmaper = 8., 3.
-        elif tracer == 'LRG':
+        elif tracer in ['LRG', 'LGE']:
             sigmapar, sigmaper = 9., 4.5
             if recon: sigmapar, sigmaper = 6., 3.
         elif tracer == 'LRG+ELG':
@@ -257,9 +259,9 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
                 
         # ── FoG damping ───────────────────────────────────────────────────
         if 'EFT' in model.upper():
-            configs['X_FoG'] = {'fixed': True}
+            configs['X_FoG*'] = {'fixed': True}
         else:
-            configs['X_FoG'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 10]}}
+            configs['X_FoG*'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 10]}}
         if marg:
             for param in params.select(basename=['alpha*', 'sn2*', 'sn4*']):
                 param.update(derived='marg')
@@ -294,7 +296,8 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     """
     from desilike.theories.galaxy_clustering import (DirectSpectrum2Template, ShapeFitSpectrum2Template, BAOSpectrum2Template,
         REPTVelocileptorsTracerSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSPTSpectrum2Poles,
-        FOLPSTracerSpectrum3Poles, DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles)
+        FOLPSTracerSpectrum3Poles, COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles,
+        DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles)
     from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
     from desilike.base import params as get_params
     theory_options = dict(theory_options)
@@ -334,6 +337,13 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             coevolution = kw.get('coevolution', '')
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
             theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+        elif theory_options['model'] in ['comet']:
+            kw = {name: theory_options[name] for name in ['prior_basis'] if name in theory_options}
+            theory = COMETTracerSpectrum2Poles(cosmo=cosmology, pt=False, tracers=tracers, **kw, **theory_options.get('options', {}))
+            prior_basis = kw.get('prior_basis', 'physical')
+            coevolution = kw.get('coevolution', '')
+            kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
+            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'mesh3_spectrum' in stat:
         if theory_options['model'] in ['folpsD', 'folpsEFT']:
             kw = {name: theory_options[name] for name in ['damping', 'A_full'] if name in theory_options}
@@ -341,6 +351,13 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             prior_basis = theory_options.get('prior_basis', 'physical')
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
             theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+        elif theory_options['model'] in ['comet']:
+            kw = {name: theory_options[name] for name in ['prior_basis'] if name in theory_options}
+            theory = COMETTracerSpectrum3Poles(cosmo=cosmology, pt=False, tracers=tracers, **kw, **theory_options.get('options', {}))
+            prior_basis = kw.get('prior_basis', 'physical')
+            coevolution = kw.get('coevolution', '')
+            kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
+            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'recon_particle2_correlation' in stat:
         kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
@@ -438,6 +455,8 @@ def combine_covariances(covariances, observable):
             block = np.zeros(shape)
         value[ilabel1][ilabel2] = block
     value = np.block(value)
+    if any(observable is None for observable in observables):
+        raise ValueError(f'could not find obseravbles for labels {olabels}')
     observable = types.join(observables)
     return types.CovarianceMatrix(observable=observable, value=value)
 
@@ -606,7 +625,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         return mpicomm.bcast(stats, root=0)
 
     # Helper: iterate over (stat, tracer) combinations
-    def iter_stat_tracer_combinations(observables_options, **kwargs):
+    def iter_stat_tracer_combinations(observables_options, with_stat_kw=False):
         """
         Yield (stat, labels, file_kwargs, observable_options) for each requested observable.
 
@@ -626,9 +645,12 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                 'tracers': simple_tracers,
             }
             kw = {}
-            if nfields == 3:
-                kw['basis'] = observable_options['stat']['basis']
-            file_kw = kw | observable_options['catalog'] | {'tracer': full_tracer} | kwargs
+            for name in observable_options['stat']:
+                if name in ['basis']:  # shared by stats and covariance
+                    kw[name] = observable_options['stat'][name]
+                elif with_stat_kw and name not in ['kind', 'select']:
+                    kw[name] = observable_options['stat'][name]
+            file_kw = kw | observable_options['catalog'] | {'tracer': full_tracer}
             yield stat, labels, file_kw, dict(observable_options)
 
     def _with_project(observable: types.ObservableTree):
@@ -759,10 +781,11 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
 
     # Loading data, window
     all_data_fns, all_imocks, joint_labels, selects = [], [], {'observables': [], 'tracers': []}, []
-    for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
+    for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options, with_stat_kw=True):
         file_kw = {'imock': None} | file_kw
         all_imocks.append(file_kw['imock'])
-        fn = _get_mock_stats_fn(stat, file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=stat, **file_kw)
+        #fn = _get_mock_stats_fn(stat, file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=stat, **file_kw)
+        fn = get_stats_fn(kind=stat, **file_kw)
         if not isinstance(fn, list): fn = [fn]
         all_data_fns.append(fn)
         for name in joint_labels:
@@ -775,12 +798,12 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     data_cache_hit = data is not None
     window_cache_hit = window is not None
     if data is None or window is None:
-        for iobs, (stat, labels, file_kw, kw) in enumerate(iter_stat_tracer_combinations(observables_options)):
+        for iobs, (stat, labels, file_kw, kw) in enumerate(iter_stat_tracer_combinations(observables_options, with_stat_kw=True)):
             if not all_data_fns[iobs]:
                 raise FileNotFoundError(_format_missing_data_context(stat, file_kw, all_data_fns[iobs]))
         if mpicomm.rank == 0:
             data, windows = [], []
-            for iobs, (stat, labels, file_kw, kw) in enumerate(iter_stat_tracer_combinations(observables_options)):
+            for iobs, (stat, labels, file_kw, kw) in enumerate(iter_stat_tracer_combinations(observables_options, with_stat_kw=True)):
                 _data, _windows = [], []
                 logger.info(f"Reading data vector for {stat} from {_format_log_fns(all_data_fns[iobs])}")
                 for fn in all_data_fns[iobs]:
@@ -836,18 +859,17 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         # Query all possible cross-covariances
         # FIXME if there are 3pt-covariances
         source = covariance_options['source']
-        # FIXME
-        if source == 'jaxpower': source = ''
-        else: source = f'_{source}'
+        cov_fns = []
         for tracers in all_combinations:
             if all(tracer == tracers[0] for tracer in tracers):
                 tracers = tracers[0]
-            fn = get_stats_fn(kind=f'covariance_{stat}' + source, **(file_kw | dict(tracer=tracers)))
+            fn = get_stats_fn(kind=f'covariance_{stat}', **(file_kw | dict(tracer=tracers)))
+            cov_fns.append(str(fn))
             if fn.exists():
                 logger.info(f"Reading covariance for {stat} from {_format_log_fns(fn)}")
                 covariances.append(types.read(fn))
         if not covariances:
-            raise ValueError('no covariances found')
+            raise ValueError(f'no covariances found in {cov_fns}')
         covariance = combine_covariances(covariances, data)
         covariance.attrs['nobs'] = -1
     elif covariance_options['source'] == 'mock':
@@ -951,7 +973,6 @@ def rebin_spectrum3_window(window, data=None):
     tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window.theory)
     rebin = int(ostep / tstep)
     assert rebin >= 1
-    print(rebin)
     window = window.at.theory.select(k=slice(0, None, rebin))
     # Compact non-diagonal term
     rebin = rebinning_matrix(window.theory, new_coords=window.theory.select(k=slice(0, None, 2)),
@@ -1157,7 +1178,7 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
 
 def propose_fiducial_covariance_options():
     """Return dictionary of default covariance options."""
-    return {'source': 'mock', 'version': 'holi-v1-altmtl', 'corrections': ['hartlap', 'percival']}
+    return {'source': 'mock', 'version': 'holi-v3-altmtl', 'corrections': ['hartlap', 'percival']}
 
 
 def propose_fiducial_cosmology_options():
@@ -1411,6 +1432,7 @@ def get_full_tracer_zrange(tracerz=None, zrange=None):
     """
     translate_zrange = {'BGS1': (0.1, 0.4),
                         'LRG1': (0.4, 0.6), 'LRG2': (0.6, 0.8), 'LRG3': (0.8, 1.1),
+                        'LGE1': (0.4, 0.6), 'LGE2': (0.6, 0.8), 'LGE3': (0.8, 1.1),
                         'ELG1': (0.8, 1.1), 'ELG2': (1.1, 1.6),
                         'QSO1': (0.8, 2.1)}
     if tracerz is None:
