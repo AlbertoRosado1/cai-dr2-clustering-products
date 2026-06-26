@@ -1,6 +1,7 @@
+import logging
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-import logging
 
 
 logger = logging.getLogger('PNG fitting tools')
@@ -112,8 +113,10 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
     likelihood
         Same likelihood object, updated in place.
     """
+    from desilike import get_params
+    all_params = get_params(likelihood)
 
-    def _rescale_bias_params(likelihood, tracer, zeff):
+    def _rescale_bias_params(tracer, zeff):
         """ 
         Fix the bias parameters in the likelihood according to the redshift dependence of the bias.
         Only modifies the parameter if both source and target exist in the likelihood.
@@ -128,14 +131,14 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
         target_param_name = f"{tracer[1]}.b1"
         
         # Both parameters must exist to create a derived relationship
-        if source_param_name not in likelihood.all_params or target_param_name not in likelihood.all_params:
+        if source_param_name not in all_params or target_param_name not in all_params:
             logger.debug(f"Skipping derived relationship: {source_param_name} -> {target_param_name} (missing parameter)")
             return
             
         # b(z) = alpha * (1 + z)**2 + beta
         alpha, beta = tools.bias(1, tracer=tracer[0][:3], return_params=True)  
         factor = (alpha * (1 + zeff[1])**2 + beta) / (alpha * (1 + zeff[0])**2 + beta)
-        likelihood.all_params[target_param_name].update(derived='{' + source_param_name + '}' + f' * {factor}')
+        all_params[target_param_name].update(derived='{source_param_name} * {factor}')
         logger.debug(f"Derived relationship: {target_param_name} = {source_param_name} * {factor}")
 
     tracers = tracer.split('x')
@@ -144,10 +147,10 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
     if tracers[0] == tracers[1]:
         if len(zeffs[tracer]) > 1:
             zeff = [zeffs[tracer][ell] for ell in [0, 2]]
-            _rescale_bias_params(likelihood, tracer=[f"{tracers[0]}_ell0", f"{tracers[0]}_ell2"], zeff=zeff)
+            _rescale_bias_params(tracer=[f"{tracers[0]}_ell0", f"{tracers[0]}_ell2"], zeff=zeff)
             # logger.warning('we neglect the redshift dependence of the damping term, for now') 
-            param_name_ell0, param_name_ell2 = f"{tracers[0]}_ell0.sigmas",f"{tracers[0]}_ell2.sigmas"
-            likelihood.all_params[param_name_ell2].update(derived='{' + param_name_ell0 + '}')
+            param_name_ell0, param_name_ell2 = f"{tracers[0]}_ell0.sigmas", f"{tracers[0]}_ell2.sigmas"
+            all_params[param_name_ell2].update(derived=param_name_ell0)
             logger.debug(f"Derived damping: {param_name_ell2} = {param_name_ell0}")
 
     # Cross-correlation: 
@@ -162,7 +165,7 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
                 if 'x'.join([tt, tt]) in available_tracers:
                     # derived the bias from the auto-correlation bias, taking into account the different effective redshifts of the auto and cross correlation.
                     zeff = [zeffs['x'.join([tt, tt])][0], zeffs[tracer][0]]
-                    _rescale_bias_params(likelihood, tracer=[f"{tt}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
+                    _rescale_bias_params(tracer=[f"{tt}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
                 else:
                     # determine default tracer to link the bias parameters, if auto-correlation data is not available.
                     default_tracer = sorted([tracer for tracer in available_tracers if tt in tracer.split('x')])[0]
@@ -171,21 +174,21 @@ def fix_likelihood_bias_and_damping(likelihood, tracer, zeffs, derived_cross_bia
                     else:
                         logger.debug(f'This parameter is free ({tt}, {tracer}), but it will be linked to {default_tracer} bias parameters to break degeneracy, since auto-tracer data for {tt} is not available.')
                         zeff = [zeffs[default_tracer][0], zeffs[tracer][0]]
-                        _rescale_bias_params(likelihood, tracer=[f"{tt}_{default_tracer}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
+                        _rescale_bias_params(tracer=[f"{tt}_{default_tracer}_ell0", f'{tt}{cross_suffix}_ell0'], zeff=zeff)
 
             else:
                 # let free the cross-correlation bias, but fix one of the two biases to break degeneracy.
                 # the first linear bias parameter can be set with kwargs.          
                 if i == 0:      
                     default_b1 = kwargs.get(f"{tt}{cross_suffix}_ell0.b1", 1)
-                    likelihood.all_params[f"{tt}{cross_suffix}_ell0.b1"].update(value=default_b1, fixed=True) 
+                    all_params[f"{tt}{cross_suffix}_ell0.b1"].update(value=default_b1, fixed=True) 
     
             if len(zeffs[tracer]) > 1:
                 zeff = [zeffs[tracer][ell] for ell in [0, 2]]
-                _rescale_bias_params(likelihood, tracer=[f"{tt}{cross_suffix}_ell0", f"{tt}{cross_suffix}_ell2"], zeff=zeff)
+                _rescale_bias_params(tracer=[f"{tt}{cross_suffix}_ell0", f"{tt}{cross_suffix}_ell2"], zeff=zeff)
                 # logger.warning('we neglect the redshift dependence of the damping term, for now')
                 # Note: the first damping term is fixed to 0:
-                if i == 1: likelihood.all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived='{' + f"{tt}{cross_suffix}_ell0.sigmas" + '}')
+                if i == 1: all_params[f"{tt}{cross_suffix}_ell2.sigmas"].update(derived=f"{tt}{cross_suffix}_ell0.sigmas")
 
 
 
@@ -214,9 +217,10 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
        observables: list of monopole and quadrupole (if used) desilike observables.
        likelihood: desilike likelihood to run profer or MCMC on.
     """
-    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, PNGTracerPowerSpectrumMultipoles
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.theories.galaxy_clustering import FixedSpectrumTemplate, PNGTracerSpectrum2Poles
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike import get_params
     from cosmoprimo.fiducial import DESI
 
     tracers = tuple(tracer.split('x'))
@@ -239,21 +243,22 @@ def get_observable_and_likelihood(pk, window, cov, tracer='LRG', zeffs={'LRGxLRG
         wmatrix = window.at.observable.match(data)
 
         # Define Template and Theory:
-        template = FixedPowerSpectrumTemplate(z=zeffs["x".join(tracers)][ell], fiducial=DESI(engine=engine))
-        theory = PNGTracerPowerSpectrumMultipoles(template=template, mode="b-p", tracers=tracers_theo)
-        # Fix some parameters:
-        theory.params['fnl_loc'].update(value=0.0, fixed=fix_fnl)
+        template = FixedSpectrum2Template(z=zeffs["x".join(tracers)][ell], fiducial=DESI(engine=engine))
+        theory = PNGTracerSpectrum2Poles(template=template, mode="b-p", tracers=tracers_theo)
+        # Fix some parameters
+        params = get_params(theory)
+        params['fnl_loc'].update(value=0.0, fixed=fix_fnl)
         if ell == 2: 
-            theory.params[f"{'x'.join(tracers_theo)}.sn0"].update(value=0, fixed=True)
+            params[f"{'x'.join(tracers_theo)}.sn0"].update(value=0, fixed=True)
         for tracer in tracers_theo:
-            theory.params[f'{tracer}.p'].update(value=p[tracer.split('_')[0]], fixed=True)
+            params[f'{tracer}.p'].update(value=p[tracer.split('_')[0]], fixed=True)
         # Use only one damping term for the cross-correlation
         if cross_correlation: 
-            theory.params[f"{tracers_theo[0]}.sigmas"].update(value=0, fixed=True)
+            params[f"{tracers_theo[0]}.sigmas"].update(value=0, fixed=True)
 
         # Don't forget to give different name for the observable in order to stack them together in the likelihood:
-        name = 'pk_' + 'x'.join(tracers) + f'_ell{ell}'
-        observables += [TracerPowerSpectrumMultipolesObservable(name=name, data=data, window=wmatrix, theory=theory)] 
+        name = f"pk_{'x'.join(tracers)}_ell{ell}"
+        observables += [Spectrum2PolesObservable(name=name, data=data, window=wmatrix, theory=theory)] 
 
     if isinstance(cov, list):
         import lsstypes
@@ -421,54 +426,56 @@ def build_total_likelihood(order, pks, observables, covs, zeffs, fiducial, scale
         # We do not link the damping term from the cross-correlation and the auto-correlation
         # Because they are different effective redshifts and we do not know the a priori.
         fix_likelihood_bias_and_damping(total_likelihood, tracer=tracer, zeffs=zeffs, derived_cross_bias=True, nickname=tracer, available_tracers=order)
-    total_likelihood()
 
     return total_likelihood
 
 
-def run_profiler(likelihood, fn_output=None, sigfigs=2):
+def run_profiler(likelihood, fn_output=None):
     """ 
-    Run the iminuit profiler on the likelihood, the results are saved in a text file if output_name is provided. fn_output should be a .txt file. 
+    Run the iminuit profiler on the likelihood, the results are saved in a text file if output_name is provided. fn_output should be a .h5 file. 
     """
-    from desilike.profilers import MinuitProfiler
+    from desilike import Posterior
+    from desilike.profilers import Profiler, Minuit
 
-    profiler = MinuitProfiler(likelihood, seed=7)
-    profiler.maximize(niterations=10)
+    posterior = compile(Posterior(likelihood=likelihood))
+    profiler = Profiler(posterior, kernel=Minuit(), rng=7)
+    profiles = profiler.maximize(niterations=10)
     logger.info(f'\n{profiler.profiles.to_stats(tablefmt="pretty")}')
 
     if fn_output is not None:
-        to_save = profiler.profiles.to_stats(tablefmt='list', sigfigs=sigfigs, params=profiler.profiles.choice().bestfit.params())[0]
-        np.save(fn_output, to_save)
-
-        # for latex table:
-        #_ = profiler.profiles.to_stats(fn=fn_output)
-        #np.savetxt(fn_output.replace('.txt', '_list.txt'), profiler.profiles.to_stats(tablefmt='list')[0], fmt='%s')
-
+        profiles.write(fn_output)
     return profiler
 
 
-def run_mcmc(likelihood, fn_output='tmp/mcmc_output_*.npy', extend_chains=False, nchains=1, max_iterations=20000, check_every=5000):
-    """Run the MCMC sampler on the likelihood, the results are saved in a text file if fn_output is provided. 
+def run_mcmc(likelihood, dir_output='tmp/', resume=False, nchains=1, max_steps=20000, check_every=1000):
+    """Run the MCMC sampler on the likelihood, the results are saved as hdf5. 
 
     Args:
         likelihood: Desilike Likelihood object to run the MCMC on.
-        fn_output (str, optional): Where the chains will be saved (need to have *). Defaults to 'tmp/mcmc_output_*.npy'.
-        extend_chains (bool, optional): If True, it will extend the existing chains (saved in fn_output) by running new iterations. Defaults to False.
+        dir_output (str, optional): Where the chains will be saved. Defaults to 'tmp/samples_*.h5'.
+        resume (bool, optional): If True, it will extend the existing chains (saved in dir_output) by running new iterations. Defaults to False.
         nchains (int, optional): Number of chains to run. Defaults to 1.
-        max_iterations (int, optional): Maximum number of iterations to run. Defaults to 1e5.
+        max_steps (int, optional): Maximum number of steps to run. Defaults to 1e5.
         check_every (int, optional): How often to check the convergence + save the current state of the chains. Defaults to 1000.
 
     """
-    from desilike.samplers import EmceeSampler
-    chains = [fn_output.replace('*', f'{i}') for i in range(nchains)] if extend_chains else nchains
+    from desilike.distributed import get_mpicomm
+    from desilike import Posterior
+    from desilike.samplers import Sampler, Emcee
 
-    sampler = EmceeSampler(likelihood, seed=31, chains=chains, save_fn=fn_output)  
-    sampler.run(max_iterations=max_iterations, check_every=check_every, progress=True)
+    posterior = compile(Posterior(likelihood=likelihood))
+    mpicomm = get_mpicomm()
+    if not resume and mpicomm.rank == 0:  # just remove directory
+         for path in Path(dir_output).glob('*'):
+            if path.name != 'profiles.h5':
+                shutil.rmtree(path) if path.is_dir() else path.unlink()
+    sampler = Sampler(posterior, kernel=Emcee(), rng=31, directory=dir_output, nparallel=nchains)  
+    sampler.run(max_steps=max_steps, check_every=check_every)
 
     return sampler
 
 
-def plot_observables(observables, figsize=(6, 4),ylims=None, show=True, fn_output=None):
+def plot_observables(observables, figsize=(6, 4), ylims=None, show=True, fn_output=None):
     """ 
     Plot the observables (power spectrum multipoles) with their theory predictions and residuals.
 
@@ -615,10 +622,10 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
 
     kwargs = {'LRG_LRGxQSO_ell0.b1': 2.15, 'LRG_LRGxELG_ell0.b1': 2.15, 'ELG_ELGxQSO_ell0.b1': 1.2, 'scale_covariance': 1}
 
-    fn_profile = base_dir + f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.npy"
-    if (os.path.isfile(fn_profile) and force_profiling) or (not os.path.isfile(fn_profile)):
-        os.makedirs(os.path.dirname(fn_profile), exist_ok=True)
-        
+    fn_profile = Path(base_dir) / f"mock{imock}/bestfit_{tracer}_{'analytical_cov' if analytical_covariance else 'mock_cov'}_kmin-{kmin}{extra_fn}.h5"
+    exists = fn_profile.is_file()
+    if force_profiling or not exists:
+        fn_profile.parent.mkdir(parents=True, exist_ok=True)
         tracers = tracer.split('-')
 
         obs, lik, zeffs = {}, {}, {}
@@ -646,11 +653,13 @@ def run_profiling_one_mock(mocks, windows, covs, tracer, imock=0, kmin=1e-3, ana
         else:
             obs, lik = obs[tracers[0]], lik[tracers[0]]
 
-        profiler = run_profiler(lik, fn_output=fn_profile, sigfigs=5)
+        profiler = run_profiler(lik, fn_output=fn_profile)
+        best = profiler.profiles.choice(index='argmax', squeeze=True).select(input=True)
+        compile(like)(best)
 
         if (kmin == 1e-3) and analytical_covariance and (len(tracers) == 1):
             ylims = [(2e3, 4e4), (2e3, 4e4)] if tracer in ['ELGxELG', 'ELGxQSO'] else None
-            fn_obs = base_dir + f"mock{imock}/bestfit_{tracer}_analytical_cov.png"
+            fn_obs = base_dir / f"mock{imock}/bestfit_{tracer}_analytical_cov.png"
             plot_observables({tracer: obs}, ylims=ylims, fn_output=fn_obs, show=False)
 
         if return_profiler:
