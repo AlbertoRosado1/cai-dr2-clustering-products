@@ -248,7 +248,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
                     'b1p': {'value': 1.5, 'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0.1, 8.]}},
                     'b2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
                     'bsp': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
-                    'c1p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+                    'c1p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
                     'c2p': {'value': 0., 'fixed': True, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
                     'sn0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
                     'snb0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
@@ -257,9 +257,9 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
                 
         # ── FoG damping ───────────────────────────────────────────────────
         if 'EFT' in model.upper():
-            configs['X_FoG'] = {'fixed': True}
+            configs['X_FoG*'] = {'fixed': True}
         else:
-            configs['X_FoG'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 10]}}
+            configs['X_FoG*'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 10]}}
         if marg:
             for param in params.select(basename=['alpha*', 'sn2*', 'sn4*']):
                 param.update(derived='marg')
