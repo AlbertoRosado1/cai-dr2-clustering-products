@@ -232,8 +232,9 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
         cat_dir = desi_dir / f'cosmosim/SecondGenMocks/CubicBox/{stracer}/z{zsnap:.3f}/AbacusSummit_base_c000_ph{imock:03d}/'
         return cat_dir / f'{stracer}_real_space.fits'
     if version == 'abacus-hf-v1':
-        cat_dir = desi_dir / f'mocks/cai/abacus_HF/{"DR2_v2.0" if version == "v2" else "DR2_v1.0"}/AbacusSummit_base_c{cosmo}_ph{imock:03d}/Boxes'
         stracer = get_simple_tracer(tracer)
+        # cat_dir = desi_dir / f'mocks/cai/abacus_HF/{"DR2_v2.0" if version == "v2" else "DR2_v1.0"}/AbacusSummit_base_c{cosmo}_ph{imock:03d}/Boxes/{stracer}'
+        cat_dir = desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/AbacusSummit_base_c{cosmo}_ph{imock:03d}/Boxes/{stracer}'
         sznap = f'{zsnap:.3f}'.replace('.', 'p')
         return cat_dir / f'abacus_HF_{stracer}_{sznap}_DR2_v1.0_AbacusSummit_base_c000_ph{imock:03d}_clustering.dat.fits'
     if version == 'abacus-hf-v2':
