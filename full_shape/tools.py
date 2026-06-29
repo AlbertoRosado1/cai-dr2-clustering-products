@@ -271,7 +271,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
             for param in params.select(basename=basename):
                 param.update(**config)
     elif 'comet' in model:
-        if False: #marg:  # need to speed this up
+        if marg:  # need to speed this up
             for param in params.select(basename=['a[0:5]', 'NP*']):
                 param.update(derived='marg')
         if user_params:

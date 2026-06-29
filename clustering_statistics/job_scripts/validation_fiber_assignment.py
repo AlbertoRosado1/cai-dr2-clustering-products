@@ -224,7 +224,7 @@ if __name__ == '__main__':
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
-            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[1:]
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
 
         def get_run_stats():
             if mode == 'interactive':
