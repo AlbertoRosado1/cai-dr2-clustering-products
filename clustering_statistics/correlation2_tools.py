@@ -52,10 +52,12 @@ def compute_particle2_angular_upweights(*get_data, battrs=None):
 
         if battrs is None:
             battrs = {'theta': 10**np.arange(-5, -1 + 0.1, 0.1)}
+            #battrs = {'theta': 1e-5 + np.arange(0., 0.1 + 0.001, 0.005)}
         battrs = BinAttrs(**battrs)
 
-        counts_fibered = _compute_particle2_correlation_close_pair_correction(all_fibered_particles, battrs, auw=None, cut=None, normalize_randoms=False, with_norm=True)
-        counts_parent = _compute_particle2_correlation_close_pair_correction(all_parent_particles, battrs, auw=None, cut=None, normalize_randoms=False, with_norm=True)
+        #theta_limit = (0., battrs.edges('theta').max())
+        counts_fibered = _compute_particle2_correlation_close_pair_correction(all_fibered_particles, battrs, auw=None, cut=None, normalize_randoms=False) #, theta_limit=theta_limit)
+        counts_parent = _compute_particle2_correlation_close_pair_correction(all_parent_particles, battrs, auw=None, cut=None, normalize_randoms=False) #, theta_limit=theta_limit)
 
     kw = dict(theta=battrs.coords('theta'), theta_edges=battrs.edges('theta'), coords=['theta'])
     auw = {}
@@ -530,7 +532,7 @@ def _remove_phantom_particles(particles, sharding_mesh=None):
     return particles[weights != 0].clone(exchange=True)
 
 
-def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, spattrs=None, auw=None, cut=None, normalize_randoms: bool=True, with_norm: bool=False):
+def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, spattrs=None, auw=None, cut=None, normalize_randoms: bool=True, theta_limit: tuple=(0., 0.05)):
     """
     Compute close-pair corrections to 2-point counts.
     Returns additive correction counts keyed by count name.
@@ -550,7 +552,7 @@ def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, 
 
     kw_battrs = dict(battrs=battrs)
 
-    sattrs = SelectionAttrs(theta=(0., 0.05))
+    sattrs = SelectionAttrs(theta=(0., 0.05) if theta_limit is None else theta_limit)
     wattrs = WeightAttrs()
 
     if normalize_randoms:
@@ -566,9 +568,7 @@ def _compute_particle2_correlation_close_pair_correction(all_particles, battrs, 
                     particles[name] = normalize_randoms(particles['data'], particles[name], wattrs=wattrs)
 
     def count2split(*particles, wattrs=None, mattrs=None):
-        kw = dict(battrs=battrs, wattrs=wattrs, sattrs=sattrs, mattrs=mattrs, spattrs=spattrs, norm=1.)
-        if with_norm:
-            kw.pop('norm')
+        kw = dict(battrs=battrs, wattrs=wattrs, sattrs=sattrs, mattrs=mattrs, spattrs=spattrs) #, norm=1.)
         nsplits = [len(p) if isinstance(p, list) else 0 for p in particles]
         if any(nsplits):
             for nsplit in nsplits:

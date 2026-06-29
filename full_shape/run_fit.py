@@ -6,6 +6,7 @@ import argparse
 import logging
 
 from desilike.base import compile, copy, Prior, Posterior, get_params
+from desilike.conditioning import AffineConditioner
 from desilike.samples import MCSamples, Profiles
 from desilike.profilers import Profiler
 from desilike.samplers import Sampler
@@ -79,7 +80,8 @@ def run_fit_from_options(actions,
             posterior = compile(Posterior(likelihood_profiler, prior=get_prior(likelihood_profiler)))
             kw = dict(profiler_options.get('init', {}))
             kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance']})
-            profiler = Profiler(posterior, kernel=kernel, output_fn=profiles_fn, **kw)
+            conditioner =  AffineConditioner(**{name: kw.pop(name, None) for name in ['rescale', 'covariance']})
+            profiler = Profiler(posterior, kernel=kernel, output_fn=profiles_fn, conditioner=conditioner, **kw)
             profiler.maximize(**profiler_options.get('maximize', {}))
             #profiler.covariance()
             if mpicomm.rank == 0:
@@ -98,6 +100,9 @@ def run_fit_from_options(actions,
             likelihood_sampler = copy(likelihood)
             if kw.get('rescale', False):
                 profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
+                if profiles.error is None:
+                    logger.warn(f'Error is not provided in {profiles_fn}; skipping rescaling.')
+                    kw['rescale'] = False
                 best, error, covariance = profiles.best, profiles.error, profiles.covariance
                 kw['covariance'] = covariance
                 #error = {param: covariance.std(param) for param in covariance.names()}
@@ -106,10 +111,14 @@ def run_fit_from_options(actions,
                         param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
             if kw.get('prior', None) is not None:
                 profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
+                if profiles.error is None:
+                    logger.warn(f'Error is not provided in {profiles_fn}; skipping prior.')
+                    kw['prior'] = None
                 kw['prior'] = kw['prior'] * profiles.covariance
             posterior = compile(Posterior(likelihood_sampler, prior=get_prior(likelihood_sampler)))
             kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance', 'nparallel', 'prior', 'batch_size']})
-            sampler = Sampler(posterior, kernel=kernel, output_dir=output_dir, **kw)
+            conditioner =  AffineConditioner(**{name: kw.pop(name, None) for name in ['rescale', 'covariance']})
+            sampler = Sampler(posterior, kernel=kernel, output_dir=output_dir, conditioner=conditioner, **kw)
             sampler.run(**sampler_options.get('run', {}))
         else:
             raise NotImplementedError(f'{action} not implemented')

@@ -96,7 +96,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
-                options['catalog'][itracer]['nran'] = 5
+                #options['catalog'][itracer]['nran'] = 5
                 #if 'BGS_BRIGHT' in itracer:
                 #    options['catalog'][itracer]['tracer'] = 'BGS_BRIGHT'
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
@@ -111,11 +111,17 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly)
             _get_catalog_fn = tools.get_catalog_fn
             if cat_dir is not None:
-                def _get_catalog_fn(**kwargs):
-                    imock = kwargs.get('imock')
-                    out_dir = cat_dir / f'mock{imock:d}'
-                    return tools.get_catalog_fn(cat_dir=out_dir, **kwargs)
-            
+                if 'auxiliary_data' in str(cat_dir):
+                    def _get_catalog_fn(**kwargs):
+                        imock = kwargs.get('imock')
+                        out_dir = cat_dir / f'mock{imock:d}'
+                        return tools.get_catalog_fn(cat_dir=out_dir, **kwargs)
+                else:
+                    def _get_catalog_fn(**kwargs):
+                        _cat_dir = Path(cat_dir)
+                        if 'full' in kwargs['kind']:
+                            _cat_dir = _cat_dir.parent
+                        return tools.get_catalog_fn(cat_dir=_cat_dir, ext=None, **kwargs)
             compute_stats_from_options(stats, analysis=analysis, get_catalog_fn=_get_catalog_fn, get_stats_fn=_get_stats_fn, cache=cache, **options)
 
 
@@ -132,14 +138,26 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
 
 if __name__ == '__main__':
 
-    stats, postprocess = [], []
-    version = 'abacus-hf-dr2-v2-altmtl'
-    # version = 'glam-uchuu-v2-altmtl'
-    # version = 'abacus-2ndgen-dr2-complete'
-    # version = 'abacus-2ndgen-dr2-altmtl'
-    # version = 'data-dr2-v2'
     check_for_existing_measurements = False
-    imocks = np.arange(2)
+    stats, postprocess = [], []
+    #version = 'abacus-hf-dr2-v2-altmtl'
+    #version = 'glam-uchuu-v2-altmtl'
+    #version = 'abacus-2ndgen-dr2-complete'
+    #version = 'abacus-2ndgen-dr2-altmtl'
+    #version = 'data-dr2-v2'
+    #version = 'data-dr2-test-maskedfracz'
+    version = 'data-dr2-test-maskedfraczpNN'
+    analysis = 'full_shape'
+    cat_dir = None
+    #compweight = 'tilelocid-LRG1'
+    #compweight = 'tilelocid-LRG0'
+    #cat_dir = tools.base_stats_dir / f'auxiliary_data/fiber_assignment_systematics_ELG_{compweight}' / version
+    cat_dir = tools.desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/test/maskedfraczpNN'
+
+    project = f'{analysis}/fiber_assignment_systematics'
+    #project = f'{analysis}/fiber_assignment_systematics_tests'
+    #project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
+    imocks = np.arange(1)
     #imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
@@ -147,24 +165,20 @@ if __name__ == '__main__':
     #imocks = np.arange(1, 2)
     if 'data' in version:
         imocks = [None]
+
     if version == 'glam-uchuu-v2-altmtl':
         check_for_existing_measurements = True
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
         imocks = [150]
 
     stats_dir = tools.base_stats_dir
-    cat_dir = None
-    #compweight = 'tilelocid-LRG1'
-    compweight = 'tilelocid-LRG0'
-    cat_dir = tools.base_stats_dir / f'auxiliary_data/fiber_assignment_systematics_ELG_{compweight}' / version
 
     # run fiducial full_shape
-    #tracers = ['LRG', 'ELG', 'QSO']
+    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:3]
     #tracers = ['ELG', 'LRG']
     #tracers = ['LRG']
-    tracers = ['ELG', 'QSO'][:1]
+    #tracers = ['ELG', 'QSO'][:1]
     #tracers = ['LRG', 'QSO']
-
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'
     #tracers = ['BGS_BRIGHT']
@@ -176,22 +190,20 @@ if __name__ == '__main__':
     #stats = ['mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
     #stats = ['window_mesh2_spectrum', 'window_mesh3_spectrum']
-    #stats = ['mesh2_spectrum', 'mesh3_spectrum'][:1] # 'particle2_correlation', 'particle3_correlation']
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'particle2_correlation', 'particle3_correlation'][:2]
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'close_pair_correction'][:1]
+    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    #stats = ['mesh3_spectrum', 'close_pair_correction']
     #stats = ['particle3_correlation'][:0]
     postprocess = ['combine_regions'][:0]
-    analysis = 'full_shape'
-    #project = f'{analysis}/fiber_assignment_systematics_tests'
-    project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'
     #weight = 'default-FKP-noimsys'
-    weight = 'default'
-    regions = ['NGC', 'SGC'][:1]
+    #weight = 'default'
+    regions = ['NGC', 'SGC']
     #regions = ['SGCnoDES', 'DES']
     max_mocks_per_batch = 5
 
@@ -206,13 +218,13 @@ if __name__ == '__main__':
     #onthefly = 'altmtl'
     
     for tracer in tracers:
-        if 'BGS' not in tracer:
+        if 'BGS_BRIGHT-02' not in tracer:
             tracer = tools.get_full_tracer(tracer, version=version)
         if 'png' in analysis:
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
-            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[1:]
 
         def get_run_stats():
             if mode == 'interactive':

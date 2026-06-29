@@ -874,47 +874,11 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 cat_dir = cat_dir / 'v1.5'
             ext = 'fits'
 
-        elif version == 'data-dr2-v1.1':
-            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v1.1'
-            ext = 'fits'
-            if kind == 'parent_randoms':
-                program = 'bright' if 'BGS' in tracer else 'dark'
-                return [cat_dir / f'{program}_{iran}_full_noveto.ran.{ext}' for iran in nrans]
-            if 'bitwise' in weight:
-                data_dir = cat_dir / 'PIP'
-            else:
-                data_dir = cat_dir / 'nonKP'
-            ext = 'fits'
-            if kind == 'data':
-                return data_dir / f'{tracer}_{region}_clustering.dat.{ext}'
-            if kind == 'randoms':
-                return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{ext}' for iran in nrans]
-            if kind == 'full_data':
-                return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
-            if kind == 'full_randoms':
-                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
-
-        elif version == 'data-dr2-v2':
-            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
-            if kind == 'parent_randoms':
-                program = 'bright' if 'BGS' in tracer else 'dark'
-                return [_find_extension(cat_dir / f'{program}_{iran}_full_noveto.ran', None) for iran in nrans]
-            if 'bitwise' in weight:
-                data_dir = cat_dir / 'PIP'
-            else:
-                data_dir = cat_dir / 'nonKP'
-            ext = 'fits'
-            if kind == 'data':
-                return data_dir / f'{tracer}_{region}_clustering.dat.{ext}'
-            if kind == 'randoms':
-                return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{ext}' for iran in nrans]
-            if kind == 'full_data':
-                return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
-            if kind == 'full_randoms':
-                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
-
-        elif version == 'data-dr2-v2.1':
-            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2.1'
+        elif version in ['data-dr2-v1.1', 'data-dr2-v2', 'data-dr2-v2.1', 'data-dr2-test']:
+            version = version.split('-')[-1]
+            if version == 'v1.1':
+                ext = 'fits'
+            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats' / version
             if kind == 'parent_randoms':
                 program = 'bright' if 'BGS' in tracer else 'dark'
                 return [_find_extension(cat_dir / f'{program}_{iran}_full_noveto.ran', None) for iran in nrans]
@@ -1578,7 +1542,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
         Low-level function to read a file into a Catalog (defaults to internal _read_catalog).
     keep_columns : list, tuple, bool or None, optional
         If True, keep all columns. If None (default), keep the minimal columns
-        ['RA', 'DEC', 'Z', 'NX', 'TARGETID'] plus any columns with 'WEIGHT' in their name.
+        ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION'] plus any columns with 'WEIGHT' in their name.
         If a list/tuple, keep exactly those columns (INDWEIGHT is always included later).
     **kwargs : dict
         Additional keyword arguments forwarded to `get_catalog_fn` (e.g. tracer, region, version, imock).
@@ -1595,7 +1559,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
     if isinstance(keep_columns, bool) and keep_columns:
         keep_all_columns = True
     elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES', 'WEIGHT_NTILE']
+        keep_columns = ['RA', 'DEC', 'Z', 'POSITION', 'NX', 'TARGETID', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES', 'WEIGHT_NTILE']
     else:
         assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
         keep_columns = list(keep_columns)
@@ -2082,7 +2046,7 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
         Binned weights to apply. Keys are column names, values are weight arrays.
     keep_columns : list, optional
         If True, keep all columns.
-        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID'].
+        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION'].
         Else, a list of column names to keep in the output catalog.
         Note: INDWEIGHT is always included.
     mpicomm : MPI.Comm, optional

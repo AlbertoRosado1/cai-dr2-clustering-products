@@ -279,16 +279,19 @@ if __name__ == '__main__':
     from mpi4py import MPI
 
     mpicomm = MPI.COMM_WORLD
-    imocks = list(range(2))
-    local_imocks = imocks[mpicomm.rank::mpicomm.size]
 
-    version = 'abacus-hf-dr2-v2-altmtl'
+    #version = 'abacus-hf-dr2-v2-altmtl'
+    #imocks = list(range(2))
+    version = 'glam-uchuu-v2-altmtl'
+    imocks = list(range(150, 152))
+
     weight = 'nn'
-    weight = 'tilelocid-LRG0'
-    weight = 'tilelocid-LRG1'
-    weight = 'tilelocid-LRG19'
+    #weight = 'tilelocid-LRG0'
+    #weight = 'tilelocid-LRG1'
+    #weight = 'tilelocid-LRG19'
     out_dir = tools.base_stats_dir / f'auxiliary_data/fiber_assignment_systematics_ELG_{weight}' / version
 
+    local_imocks = imocks[mpicomm.rank::mpicomm.size]
     for imock in local_imocks:
         generate_ELG_catalogs(version=version, weight=weight, out_dir=out_dir / f'mock{imock:d}', imock=imock, nran=5, get_catalog_fn=tools.get_catalog_fn)
 

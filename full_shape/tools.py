@@ -225,36 +225,36 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
         if len(ells) <= 1:
             for param in params.select(basename='dbeta'):
                 param.update(fixed=True)
-    else:
+    elif 'folps' in model:
+        # These are the default values in desilike, we just repeat them for clarity
         if 'physical' in prior_basis:
             # ── Bias parameters ───────────────────────────────────────────────
-            # These are the default values in desilike, we just repeat them for clarity
             if 'mesh2_spectrum' in stat:
                 configs.update({
-                    'b1p': {'value': 1.5, 'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0.1, 8.]}},
-                    'b2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
-                    'bsp': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
-                    'b3p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
-                    'alpha0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
-                    'alpha2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
-                    'alpha4p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
-                    'ctp': {'value': 0., 'fixed': True, 'prior': {}},
-                    'X_FoGp': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
-                    'sn0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
-                    'sn2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 5.}},
+                    'b1': {'value': 1.5, 'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0.1, 8.]}},
+                    'b2': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'bs': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'b3': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+                    'alpha0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
+                    'alpha2': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
+                    'alpha4': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
+                    'ct': {'value': 0., 'fixed': True, 'prior': {}},
+                    'X_FoG': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
+                    'sn0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
+                    'sn2': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 5.}},
                 })
                 if 'b3' in coevolution:
                     configs['b3p'] = {'fixed': True, 'value': 0.}
             elif 'mesh3_spectrum' in stat:
                 configs.update({
-                    'b1p': {'value': 1.5, 'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0.1, 8.]}},
-                    'b2p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
-                    'bsp': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
-                    'c1p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
-                    'c2p': {'value': 0., 'fixed': True, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
-                    'sn0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
-                    'snb0p': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
-                    'X_FoGp': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
+                    'b1': {'value': 1.5, 'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0.1, 8.]}},
+                    'b2': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'bs': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'c1': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'c2': {'value': 0., 'fixed': True, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
+                    'sn0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
+                    'snb0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+                    'X_FoG': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
                 })
                 
         # ── FoG damping ───────────────────────────────────────────────────
@@ -263,7 +263,16 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
         else:
             configs['X_FoG*'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 10]}}
         if marg:
-            for param in params.select(basename=['alpha*', 'sn2*', 'sn4*']):
+            for param in params.select(basename=['alpha*', 'sn2', 'sn4']):
+                param.update(derived='marg')
+        if user_params:
+            configs = configs | user_params
+        for basename, config in configs.items():
+            for param in params.select(basename=basename):
+                param.update(**config)
+    elif 'comet' in model:
+        if False: #marg:  # need to speed this up
+            for param in params.select(basename=['a[0:5]', 'NP*']):
                 param.update(derived='marg')
         if user_params:
             configs = configs | user_params
@@ -296,7 +305,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     """
     from desilike.theories.galaxy_clustering import (DirectSpectrum2Template, ShapeFitSpectrum2Template, BAOSpectrum2Template,
         REPTVelocileptorsTracerSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSPTSpectrum2Poles,
-        FOLPSTracerSpectrum3Poles, COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles,
+        FOLPSTracerSpectrum3Poles, COMETPTSpectrum2Poles, COMETTracerSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum3Poles,
         DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles)
     from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
     from desilike.base import params as get_params
@@ -307,6 +316,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     cosmology_options = theory_options['cosmology']
     z = data_attrs['z']
     tracers = data_attrs['tracers']
+    nbar = data_attrs['nbar']
     if all(tracer == tracers[0] for tracer in tracers):
         tracers = tracers[0]
     if 'z' in theory_options:
@@ -333,31 +343,26 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             pt = FOLPSPTSpectrum2Poles(A_full=A_full)
             kw = {name: theory_options[name] for name in ['damping', 'prior_basis'] if name in theory_options}
             theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
-            prior_basis = kw.get('prior_basis', 'physical')
-            coevolution = kw.get('coevolution', '')
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
-            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            theory.update(**kw_stoch, nbar=nbar, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, kw['prior_basis'], marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
         elif theory_options['model'] in ['comet']:
             kw = {name: theory_options[name] for name in ['prior_basis'] if name in theory_options}
-            theory = COMETTracerSpectrum2Poles(cosmo=cosmology, pt=False, tracers=tracers, **kw, **theory_options.get('options', {}))
-            prior_basis = kw.get('prior_basis', 'physical')
-            coevolution = kw.get('coevolution', '')
+            #pt = COMETPTSpectrum2Poles(cosmo=cosmology, z=z) # backend='numpy')
+            #theory = COMETTracerSpectrum2Poles(pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
+            theory = COMETTracerSpectrum2Poles(cosmo=cosmology, tracers=tracers, z=z, **kw, **theory_options.get('options', {}))
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
-            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            theory.update(**kw_stoch, nbar=nbar, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, kw['prior_basis'], marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'mesh3_spectrum' in stat:
         if theory_options['model'] in ['folpsD', 'folpsEFT']:
-            kw = {name: theory_options[name] for name in ['damping', 'A_full'] if name in theory_options}
-            theory = FOLPSTracerSpectrum3Poles(template=template, tracers=tracers, **kw, **theory_options.get('options', {}))
-            prior_basis = theory_options.get('prior_basis', 'physical')
+            kw = {name: theory_options[name] for name in ['damping', 'A_full', 'prior_basis'] if name in theory_options}
+            theory = FOLPSTracerSpectrum3Poles(template=template, tracers=tracers, z=z, **kw, **theory_options.get('options', {}))
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
-            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            theory.update(**kw_stoch, nbar=nbar, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, kw['prior_basis'], marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
         elif theory_options['model'] in ['comet']:
             kw = {name: theory_options[name] for name in ['prior_basis'] if name in theory_options}
-            theory = COMETTracerSpectrum3Poles(cosmo=cosmology, pt=False, tracers=tracers, **kw, **theory_options.get('options', {}))
-            prior_basis = kw.get('prior_basis', 'physical')
-            coevolution = kw.get('coevolution', '')
+            theory = COMETTracerSpectrum3Poles(cosmo=cosmology, tracers=tracers, **kw, **theory_options.get('options', {}))
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
-            theory.update(**kw_stoch, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, prior_basis=prior_basis, coevolution=coevolution, marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
+            theory.update(**kw_stoch, nbar=nbar, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, kw['prior_basis'], marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
     elif 'recon_particle2_correlation' in stat:
         kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
@@ -1028,6 +1033,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     data, windows, covariance = unpack_stats(stats)
     labels = covariance.observable.labels(level=1)
     observables = []
+    nbar = {}
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
         data_attrs = dict(data.attrs) | label
@@ -1035,6 +1041,9 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             data_attrs['z'] = pole.attrs['zeff']
         namespace = _str_from_observable_options(observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
         data_attrs['tracers'] = namespace.split('x')
+        if namespace not in nbar:
+            nbar[namespace] = 1. / stats.observable.get(observables=label['observables'], tracers=label['tracers'], ells=0).values('shotnoise').mean()
+        data_attrs['nbar'] = nbar[namespace]
         suffix = 'x'.join(data_attrs['tracers'])
         if mpicomm.rank == 0:
             logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
