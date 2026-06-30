@@ -6,11 +6,42 @@ import lsstypes as types
 from pathlib import Path
 from clustering_statistics import tools
 
-def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1):
+
+def check_if_exists(fns, include_dubious=False):
+    """
+    Check which files exist, optionally including dubious realizations.
+    Prioritizing good realizations over dubious ones
+    """
+    
+    all_fns = []
+    
+    for fn in fns:
+        # Always check for the 'good' file first
+        if os.path.exists(fn):
+            all_fns.append(fn)
+        elif include_dubious:
+            # Generate potential dubious filenames
+            dubious_fn1 = str(fn).replace('mock', 'dubious_mock')
+            dubious_fn2 = str(fn).replace('mock', 'dubious_mock_')
+            
+            # Include the first one that exists
+            if os.path.exists(dubious_fn1):
+                all_fns.append(dubious_fn1)
+            elif os.path.exists(dubious_fn2):
+                all_fns.append(dubious_fn2)
+    
+    if include_dubious:
+        print('WARNING! Using measurements from dubious realizations.')
+    
+    return all_fns
+    
+def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1, include_dubious=False):
+    # Note: include_dubious = True does nothing if imock='*'
     kind_ = kind
     stats_, means, covs = {}, {}, {}
     for version in versions:
-        use_theory = versions[version].get('theory',False)
+        use_theory  = versions[version].get('theory',False)
+        use_dubious =  versions[version].get('include_dubious',False)
         if use_theory:
             kind = 'theory_'+kind_
             if 'mesh3' in kind or 'particle2' in kind:
@@ -28,6 +59,7 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=''
         if 'mesh3' in kind:
             kw['basis'] = 'sugiyama-diagonal'
             kw['auw'] = False  
+        
         if kw['version'] == 'data-dr2-v2':
             fns = tools.get_stats_fn(**kw)
         else:
@@ -36,10 +68,11 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=''
                 fns = tools.get_stats_fn(**kw, imock='*')
             else:
                 fns = [tools.get_stats_fn(**kw, imock=imock) for imock in imocks]
-                fns = [fn for fn in fns if os.path.exists(fn)]
+                # fns = [fn for fn in fns if os.path.exists(fn)]
         if isinstance(fns, (str, Path)):
             fns = [fns]
-        # print(fns[0])
+        fns = check_if_exists(fns, include_dubious=use_dubious)
+        
         stats = [types.read(fn) for fn in fns]
         if 'particle2_correlation' in kind:
             stats = [stat.project(ells=ells) for stat in stats]
@@ -60,7 +93,7 @@ def get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=''
     return stats_, means, covs
 
 
-def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', ells=(0,2,4), rebin=1, reference=None, plot_all=False, imocks=None, ylim=(-1.5, 1.5), figure=None, ax_col=0, linestyles=None, lw=2, colors=None, scaling='kpk', save_fn=None, title=None, legend_ncol=1, legend_title=''):
+def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', include_dubious=False, ells=(0,2,4), rebin=1, reference=None, plot_all=False, imocks=None, ylim=(-1.5, 1.5), figure=None, ax_col=0, linestyles=None, lw=2, colors=None, scaling='kpk', save_fn=None, title=None, legend_ncol=1, legend_title=''):
     if reference is None:
         # use first item from versions as reference
         reference = next(iter(versions))
@@ -77,7 +110,7 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
     k_exp = 1 if scaling == 'kpk' else 0
     s_exp = 2
     if 'mesh2_spectrum' in kind:
-        stats, means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=project, rebin=rebin)
+        stats, means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=project, rebin=rebin,  include_dubious=include_dubious)
         versions = list(means)
         if title is None:
             lax[0].set_title(f'{tracer} in {region} {zrange[0]:.1f} < z < {zrange[1]:.1f}')
@@ -128,7 +161,7 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
 
     elif 'mesh3_spectrum_sugiyama-diagonal' in kind:
-        stats, means, covs = get_means_covs('mesh3_spectrum', versions, tracer, zrange, region, stats_dir, project=project, rebin=rebin)
+        stats, means, covs = get_means_covs('mesh3_spectrum', versions, tracer, zrange, region, stats_dir, project=project, rebin=rebin,  include_dubious=include_dubious)
         versions = list(means)
         if title is None:
             lax[0].set_title(f'{tracer} in {region} {zrange[0]:.1f} < z < {zrange[1]:.1f}')
@@ -174,7 +207,7 @@ def plot_stats(kind, versions, tracer, zrange, region, stats_dir, project='', el
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
 
     elif 'particle2_correlation' in kind:
-        stats, means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=project, ells=ells, rebin=rebin)
+        stats, means, covs = get_means_covs(kind, versions, tracer, zrange, region, stats_dir, project=project, ells=ells, rebin=rebin,  include_dubious=include_dubious)
         versions = list(means)
         if title is None:
             lax[0].set_title(f'{tracer} in {region} {zrange[0]:.1f} < z < {zrange[1]:.1f}')

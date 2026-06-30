@@ -7,7 +7,6 @@ Main functions
 * `get_catalog_fn`: Construct input catalog filenames from analysis options.
 * `get_stats_fn`: Construct standardized output filenames for statistics.
 * `read_clustering_catalog`: Load and filter survey clustering catalogs.
-* `read_full_catalog`: Load full catalogs needed for specialized workflows.
 * `write_stats`: Serialize measured statistics to disk.
 """
 
@@ -133,6 +132,8 @@ def get_simple_stats(stats):
     """Given input stats name, return simple stats name; e.g. 'mesh2_spectrum' would result in 'spectrum2'."""
     if stats == 'mesh2_spectrum':
         return 'spectrum2'
+    elif stats == 'recon_mesh2_spectrum':
+        return 'spectrum2recon'
     elif stats == 'mesh3_spectrum':
         return 'spectrum3'
     elif stats == 'particle2_correlation':
@@ -495,7 +496,6 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_fiducial['particle2_correlation'].update(battrs={'s': np.linspace(0., 180., 181), 'mu': (np.linspace(-1., 1., 201), 'midpoint')})
         propose_fiducial['particle3_correlation'].update(battrs={'s': np.linspace(0., 160., 21), 'pole': (list(range(6)), 'firstpoint')}, selection_weights={tracer: functools.partial(compute_fiducial_selection_weights, tracer=tracer) for tracer in tracers})
 
-
     if 'protected' in analysis:
         propose_fiducial['mesh2_spectrum'].update(ells=(0,), edges={'min': 0.02, 'step': 0.001})
         propose_fiducial['mesh3_spectrum'].update(ells=[(0, 0, 0)])
@@ -516,7 +516,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     propose_fiducial['recon_particle2_correlation'] = dict(propose_fiducial['recon_particle2_correlation'])  # break shared reference with particle2_correlation
     propose_fiducial['recon_particle2_correlation']['nran'] = {tracer: propose_recon_corr_nran[st] for tracer, st in zip(tracers, simple_tracers)}
 
-    for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum']:
+    for name in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum', 'covariance_particle2_correlation']:
         propose_fiducial[name] = {}
 
     if 'png' in analysis:
@@ -528,13 +528,16 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         propose_meshsizes = {'BGS': 864, 'LRG': 864, 'LGE': 864, 'ELG': 1080, 'LRG+ELG': 864, 'QSO': 1152}
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10.}
+    propose_fiducial['covariance_particle2_correlation'] = propose_fiducial['covariance_mesh2_spectrum']
+    for name in ['covariance_mesh2_spectrum', 'covariance_particle2_correlation']:
+        propose_fiducial[name.replace('covariance_', 'covariance_recon_')] = propose_fiducial[name]
 
     propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'LGE': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
-        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
+        _zranges = zrange or {"BGS": [(0.1, 0.4)], "LRG": [(0.4, 1.1)], "LGE": [(0.4, 1.1)], "ELG": [(0.8, 1.6)], "QSO": [(0.8, 3.5)], "LRGxLGE": [(0.8, 1.1)], "LRGxLGE": [(0.8, 1.1)], "LRGxELG": [(0.8, 1.1)], "LRGxQSO": [(0.8, 1.1)], "ELGxQSO": [(0.8, 1.6)]}[simple_tracer]
 
         if simple_tracers[0] not in ["BGS", "LRG", "LGE", "ELG", "QSO"]:
             raise ValueError(f"tracer {tracer} is not supported for window_mesh2_spectrum_fm")
@@ -773,6 +776,12 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             # spectrum_options | fiducial_options because we override mattrs if given
             options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+        for stat in ['covariance_particle2_correlation']:
+            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+        for stat in ['covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']:
+            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+            options[stat] = fiducial_options | options[stat.replace('recon_', '')] | options.get(stat, {})
         for stat in ['combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum']:
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = fiducial_options | options.get(stat, {})
@@ -865,28 +874,11 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 cat_dir = cat_dir / 'v1.5'
             ext = 'fits'
 
-        elif version == 'data-dr2-v1.1':
-            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v1.1'
-            ext = 'fits'
-            if kind == 'parent_randoms':
-                program = 'bright' if 'BGS' in tracer else 'dark'
-                return [cat_dir / f'{program}_{iran}_full_noveto.ran.{ext}' for iran in nrans]
-            if 'bitwise' in weight:
-                data_dir = cat_dir / 'PIP'
-            else:
-                data_dir = cat_dir / 'nonKP'
-            ext = 'fits'
-            if kind == 'data':
-                return data_dir / f'{tracer}_{region}_clustering.dat.{ext}'
-            if kind == 'randoms':
-                return [data_dir / f'{tracer}_{region}_{iran:d}_clustering.ran.{ext}' for iran in nrans]
-            if kind == 'full_data':
-                return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
-            if kind == 'full_randoms':
-                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
-
-        elif version == 'data-dr2-v2':
-            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2'
+        elif version in ['data-dr2-v1.1', 'data-dr2-v2', 'data-dr2-v2.1', 'data-dr2-test']:
+            version = version.split('-')[-1]
+            if version == 'v1.1':
+                ext = 'fits'
+            cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats' / version
             if kind == 'parent_randoms':
                 program = 'bright' if 'BGS' in tracer else 'dark'
                 return [_find_extension(cat_dir / f'{program}_{iran}_full_noveto.ran', None) for iran in nrans]
@@ -926,7 +918,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'full_data':
                 return cat_dir / f'{tracer}_full_HPmapcut.dat.{ext}'
             if kind == 'full_randoms':
-                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]  
+                return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
 
         elif version == 'holi-v1-complete':
             cat_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v1/altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -1004,19 +996,47 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return [cat_dir / f'{tracer}_complete_{iran:d}_clustering.ran.{ext}' for iran in nrans]
 
         elif version == 'abacus-2ndgen-dr2-altmtl':
+            ext = 'fits'
             if 'BGS' in tracer:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummitBGS_v2'
                 if kind == 'full_data' and 'BGS_ANY' in tracer:
                     tracer = 'BGS_ANY'
                 if kind == 'full_data' and 'BGS_BRIGHT' in tracer:
                     tracer = 'BGS_BRIGHT'
+                if tracer == 'BGS_BRIGHT-02':
+                    ext = 'h5'
             else:
                 base_dir = desi_dir / f'survey/catalogs/DA2/mocks/SecondGenMocks/AbacusSummit_v4_1'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
             cat_dir = base_dir / f'altmtl{imock:d}/kibo-v1/mock{imock:d}/LSScats'
-            ext = 'fits'
 
+        elif version == 'abacus-hf-dr2-v1':
+            # TODO: This is not correctly implemented yet. This will only work as expected if zsnap coincides with the zrange passed to compute_stats.py.
+            # Reason: compute_stats.py first loads all the catalogs and then perform redshifts cuts as the measurement for that redshift bin is to be computed.
+            # zsnap = {(0.1, 0.4): 0.2, (0.4, 0.6): 0.5, (0.6, 0.8): 0.725, (0.8, 1.1): 0.950, (1.1, 1.6): 0.950, (0.8, 2.1): 1.4}[zrange]
+            stracer = get_simple_tracer(tracer)
+            zsnap = {'ELG': 0.950, 'QSO': 1.4}[stracer]
+            sznap = f'{zsnap:.3f}'.replace('.', 'p')
+            if tracer == 'QSO':
+                szrange = '0p8to3p5'
+            if tracer == 'ELG':
+                szrange = '0p8to1p6'
+                stracer = 'ELG_v5'
+            if tracer == 'LRG':
+                szrange = '0p4to1p1'
+            if tracer == 'BGS':
+                szrange = '0p1to0p4'
+            base_dir = desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/AbacusSummit_base_c000_ph{imock:03d}/CutSky/{stracer}/z{zsnap:.3f}/forclustering'
+            if kind == 'data':
+                return base_dir / f'cutsky_abacusHF_DR2_{tracer}_z{sznap}_zcut_{szrange}_clustering.dat.fits'
+            if kind == 'randoms':
+                # TODO: nran is ignored hear.
+                # Reason: there are only randoms for nran=8-17
+                # return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/raw/rands_intiles_DARK_{iran:d}_NO_imagingmask_withz.fits' for iran in range(8,18)]
+                # return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/imaging_mask_applied/rands_intiles_DARK_{iran:d}_withz.fits' for iran in range(8,18)]
+                return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/imaging_mask_applied/rands_intiles_DARK_{iran:d}_withz.fits' for iran in range(8,18)]
+                
         elif version == 'abacus-hf-dr2-v2-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -1027,29 +1047,34 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
-                cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
+                if 'BGS' in tracer:
+                    cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/altmtl/BGS_BRIGHT/MAG-21.35_KP3/")
+                else:
+                    # cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
+                    cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/altmtl/DARK/altmtl0/loa-v1/mock0/LSScats/")
             elif 'complete' in version:
                 #base_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/altmtl/')
                 cat_dir = Path("/global/cfs/cdirs/desi/mocks/cai/LSS/DA2/mocks/Uchuu-SHAM/altmtl0/loa-v1/mock0/LSScats/")
             else:
-                cat_dir =  Path(desi_dir / f'mocks/cai/Uchuu-SHAM/Y3-v2.0/{imock:04d}/complete/cosmo_sample/')
-            ext = 'fits'
-            if 'BGS' in tracer:
-                # ugly way to get file with mag cut for BGS
-                if '-' in tracer:
-                    mag = tracer.split('-')[-1]
-                    mag_cut = f'_Mr_{mag}'
-                else: 
-                    mag_cut = ''
-                if kind == 'data':
-                    return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_0000_clustering.dat.{ext}')
-                if kind == 'randoms':
-                    return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_{iran}_0000_clustering.ran.{ext}' for iran in nrans]
-            else:
-                if kind == 'data':
-                    return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_clustering.dat.{ext}')
-                if kind == 'randoms':
-                    return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
+                ext = 'fits'
+                if 'BGS' in tracer:
+                    cat_dir =  Path('/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/complete/cosmo_sample/')
+                    # ugly way to get file with mag cut for BGS
+                    if '-' in tracer:
+                        mag = tracer.split('-')[-1]
+                        mag_cut = f'_Mr_{mag}'
+                    else:
+                        mag_cut = ''
+                    if kind == 'data':
+                        return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_0000_clustering.dat.{ext}')
+                    if kind == 'randoms':
+                        return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0{mag_cut}_{iran}_0000_clustering.ran.{ext}' for iran in nrans]
+                else:
+                    cat_dir =  Path('/global/cfs/cdirs/desi/mocks/cai/Uchuu-SHAM/Y3-v2.0/0000/complete/')
+                    if kind == 'data':
+                        return Path(cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_clustering.dat.{ext}')
+                    if kind == 'randoms':
+                        return [cat_dir / f'Uchuu-SHAM_{get_simple_tracer(tracer)}_Y3-v2.0_0000_{iran}_clustering.ran.{ext}' for iran in nrans]
 
     # print(version)
     if cat_dir is None:
@@ -1170,7 +1195,10 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
     corr_type = ''.join(list(battrs)) if battrs is not None else None
     jackknife = kwargs.get('jackknife', {}).get('nsplits', None)
     if 'particle2_correlation' in kind:
-        if corr_type is None: corr_type = 'smu'
+        if corr_type is None:
+            corr_type = 'smu'
+            if 'covariance' in kind:
+                corr_type = 'poles'
         if jackknife:
             corr_type = f'{corr_type}_jackknife{jackknife:d}'
         full = f'particle2_correlation_{corr_type}'
@@ -1303,10 +1331,10 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
         catalog = Catalog.read(fn, mpicomm=mpicomm)
     catalog.attrs.update(catalog.header)  # for header not transmitted in pickling
     if 'WEIGHT' not in catalog:
-        warnings.warn('WEIGHT not in catalog')
+        logger.warning(f'WEIGHT not in catalog: {fn}')
         catalog['WEIGHT'] = catalog.ones()
     if 'TARGETID' not in catalog:
-        warnings.warn('TARGETID not in catalog')
+        logger.warning(f'TARGETID not in catalog: {fn}')
         catalog['TARGETID'] = catalog.cindex()
     return catalog
 
@@ -1445,7 +1473,7 @@ def expand_randoms(randoms, parent_randoms, data, from_randoms=('RA', 'DEC'), fr
             data = data.copy()  # shallow copy
         data['TARGETID_DATA'] = data.pop('TARGETID')
         if data['TARGETID_DATA'].max() < int(1e9):  # faster method
-            lookup = np.arange(1 + data['TARGETID_DATA'].max())
+            lookup = np.full(1 + data['TARGETID_DATA'].max(), -1, dtype=np.int64)
             lookup[data['TARGETID_DATA']] = np.arange(len(data))
             index = lookup[randoms['TARGETID_DATA']]
         else:
@@ -1514,7 +1542,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
         Low-level function to read a file into a Catalog (defaults to internal _read_catalog).
     keep_columns : list, tuple, bool or None, optional
         If True, keep all columns. If None (default), keep the minimal columns
-        ['RA', 'DEC', 'Z', 'NX', 'TARGETID'] plus any columns with 'WEIGHT' in their name.
+        ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION'] plus any columns with 'WEIGHT' in their name.
         If a list/tuple, keep exactly those columns (INDWEIGHT is always included later).
     **kwargs : dict
         Additional keyword arguments forwarded to `get_catalog_fn` (e.g. tracer, region, version, imock).
@@ -1531,7 +1559,7 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
     if isinstance(keep_columns, bool) and keep_columns:
         keep_all_columns = True
     elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES', 'WEIGHT_NTILE']
+        keep_columns = ['RA', 'DEC', 'Z', 'POSITION', 'NX', 'TARGETID', 'LOCATION_ASSIGNED', 'BITWEIGHTS', 'NTILE', 'FRACZ_TILELOCID', 'FRAC_TLOBS_TILES', 'WEIGHT_NTILE']
     else:
         assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
         keep_columns = list(keep_columns)
@@ -1598,16 +1626,18 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                     expand['from_data'] = ['FRAC_TLOBS_TILES']
                 else:
                     expand['data_fn'] = reshuffle['data_fn']
+                    expand['from_data'] = [] # no need of FRAC_TLOBS_TILES for on-the-fly complete mocks
 
     if kind == 'randoms' and isinstance(expand, dict):
-        # No need to import anything from data if reshuffling is performed
-        from_data = expand.get('from_data', [] if isinstance(reshuffle, dict) else ['Z', 'WEIGHT_SYS', 'FRAC_TLOBS_TILES'][:-1])
+        # if reshuffling is performed need to extract FRAC_TLOBS_TILES from data to have the correct completeness weight!
+        from_data = expand.get('from_data', ['FRAC_TLOBS_TILES'] if isinstance(reshuffle, dict) else ['Z', 'WEIGHT_SYS'])
         from_randoms = expand.get('from_randoms', ['RA', 'DEC', 'NTILE'])
         parent_randoms_fn = expand['parent_randoms_fn']
         if not isinstance(parent_randoms_fn, (tuple, list)):
             parent_randoms_fn = [parent_randoms_fn]
-        if mpicomm.rank == 0:
-            logger.info('Expanding randoms')
+
+        if mpicomm.rank == 0: logger.info(f'Expanding randoms with {from_data=} and {from_randoms=}')
+
         # WARNING: order matters!
         parent_randoms = []
         for ifn, fn in enumerate(parent_randoms_fn):
@@ -1830,14 +1860,14 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                 if 'iip' in weight_type:
                     individual_weight *= _compute_iip_weight(bitwise_weights)
                     bitwise_weights = None
-            else:
+            else:  # parent
                 # equivalent of IIP weights
-                #individual_weight /= (catalog['FRACZ_TILELOCID'] * catalog['FRAC_TLOBS_TILES'])
                 individual_weight /= catalog['FRACZ_TILELOCID']
+                if 'compondata' in weight_type:
+                    individual_weight /= catalog['FRAC_TLOBS_TILES']
                 bitwise_weights = None
-        if 'data' in kind and 'parent' in kind and 'bitwise' not in weight_type:
+        if 'data' in kind and 'parent' in kind and 'bitwise' not in weight_type and 'compondata' not in weight_type:
             individual_weight *= catalog['FRAC_TLOBS_TILES']
-        catalog = catalog[['RA', 'DEC']]
         catalog['INDWEIGHT'] = individual_weight
         if bitwise_weights is not None: catalog['BITWEIGHT'] = bitwise_weights
 
@@ -1867,6 +1897,12 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             elif kind == 'randoms':
                 individual_weight = catalog['WEIGHT'] * get_binned_weight(catalog, binned_weight['missing_power'])
 
+        elif 'compondata' in weight_type:
+            if kind == 'data':
+                individual_weight /= catalog['FRAC_TLOBS_TILES']
+            elif kind == 'randoms':
+                individual_weight *= catalog['FRAC_TLOBS_TILES']
+
         if 'FKP' in weight_type.upper():
             if log and mpicomm.rank == 0:
                 if FKP_P0 is None:
@@ -1880,19 +1916,25 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
             individual_weight *= catalog['WEIGHT_FKP']
 
         if 'noimsys' in weight_type:
+            if 'wsys' in weight_type:
+                # Avoid dividing by WEIGHT_SYS multiple times.
+                raise ValueError(f"Do not pass `noimsys` and `wsys` simultaneously. You provided {weight_type}.")
             # this assumes that the WEIGHT column contains WEIGHT_SYS
             if log and mpicomm.rank == 0:
                 logger.info('Dividing individual weights by WEIGHT_SYS')
             individual_weight /= catalog['WEIGHT_SYS']
 
-        if 'comp' in weight_type:
-            individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
+        #if 'comp' in weight_type:
+        #    individual_weight *= get_binned_weight(catalog, binned_weight['completeness'])
 
         if 'wsys' in weight_type and not 'noimsys' in weight_type:
             new_wsys = weight_type.split('wsys-')[-1]
+            new_wsys_col = f'WEIGHT_{new_wsys.upper()}'
+            if new_wsys_col not in catalog.columns():
+                raise ValueError(f'{new_wsys_col} column does not exist!')
             if log and mpicomm.rank == 0:
-                logger.info(f'Use a different wsys weight: WEIGHT_{new_wsys.upper()}')
-            individual_weight *= catalog[f'WEIGHT_{new_wsys.upper()}'] / catalog['WEIGHT_SYS']
+                logger.info(f'Using a different wsys weight: {new_wsys_col}')
+            individual_weight *= catalog[new_wsys_col] / catalog['WEIGHT_SYS']
 
         catalog['INDWEIGHT'] = individual_weight
         if bitwise_weights is not None:
@@ -1939,7 +1981,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     catalog : Catalog, list
         Catalog object or list of Catalog objects (if ``concatenate`` is False).
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
-        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     """
     FKP_P0, zrange, region, weight = (kwargs.get(key, None) for key in ['FKP_P0', 'zrange', 'region', 'weight'])
 
@@ -1947,7 +1989,7 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     if isinstance(keep_columns, bool) and keep_columns:
         keep_all_columns = True
     elif keep_columns is None:
-        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     else:
         assert isinstance(keep_columns, (tuple, list)), 'keep_columns must be a list of column names'
 
@@ -1961,11 +2003,12 @@ def prepare_catalog(catalogs, kind=None, concatenate=None, binned_weight=None, k
     for i, catalog in enumerate(catalogs):
         catalog = mask_catalog(catalog, kind, zrange=zrange, region=region)
         catalog = set_catalog_weights(catalog, kind, weight=weight, FKP_P0=FKP_P0, binned_weight=binned_weight, log=i == 0)
-        if kind in ['data', 'randoms']:
+        if kind in ['data', 'randoms'] and (keep_all_columns or 'POSITION' in keep_columns):
             catalog = set_positions_from_rdz(catalog)
-        rdzw.append(catalog)
         if not keep_all_columns:
+            keep_columns = list(keep_columns) + ['INDWEIGHT', 'BITWEIGHT'] # always keep INDWEIGHT and BITWEIGHT (if present) as the docstring says
             catalog = catalog[[column for column in catalog if column in keep_columns]]
+        rdzw.append(catalog)
     if concatenate:
         if len(rdzw) == 1: return rdzw[0]
         return Catalog.concatenate(rdzw)
@@ -2003,7 +2046,7 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
         Binned weights to apply. Keys are column names, values are weight arrays.
     keep_columns : list, optional
         If True, keep all columns.
-        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID'].
+        If None, keep ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION'].
         Else, a list of column names to keep in the output catalog.
         Note: INDWEIGHT is always included.
     mpicomm : MPI.Comm, optional
@@ -2025,11 +2068,13 @@ def read_clustering_catalog(kind=None, concatenate=True, expand=None, reshuffle=
     catalog : Catalog, list
         Catalog object or list of Catalog objects (if ``concatenate`` is False).
         Contains 'RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION', 'INDWEIGHT' (individual weight), 'BITWEIGHT' columns.
-        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID']
+        The first columns ('RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION') can be controled via keep_columns = ['RA', 'DEC', 'Z', 'NX', 'TARGETID', 'POSITION']
     """
     catalogs = read_catalog(kind=kind, concatenate=concatenate, get_catalog_fn=get_catalog_fn,
                             expand=expand, reshuffle=reshuffle, complete=complete, mpicomm=mpicomm, read=_read_catalog,
-                            keep_columns=keep_columns, **kwargs)
+                            keep_columns=True if keep_columns is True else None, **kwargs)
+    # for the read_catalog, it doesn't always work to have the same keep_columns, as more columns can be needed in the prepare_catalog steps (masking, setting weights or positions). if keep_columns is True, we keep all columns at the read_catalog step and it works. if keep_columns is None, we use the default set of columns and this also works. if keep_columns is a custom list, this code gives keep_columns=None for the read_catalog step as well, which should not give errors and should generally work as long as the custom keep_columns set passed to this function is narrower than the default set of columns (which is reasonable to expect from the docstring)
+    # the keep_columns argument is passed to prepare_catalog to control the final output columns
     catalogs = prepare_catalog(catalogs, kind=kind, set_positions_from_rdz=set_positions_from_rdz,
                                mask_catalog=mask_catalog, set_catalog_weights=set_catalog_weights,
                                binned_weight=binned_weight, keep_columns=keep_columns, **kwargs)
@@ -2376,6 +2421,37 @@ def merge_randoms_catalogs(output_fn: str | Path, input_fns: list[str | Path], p
     write_stats(output_fn, merged)
 
 
+def get_renormalization_regions(tracer):
+    """Regions where to renormalize data / randoms."""
+    tracer = get_simple_tracer(tracer)
+    regions = ['N', 'S']
+    if tracer.startswith('QSO'):
+        regions = ['N', 'SnoDES', 'DES']
+    return regions
+
+
+def check_if_requires_renormalization(weight='', **kwargs):
+    return 'compondata' in weight
+
+
+def renormalize_randoms_over_data(randoms, data, tracer=None, regions=None):
+    """Renormalize randoms / data in each region."""
+    sum_data_weights, sum_randoms_weights = [], []
+    if regions is None:
+        regions = get_renormalization_regions(tracer)
+    for region in regions:
+        mask_data = select_region(data['RA'], data['DEC'], region=region)
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        sum_data_weights.append(data['INDWEIGHT'][mask_data].csum())
+        sum_randoms_weights.append(randoms['INDWEIGHT'][mask_randoms].csum())
+
+    sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
+    alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
+    for region, alpha in zip(regions, alphas):
+        mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
+        randoms['INDWEIGHT'] *= alpha
+
+
 def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     """
     Reshuffled random redshifts from (merged) data.
@@ -2446,9 +2522,7 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
 
     tracer = get_simple_tracer(tracer)
     P0 = {'BGS': 7e3, 'LRG': 1e4, 'LGE': 1e4, 'ELG': 4e3, 'QSO': 6e3}[tracer]
-    regions = ['N', 'S']
-    if tracer.startswith('QSO'):
-        regions = ['N', 'SnoDES', 'DES']
+    regions = get_renormalization_regions(tracer)
 
     sum_data_weights, sum_randoms_weights = [], []
     column = 'FRAC_TLOBS_TILES'
@@ -2610,7 +2684,7 @@ def complete_from_full_data(forfa_data, full_data, nz, tracer, remove_contaminan
                 mask &= data['Z'] < 1.5
             zfrac = 0.966
             zrange = (0.4, 1.1)
-            
+
         if tracer.startswith('BGS'):
             if True: #'ANY' in tracer:
                 fit_a = np.poly1d(np.loadtxt("/pscratch/sd/z/zxzhai/DESI_LSS/BGS_ANY_zmagcut_a.dat"))
@@ -2854,6 +2928,9 @@ def add_photometric_template_values(
                 sysmaps["SKY_RES_R"] = sky_r[region]
             if "SKY_RES_Z" in need_maps:
                 sysmaps["SKY_RES_Z"] = sky_z[region]
+
+        if "ZCMB" in need_maps:
+            sysmaps["ZCMB"] = common.mk_zcmbmap()
         # Drop unused, reorder, cast to float64 if needed and return as regular numpy array
         return np.lib.recfunctions.structured_to_unstructured(sysmaps[need_maps].as_array()).astype(float)
 
@@ -2991,3 +3068,100 @@ def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_
         value.append(row)
     window_mean = window_mean.clone(value=np.block(value))
     return window_mean
+
+
+def rebinning_matrix(current_theory: types.ObservableTree, new_coords: types.ObservableTree=None, interp_order: int=3, diag: str=None):
+    """Build a window matrix that rebins ``current_theory`` onto a new coordinate grid.
+
+    Parameters
+    ----------
+    current_theory : types.ObservableTree
+        Observable tree whose coordinate grid defines the *theory*
+        side of the window matrix.  Every leaf must have exactly one coordinate
+        dimension, and that coordinate must be a tensor product of 1-D grids
+        (i.e. ``coords`` is the meshgrid of separable 1-D axes).
+    new_coords : int or array-like or None, optional
+        Target coordinate grid for the *theory* side of the window matrix.
+
+        - ``None`` (default): keep the same grid as ``current_theory``.
+        - ``types.ObservableTree``: new *theory* for the window matrix
+        - array-like: explicit per-axis 1-D arrays (same length as the number
+          of coordinate dimensions).
+    interp_order : int, optional
+        Polynomial order of the spline used by ``matrix_spline_interp``
+        (default 3, i.e. cubic).
+    diag : {None, 'separate'}, optional
+        Controls how the diagonal (same-point) contribution is handled.
+
+        - ``None`` (default): the interpolation matrix is used as-is.
+        - ``'separate'``: the diagonal rows of the interpolation matrix are
+          zeroed out and appended as a separate identity block at the end of
+          the matrix columns.  The observable coordinates on the theory side
+          are then extended to include the original current-theory points as
+          extra rows, so the diagonal contribution can be passed through
+          unmodified.
+
+    Returns
+    -------
+    types.WindowMatrix
+        Window matrix with ``value`` the block-diagonal interpolation matrix,
+        ``theory`` the rebinned observable tree (new coordinate grid), and
+        ``observable`` set to ``current_theory``.
+    """
+    import numbers
+    import scipy as sp
+    from lsstypes import ObservableLike
+    from lsstypes.utils import matrix_spline_interp
+
+    assert diag in [None, 'separate']
+    coord_name = list(next(iter(current_theory)).coords())
+    assert len(coord_name) == 1
+    coord_name = coord_name[0]
+
+    def per_axis_coords(theory):
+        coords = np.concatenate([pole.coords(coord_name) for pole in theory.flatten(level=None)], axis=0)
+        return [np.unique(coord) for coord in coords.T]
+
+    current_coords = per_axis_coords(current_theory)
+    if new_coords is None:
+        new_coords = current_coords
+    elif isinstance(new_coords, ObservableLike):
+        new_coords = per_axis_coords(new_coords)
+
+    def flatten_coords(*coords):
+        coords_flat = np.meshgrid(*coords, indexing='ij')
+        return np.column_stack([coord.ravel() for coord in coords_flat])
+
+    new_coords_flat = flatten_coords(*new_coords)
+
+    value = []
+    for label, pole in current_theory.items(level=None):
+        _current_coords = next(iter(pole.coords().values()))
+        current_coords = [np.unique(current_coord) for current_coord in _current_coords.T]
+        assert np.allclose(flatten_coords(*current_coords), _current_coords)
+        matrices1d = [matrix_spline_interp(new_coord, current_coord, interp_order=interp_order) for new_coord, current_coord in zip(new_coords, current_coords)]
+        matrixnd = matrices1d[0]
+        for matrix1d in matrices1d[1:]:
+            matrixnd = np.kron(matrixnd, matrix1d)
+        if diag == 'separate':
+            shape = tuple(len(coord) for coord in current_coords)
+            assert all(ss == shape[0] for ss in shape[1:])
+            multi_index = tuple(np.arange(s) for s in shape)
+            diag_index = np.ravel_multi_index(multi_index, dims=shape)
+            # zero-out diagonal contribution
+            matrixnd[diag_index, :] = 0.
+            # then add the diagonal contribution
+            matrixdiag = np.zeros(matrixnd.shape[:1] + (len(diag_index),))
+            matrixdiag[diag_index, np.arange(len(diag_index))] = 1.
+            matrixnd = np.concatenate([matrixnd, matrixdiag], axis=-1)
+        value.append(matrixnd)
+
+    def f(pole):
+        coord_values = new_coords_flat
+        if diag == 'separate':
+            coord_values = np.concatenate([new_coords_flat, np.column_stack(current_coords)], axis=0)
+        return types.ObservableLeaf(value=np.zeros(len(coord_values)), **{coord_name: coord_values}, coords=[coord_name])
+
+    new_theory = current_theory.map(lambda pole: f(pole), level=None)
+    value = sp.linalg.block_diag(*value)
+    return types.WindowMatrix(value=value, theory=new_theory, observable=current_theory)

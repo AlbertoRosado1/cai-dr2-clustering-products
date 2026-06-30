@@ -32,7 +32,7 @@ import lsstypes as types
 from . import tools
 from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, _compute_binned_weight, setup_logging
 
-from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction
+from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction, compute_covariance_particle2_correlation
 from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
 
 from .correlation3_tools import compute_particle3_angular_upweights, compute_particle3_correlation, compute_particle3_correlation_close_pair_correction
@@ -96,12 +96,12 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     cache : dict, optional
         Cache to store intermediate results (binning class and parent/reference random catalog).
         See :func:`spectrum2_tools.compute_mesh2_spectrum`, :func:`spectrum3_tools.compute_mesh3_spectrum`,
-        and func:`tools.read_clustering_catalog` for details.
+        and func:`tools.read_catalog` for details.
     get_stats_fn : callable, optional
         Function to get the filename for storing the measurement.
     get_catalog_fn : callable, optional
         Function to get the filename for reading the catalog.
-        If provided, it is given to ``read_clustering_catalog`` and ``read_full_catalog``.
+        If provided, it is given to ``read_catalog``.
     read_catalog : callable, optional
         Function to read the catalog.
     prepare_catalog : callable, optional
@@ -130,7 +130,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
         prepare_catalog = functools.partial(prepare_catalog, mask_catalog=mask_catalog)
 
     # Check if any statistic requires reconstruction
-    with_recon = any('recon' in stat for stat in stats)
+    with_recon = any('recon' in stat and 'covariance' not in stat for stat in stats)
     with_catalogs = True
 
     # Initialize catalogs and randoms dictionaries
@@ -164,12 +164,15 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 _catalog_options.setdefault('reshuffle', {})  # to pass on complete data
 
             # Read data and random catalogs
-            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=True), kind='data', **_catalog_options)
+            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=True), kind='data', **(_catalog_options | dict(keep_columns=True)))
             binned_weight.update(data[tracer].attrs)  # update with any additional info from prepared data catalog
             #_catalog_options.pop('complete', None)
             #_catalog_options.pop('reshuffle', None)
             raw_randoms[tracer] = read_catalog(kind='randoms', **_catalog_options, concatenate=False)
             randoms[tracer] = prepare_catalog(raw_randoms[tracer], kind='randoms', **_catalog_options)
+            if tools.check_if_requires_renormalization(**_catalog_options):
+                for random in randoms[tracer]:
+                    tools.renormalize_randoms_over_data(random, data[tracer], tracer=tracer)
             catalog_options[tracer]['binned_weight'] = binned_weight  # store binned weight info in catalog options for later use in stats computation
 
     # Warn user if blinding will be applied
@@ -235,7 +238,14 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         if tracer not in raw_full_data:
                             raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=True)
                             #_catalog_options['binned_weight'].update(raw_full_data[tracer].attrs)  # update binned weight info for AUW computation
-                        _cache_auw[kind] = prepare_catalog(raw_randoms[tracer] if 'randoms' in kind else raw_full_data[tracer], kind=kind, **_catalog_options)
+                        if 'randoms' in kind:
+                            _cache_auw[kind] = prepare_catalog(raw_randoms[tracer], kind=kind, **_catalog_options)
+                            if tools.check_if_requires_renormalization(**_catalog_options):
+                                for random in _cache_auw[kind]:
+                                    tools.renormalize_randoms_over_data(random, _cache_auw[kind.replace('randoms', 'data')], tracer=tracer)
+                        else:
+                            _cache_auw[kind] = prepare_catalog(raw_full_data[tracer], kind=kind, **_catalog_options)
+                            
                     toret[kind] = _cache_auw[kind]
                 return toret
 
@@ -363,7 +373,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         spectrum = func[0](*[functools.partial(get_data, tracer) for tracer in tracers], cache=cache, **spectrum_options)
                         # Ensure spectrum is a dictionary (may contain raw, cut, auw variants)
                         if not isinstance(spectrum, dict): spectrum = {'raw': spectrum}
-    
+
                         # Write all spectrum variants to disk
                         for key, kw in _expand_cut_auw_options(stat, spectrum_options).items():
                             fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
@@ -551,85 +561,108 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 jax.experimental.multihost_utils.sync_global_devices("window_fm_IO")  # wait for the writer
 
         # Covariance matrix computation
-        funcs = {'covariance_mesh2_spectrum': compute_covariance_mesh2_spectrum}
-        for stat, func in funcs.items():
-            if stat in stats:
-                covariance_options = dict(options[stat])
-                theory_stat = stat.replace('covariance_', 'theory_')
-                theory_fn = covariance_options.pop('theory', None)
-
-                def get_data(tracer):
-                    # Prepare catalogs for covariance computation
-                    czrandoms = Catalog.concatenate(zrandoms[tracer])
-                    return {'data': zdata[tracer], 'randoms': czrandoms}
-
-                def _check_fn(fn, tracers, name=''):
-                    # Convert single filename to tracer pair dictionary
-                    if len(tracers) == 1:
-                        fn = {(tracer, tracer): fn for tracer in tracers}
+        for recon in ['', 'recon_']:
+            funcs = {f'covariance_{recon}mesh2_spectrum': compute_covariance_mesh2_spectrum, f'covariance_{recon}particle2_correlation': compute_covariance_particle2_correlation}
+            for stat, func in funcs.items():
+                if stat in stats:
+                    covariance_options = dict(options[stat])
+                    theory_stat = stat.replace('covariance_', 'theory_')
+                    theory_fn = covariance_options.pop('theory', None)
+    
+                    def get_data(tracer):
+                        # Prepare catalogs for covariance computation
+                        czrandoms = Catalog.concatenate(zrandoms[tracer])
+                        return {'data': zdata[tracer], 'randoms': czrandoms}
+    
+                    def _check_fn(fn, tracers, name=''):
+                        # Convert single filename to tracer pair dictionary
+                        if len(tracers) == 1:
+                            fn = {(tracer, tracer): fn for tracer in tracers}
+                        else:
+                            raise ValueError(f'provide a dictionary of (tracer1, tracer2): {name} for tracer1, tracer2 in {tracers}')
+                        return fn
+    
+                    def _read_tracer(fns, tracers2):
+                        # Read file for tracer pair (handle ordering)
+                        if tracers2 not in fns: tracers2 = tracers2[::-1]
+                        return types.read(fns[tracers2])
+    
+                    if theory_fn is None:
+                        # Auto-compute fiducial theory from spectrum and window
+                        products_fn = {}
+                        # Collect power spectrum and window
+                        for name in ['spectrum', 'window']:
+                            kind_stat = {'spectrum': f'{recon}mesh2_spectrum', 'window': 'window_mesh2_spectrum'}[name]
+                            fn = covariance_options.pop(name, None)
+                            if fn is None:
+                                # Auto-detect measurement files for each tracer pair
+                                kw = options[kind_stat] | dict(auw=False, cut=False)
+                                fn = {(tracer, tracer): get_stats_fn(kind=kind_stat, catalog=fn_catalog_options[tracer], **kw) for tracer in tracers}
+                                # Add cross-correlation file if multiple tracers
+                                if len(tracers) > 1:
+                                    fn[tuple(tracers)] = get_stats_fn(kind=kind_stat, catalog=fn_catalog_options, **kw)
+                            elif not isinstance(fn, dict):
+                                _check_fn(fn, tracers, name=name)
+                            products_fn[name] = fn
+    
+                        # Compute theory for each tracer pair
+                        theory_fn = {}
+                        for tracers2 in itertools.combinations_with_replacement(tracers, r=2):
+                            spectrum = _read_tracer(products_fn['spectrum'], tracers2)
+                            window = _read_tracer(products_fn['window'], tracers2)
+                            # Fit theory to measurement (preliminary fit for covariance)
+                            theory = run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window, theory='recon' if recon else 'rept')
+                            theory_fn[tracers2] = get_stats_fn(kind=theory_stat, catalog=(fn_catalog_options[tracers2[0]] if tracers2[1] == tracers2[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers2}))
+                            # Write theory to disk
+                            tools.write_stats(theory_fn[tracers2], theory)
                     else:
-                        raise ValueError(f'provide a dictionary of (tracer1, tracer2): {name} for tracer1, tracer2 in {tracers}')
-                    return fn
-
-                def _read_tracer(fns, tracers2):
-                    # Read file for tracer pair (handle ordering)
-                    if tracers2 not in fns: tracers2 = tracers2[::-1]
-                    return types.read(fns[tracers2])
-
-                if theory_fn is None:
-                    # Auto-compute fiducial theory from spectrum and window
-                    products_fn = {}
-                    # Collect power spectrum and window
-                    for name in ['spectrum', 'window']:
-                        kind_stat = stat.replace('covariance_', '') if name == 'spectrum' else stat.replace('covariance_', f'{name}_')
-                        fn = covariance_options.pop(name, None)
-                        if fn is None:
-                            # Auto-detect measurement files for each tracer pair
-                            kw = options[kind_stat] | dict(auw=False, cut=False)
-                            fn = {(tracer, tracer): get_stats_fn(kind=kind_stat, catalog=fn_catalog_options[tracer], **kw) for tracer in tracers}
+                        _check_fn(theory_fn, tracers, name='theory')
+    
+                    # Synchronize before reading theory
+                    jax.experimental.multihost_utils.sync_global_devices('theory')  # such that theory ready for window
+    
+                    # Load theory for all tracer pairs
+                    fields = {tracer: tools.get_simple_tracer(tracer) for tracer in tracers}
+                    theory = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(theory_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
+                    theory = types.ObservableTree(list(theory.values()), fields=list(theory.keys()))
+    
+                    if 'particle2' in stat:
+                        RR_fn = covariance_options.pop('RR', None)
+                        kind_stat = stat.replace('covariance_', '')
+                        if RR_fn is None:
+                            kw = dict(auw=False, cut=False) | options[kind_stat]
+                            RR_fn = {(tracer, tracer): get_stats_fn(kind=kind_stat, catalog=fn_catalog_options[tracer], **kw) for tracer in tracers}
                             # Add cross-correlation file if multiple tracers
                             if len(tracers) > 1:
-                                fn[tuple(tracers)] = get_stats_fn(kind=kind_stat, catalog=fn_catalog_options, **kw)
-                        elif not isinstance(fn, dict):
-                            _check_fn(fn, tracers, name=name)
-                        products_fn[name] = fn
+                                RR_fn[tuple(tracers)] = get_stats_fn(kind=kind_stat, catalog=fn_catalog_options, **kw)
+                        elif not isinstance(RR_fn, dict):
+                            _check_fn(RR_fn, tracers, name=name)
+                        # Load RR for all tracer pairs
+                        RR = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(RR_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
+                        RR = {fields: RR[fields].get('RR') if 'count_names' in RR[fields].labels(return_type='keys') else RR[fields] for fields in RR}
+                        covariance_options['RR'] = types.ObservableTree(list(RR.values()), fields=list(RR.keys()))
+    
+                    # Compute covariance matrix
+                    covariance = func(*[functools.partial(get_data, tracer) for tracer in tracers], theory=theory, fields=list(fields.values()), **covariance_options)
 
-                    # Compute theory for each tracer pair
-                    theory_fn = {}
-                    for tracers2 in itertools.combinations_with_replacement(tracers, r=2):
-                        spectrum = _read_tracer(products_fn['spectrum'], tracers2)
-                        window = _read_tracer(products_fn['window'], tracers2)
-                        # Fit theory to measurement (preliminary fit for covariance)
-                        theory = run_preliminary_fit_mesh2_spectrum(data=spectrum, window=window)
-                        theory_fn[tracers2] = get_stats_fn(kind=theory_stat, catalog=(fn_catalog_options[tracers2[0]] if tracers2[1] == tracers2[0] else {tracer: fn_catalog_options[tracer] for tracer in tracers2}))
-                        # Write theory to disk
-                        tools.write_stats(theory_fn[tracers2], theory)
-                else:
-                    _check_fn(theory_fn, tracers, name='theory')
+                    def add_label(covariance):
+                        # Add observables label, and fields => tracers
+                        simple_stat = tools.get_simple_stats(stat.replace('covariance_', ''))
+                        # Create observable tree with proper labels
+                        observable = types.ObservableTree(list(covariance.observable), observables=[simple_stat] * len(fields), tracers=covariance.observable.fields)
+                        return covariance.clone(observable=observable)
 
-                # Synchronize before reading theory
-                jax.experimental.multihost_utils.sync_global_devices('theory')  # such that theory ready for window
-
-                # Load theory for all tracer pairs
-                fields = {tracer: tools.get_simple_tracer(tracer) for tracer in tracers}
-                theory = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(theory_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
-                theory = types.ObservableTree(list(theory.values()), fields=list(theory.keys()))
-
-                # Compute covariance matrix
-                covariance = func(*[functools.partial(get_data, tracer) for tracer in tracers], theory=theory, fields=list(fields.values()), **covariance_options)
-
-                # Write covariance matrix to disk
-                for key, kw in _expand_cut_auw_options(stat, covariance_options).items():
-                    fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
-                    if key in covariance:
-                        tools.write_stats(fn, covariance[key])
-
-                # Write intermediate correlation functions to disk
-                for key in covariance:
-                    if 'correlation' in key:  # window functions
-                        fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)))
-                        tools.write_stats(fn, covariance[key])
-
+                    # Write covariance matrix to disk
+                    for key, kw in _expand_cut_auw_options(stat, covariance_options).items():
+                        fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                        if key in covariance:
+                            tools.write_stats(fn, add_label(covariance[key]))
+    
+                    # Write intermediate correlation functions to disk
+                    for key in covariance:
+                        if 'correlation' in key:  # window functions
+                            fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)))
+                            tools.write_stats(fn, covariance[key])
 
 
 def list_stats(stats, get_stats_fn=tools.get_stats_fn, **kwargs):
@@ -907,7 +940,7 @@ def main(**kwargs):
     parser.add_argument('--tracer', help='tracer(s) to be selected - e.g. LRG ELG for cross-correlation', nargs='*', type=str, default='LRG')
     parser.add_argument('--zrange', help='redshift bins; 0.4 0.6 0.8 1.1 to run (0.4, 0.6), (0.8, 1.1)', nargs='*', type=float, default=None)
     parser.add_argument('--imock', help='mock number', type=int, nargs='*', default=[None])
-    parser.add_argument('--region', help='regions', type=str, nargs='*', choices=['N', 'S', 'NGC', 'SGC', 'NGCnoN', 'SGCnoDES'], default=['NGC', 'SGC'])
+    parser.add_argument('--region', help='regions', type=str, nargs='*', choices=['N', 'S', 'NGC', 'SGC', 'NGCnoN', 'SGCnoDES', 'DES', 'ACT_DR6', 'PLANCK_PR4', 'GAL040', 'GAL060'], default=['NGC', 'SGC'])
     parser.add_argument('--analysis', help='type of analysis', type=str, choices=['full_shape', 'png_local', 'full_shape_protected'], default='full_shape')
     parser.add_argument('--weight',  help='type of weights to use for tracer; "default" just uses WEIGHT column', type=str, default='default-FKP')
     parser.add_argument('--thetacut',  help='Apply theta-cut', action='store_true', default=None)
@@ -987,7 +1020,7 @@ def main(**kwargs):
     if args.combine is not None and jax.process_index() == 0:
         stats = []
         if args.combine: stats = args.combine
-        elif args.stats: stats = args.stats
+        elif args.stats: stats = [stat for stat in args.stats if stat != 'close_pair_correction'] # avoid passing 'close_pair_correction' to `postprocess_stats_from_options`
         else: stats = ['mesh2_spectrum', 'mesh3_spectrum']  # best guess, if not argument was provided
         postprocess_stats_from_options(['combine_regions'], get_stats_fn=get_stats_fn, combine_regions=dict(stats=stats), **options, imocks=args.imock)
 

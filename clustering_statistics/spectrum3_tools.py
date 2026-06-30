@@ -72,8 +72,10 @@ def _compute_mesh3_spectrum_close_pair_correction(all_particles, edges=None, ell
     from lsstypes.types import convert_ells
 
     if edges is None:
-        #edges = np.linspace(1e-3, 8000., 4001)
         edges = np.linspace(1e-3, 8000., 3001)
+        #edges = np.linspace(1e-3, 8000., 4001)
+        #edges = np.linspace(1e-3, 400., 401)
+        #edges = np.geomspace(1e-3, 8000., 3001)
     if ells is None:
         ells = [(0, 0, 0), (2, 0, 2)]
     ells = convert_ells(ells, 'sugiyama', 'slepian')
@@ -82,6 +84,7 @@ def _compute_mesh3_spectrum_close_pair_correction(all_particles, edges=None, ell
     correction = _compute_particle3_correlation_close_pair_correction(all_particles, battrs, auw=auw, cut=cut, veto23=True, normalize_randoms=True)
     for count_name in correction:
         correction[count_name] = correction[count_name].to_basis('sugiyama')
+    #types.ObservableTree(list(correction.values()), labels=list(correction.keys())).write('tmp.h5')
     return correction
 
 
@@ -642,59 +645,58 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
             # Get binning edges for each scale
             list_edges = _get_window_edges(mattrs, scales=list_scales)
 
-            # Compute window using multigrid approach if first batch
-            if ells and not bool(computed_batches):
-                # Painting parameters
-                kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
-                # Loop over scale factors (coarse to fine)
-                for scale, edges in zip(list_scales, list_edges):
-                    # Create coarser mesh (larger boxsize)
-                    mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
-                    if jax.process_index() == 0:
-                        logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
-                    # Create binning for coarse mesh
-                    sbin = BinMesh3CorrelationPoles(mattrs2, edges=edges, **kw, buffer_size=buffer_size)
-
-                    meshes = []
-                    # Paint random catalogs on coarse mesh
-                    for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
-                                                                   seed=seed, fields=fields)):
-                        # Adapt random catalog to coarse mesh and exchange across processes
-                        randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
-                        # Normalize by data/random weight ratio
-                        alpha = wsum_data[min(iran, len(wsum_data) - 1)] / randoms.weights.sum()
-                        # Paint random on mesh scaled by alpha
-                        meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
-
-                    # Compute 3-point correlation on coarse mesh
-                    t0 = time.time()
-                    correlation = jitted_compute_mesh3_correlation(meshes, bin=sbin, los=los)
-                    # Normalize correlation by average normalization factor
-                    correlation = correlation.clone(norm=[np.mean(norm)] * len(sbin.ells))
-                    jax.block_until_ready(correlation)
-                    if jax.process_index() == 0:
-                        logger.info(f"Computed windows {kw['ells']}, scale {scale}, in {time.time() - t0:.2f} s.")
-                    # Interpolate correlation to fine s-grid
-                    correlation = interpolate_window_function(correlation.unravel(), coords=coords, order=3)
-                    correlations.append(correlation)
-
-                # Extract coordinate grids from correlations
-                coords = list(next(iter(correlations[0])).coords().values())
-                # Create masks for smooth transition between scales (using -3 offset for cubic spline)
-                masks = [(coords[0] < edges[-3])[:, None] * (coords[1] < edges[-3])[None, :] for edges in list_edges[:-1]]
-                # Add final mask (all points)
-                masks.append((coords[0] < np.inf)[:, None] * (coords[1] < np.inf)[None, :])
-                weights = []
-                for mask in masks:
-                    if len(weights):
-                        # Exclude already-weighted regions
-                        weights.append(mask & (~weights[-1]))
-                    else:
-                        weights.append(mask)
-                # Regularize weights to avoid zero division
-                weights = [np.maximum(mask, 1e-6) for mask in weights]
-                # Combine correlations from different scales using weights
-                correlation = correlations[0].sum(correlations, weights=weights)
+            # Compute window using multigrid approach
+            # Painting parameters
+            kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+            # Loop over scale factors (coarse to fine)
+            for scale, edges in zip(list_scales, list_edges):
+                # Create coarser mesh (larger boxsize)
+                mattrs2 = mattrs.clone(boxsize=scale * mattrs.boxsize)
+                if jax.process_index() == 0:
+                    logger.info(f'Processing scale x{scale:.0f}, using {mattrs2}')
+                # Create binning for coarse mesh
+                sbin = BinMesh3CorrelationPoles(mattrs2, edges=edges, **kw, buffer_size=buffer_size)
+    
+                meshes = []
+                # Paint random catalogs on coarse mesh
+                for iran, randoms in enumerate(split_particles(all_randoms + [None] * (3 - len(all_randoms)),
+                                                               seed=seed, fields=fields)):
+                    # Adapt random catalog to coarse mesh and exchange across processes
+                    randoms = randoms.clone(attrs=mattrs2).exchange(backend='mpi')
+                    # Normalize by data/random weight ratio
+                    alpha = wsum_data[min(iran, len(wsum_data) - 1)] / randoms.weights.sum()
+                    # Paint random on mesh scaled by alpha
+                    meshes.append(alpha * randoms.paint(**kw_paint, out='real'))
+    
+                # Compute 3-point correlation on coarse mesh
+                t0 = time.time()
+                correlation = jitted_compute_mesh3_correlation(meshes, bin=sbin, los=los)
+                # Normalize correlation by average normalization factor
+                correlation = correlation.clone(norm=[np.mean(norm)] * len(sbin.ells))
+                jax.block_until_ready(correlation)
+                if jax.process_index() == 0:
+                    logger.info(f"Computed windows {kw['ells']}, scale {scale}, in {time.time() - t0:.2f} s.")
+                # Interpolate correlation to fine s-grid
+                correlation = interpolate_window_function(correlation.unravel(), coords=coords, order=3)
+                correlations.append(correlation)
+    
+            # Extract coordinate grids from correlations
+            coords = list(next(iter(correlations[0])).coords().values())
+            # Create masks for smooth transition between scales (using -3 offset for cubic spline)
+            masks = [(coords[0] < edges[-3])[:, None] * (coords[1] < edges[-3])[None, :] for edges in list_edges[:-1]]
+            # Add final mask (all points)
+            masks.append((coords[0] < np.inf)[:, None] * (coords[1] < np.inf)[None, :])
+            weights = []
+            for mask in masks:
+                if len(weights):
+                    # Exclude already-weighted regions
+                    weights.append(mask & (~weights[-1]))
+                else:
+                    weights.append(mask)
+            # Regularize weights to avoid zero division
+            weights = [np.maximum(mask, 1e-6) for mask in weights]
+            # Combine correlations from different scales using weights
+            correlation = correlations[0].sum(correlations, weights=weights)
 
         # Wait for window computation to complete
         jax.block_until_ready(correlation)

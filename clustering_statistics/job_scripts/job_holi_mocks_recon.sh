@@ -3,7 +3,7 @@
 #SBATCH -C gpu&hbm80g
 #SBATCH -N 1
 #SBATCH --gpus 4
-#SBATCH -t 2:00:00
+#SBATCH -t 1:10:00
 #SBATCH -q regular
 #SBATCH -J holi_mocks_recon
 #SBATCH -L SCRATCH
