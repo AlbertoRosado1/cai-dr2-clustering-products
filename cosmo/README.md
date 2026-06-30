@@ -115,12 +115,12 @@ info = get_cobaya_info(model='base', likelihoods='desi-bao-all', sampler='cobaya
 write_cobaya_yaml(info, 'configs/base_desi-bao-all.yaml')
 ```
 
-## Desipipe usage
+## Cobaya run launcher
 
-The desipipe entry point is:
+The Cobaya launcher entry point is:
 
 ```bash
-python cosmo/job_scripts/desipipe_cobaya.py \
+python cosmo/job_scripts/run_cobaya.py \
     --todo evaluate \
     --models base \
     --likelihoods bao-sn-cmb-compressed-theta
@@ -129,7 +129,7 @@ python cosmo/job_scripts/desipipe_cobaya.py \
 Named likelihood-combination presets are available. List them with:
 
 ```bash
-python cosmo/job_scripts/desipipe_cobaya.py --list-likelihood-combinations
+python cosmo/job_scripts/run_cobaya.py --list-likelihood-combinations
 ```
 
 Common presets include:
@@ -155,7 +155,7 @@ Explicit comma-separated likelihood combinations still work. Pass multiple
 `--likelihoods` values to create multiple configurations:
 
 ```bash
-python cosmo/job_scripts/desipipe_cobaya.py \
+python cosmo/job_scripts/run_cobaya.py \
     --todo evaluate \
     --models base \
     --likelihoods bao \
@@ -171,10 +171,38 @@ desipipe spawn -q desi_clustering_cobaya --spawn
 desipipe queues -q desi_clustering_cobaya
 ```
 
-For quick interactive debugging without creating a queue:
+### Run modes
+
+The job script supports three runtime modes. All modes use the same likelihood
+preset expansion and Cobaya configuration builder.
+
+#### 1. Desipipe batch mode
+
+By default, the script creates desipipe tasks and stores them in the requested
+queue. This is the preferred mode for production matrices.
 
 ```bash
-python cosmo/job_scripts/desipipe_cobaya.py \
+python cosmo/job_scripts/run_cobaya.py \
+    --todo sample \
+    --models base \
+    --likelihoods bao bao-sn-desdovekie bao-bbn \
+    --run run1 \
+    --output_dir $SCRATCH/desi-clustering-cosmo-dev \
+    --queue-name desi_clustering_cobaya
+
+desipipe tasks -q desi_clustering_cobaya
+desipipe spawn -q desi_clustering_cobaya --spawn
+desipipe queues -q desi_clustering_cobaya
+```
+
+#### 2. Direct mode in the current environment
+
+Use `--interactive` to run immediately in the current shell/allocation without
+creating a desipipe queue. This is useful for `--test`, debugging, or when you
+already have a compute allocation.
+
+```bash
+python cosmo/job_scripts/run_cobaya.py \
     --interactive \
     --todo evaluate \
     --models base \
@@ -182,10 +210,35 @@ python cosmo/job_scripts/desipipe_cobaya.py \
     --test
 ```
 
+#### 3. Direct mode with a new interactive node
+
+Use `--interactive-node` from a login node to request a NERSC interactive node
+and then re-run this same script in `--interactive` mode inside that allocation.
+This avoids writing a separate wrapper script for quick direct runs.
+
+```bash
+python cosmo/job_scripts/run_cobaya.py \
+    --interactive-node \
+    --todo sample \
+    --models base \
+    --likelihoods bao-bbn bao-cmb-compressed-theta \
+    --run interactive-test \
+    --output_dir $SCRATCH/desi-clustering-cosmo-dev \
+    --time 04:00:00
+```
+
+The default interactive-node Slurm options are `-A desi -C cpu -q interactive
+-N 1 -n 4 -c 32`. They can be changed with `--interactive-account`,
+`--interactive-qos`, `--interactive-constraint`, `--interactive-nodes`,
+`--mpiprocs-per-worker`, and `--cpus-per-task`.
+
+To resume an interrupted direct run, add `--resume` and keep the same `--run`
+label and `--output_dir`.
+
 To export Cobaya YAML files for review without launching jobs:
 
 ```bash
-python cosmo/job_scripts/desipipe_cobaya.py \
+python cosmo/job_scripts/run_cobaya.py \
     --todo export \
     --models base base_w base_w_wa \
     --likelihoods bao bao-bbn bao-cmb-compressed-theta bao-cmb-spa \
@@ -201,6 +254,14 @@ configs/cobaya/base/bao-cmb-compressed-theta.yaml
 configs/cobaya/base/bao-cmb-spa.yaml
 ```
 
+
+## Validation notebooks
+
+`cosmo/notebooks/simple_chain_comparison.ipynb` validates the simple/background
+Cobaya chains from `desi-clustering-cosmo` against archived DESI KP/Y3 reference
+chains. It includes BAO-only, SN-only, and BAO+DESY5-Dovekie diagnostics to
+separate the standard v1p2 BAO product from Cristhian's `bao.desi_dr2_updated`
+BAO product.
 
 ## Validation status
 

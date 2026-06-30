@@ -30,12 +30,12 @@ def get_likelihood_label(likelihoods=None, dataset=None):
 
 
 def get_cobaya_output(model='base', theory='camb', likelihoods=None, dataset='desi-bao-all', sampler='cobaya', output_dir=None,
-                      run='run1', suffix=True, ext=None):
+                      run='run1', suffix=True, ext=None, output_label=None):
     """Return the Cobaya output prefix for a configuration."""
     if output_dir is None:
         output_dir = DEFAULT_COSMO_OUTPUT_DIR
     selected_dataset = None if likelihoods is not None and dataset == 'desi-bao-all' else dataset
-    label = get_likelihood_label(likelihoods=likelihoods, dataset=selected_dataset)
+    label = output_label or get_likelihood_label(likelihoods=likelihoods, dataset=selected_dataset)
     output = Path(output_dir) / sampler / theory / run / model / label
     output = output / ('bestfit' if sampler not in {'cobaya', 'mcmc'} else 'chain')
     output = str(output)
@@ -80,7 +80,7 @@ def get_cobaya_sampler(sampler='cobaya', likelihoods=None, dataset='desi-bao-all
 
 def get_cobaya_info(model='base', theory='camb', likelihoods=None, dataset='desi-bao-all', sampler='cobaya', output_dir=None,
                     run='run1', seed=None, test=False, output=True, save_fn=None, python_path=None,
-                    likelihood_package=None, likelihood_path=None, **sampler_options):
+                    likelihood_package=None, likelihood_path=None, output_label=None, **sampler_options):
     """Return a Cobaya info dictionary for DESI cosmology inference."""
     selected_likelihoods = normalize_likelihood_combination(likelihoods)
     selected_dataset = None if selected_likelihoods is not None and dataset == 'desi-bao-all' else dataset
@@ -107,7 +107,8 @@ def get_cobaya_info(model='base', theory='camb', likelihoods=None, dataset='desi
         info['prior'] = priors
     if output and 'evaluate' not in sampler_block:
         info['output'] = get_cobaya_output(model=model, theory=theory, likelihoods=selected_likelihoods, dataset=selected_dataset, sampler=sampler,
-                                           output_dir=output_dir, run=run, suffix='cobaya' not in sampler)
+                                           output_dir=output_dir, run=run, suffix='cobaya' not in sampler,
+                                           output_label=output_label)
     if test or 'evaluate' in sampler_block:
         info['stop_at_error'] = True
     if test:
