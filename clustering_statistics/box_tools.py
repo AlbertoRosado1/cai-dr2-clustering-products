@@ -6,7 +6,7 @@ import functools
 import numpy as np
 from mpi4py import MPI
 
-from tools import (default_mpicomm, Catalog, join_tracers, _unzip_catalog_options, _merge_catalog_options, _zip_catalog_options,
+from .tools import (default_mpicomm, Catalog, join_tracers, _unzip_catalog_options, _merge_catalog_options, _zip_catalog_options,
 _read_catalog, get_simple_tracer, _merge_options, _make_tuple, desi_dir, write_stats, float2str, setup_logging)
 
 logger = logging.getLogger('box_tools')
@@ -247,7 +247,6 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
         zsnap = f'{zsnap:.3f}'.replace('.', 'p')
         return cat_dir / f'abacus_HF_{stracer}_{zsnap}_DR2_v1.0_AbacusSummit_base_c000_ph{imock:03d}_clustering.dat.fits'
     if version == 'abacus-hf-v2':
-        print(zsnap)
         stracer = {'ELG_LOP': 'ELG', 'QSO': 'QSO','QSO_lorentzian': 'QSO'}.get(tracer, tracer)
         zrange = get_zrange_from_snap(tracer, zsnap=zsnap, version=version)
         zsnap = f'{zsnap:.3f}'.replace('.', 'p')
