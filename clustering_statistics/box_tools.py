@@ -144,6 +144,8 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
             hod = 'base_B'
         elif 'ELG' in tracer:
             hod = 'base_conf_nfwexp'
+        elif 'lorentzian' in tracer:
+            hod = 'base_lorentzian_dv_cat_fixed'
         propose_fiducial['catalog'].update({'hod': hod})
     propose_fiducial['zsnaps'] = list(get_zrange_from_snap(tracer, zsnap=None, version=version))
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
@@ -251,7 +253,7 @@ def get_box_catalog_fn(version: str='abacus-hf-v2', cat_dir: str=None, kind='dat
         zsnap = f'{zsnap:.3f}'.replace('.', 'p')
         if 'lorentzian' in tracer:
             cat_dir = desi_dir / f'mocks/cai/abacus_HF/DR2_v2.0/AbacusSummit_base_c000_ph{imock:03d}/Boxes/{tracer}'
-            return cat_dir / f'abacus_HF_{stracer}_{zsnap}_{stracer}_fit_dv_AbacusSummit_base_c000_ph{imock:03d}_base_lorentzian_dv_cat_fixed_z{zrange[0]}_{zrange[-1]}_clustering.dat.h5'
+            return cat_dir / f'abacus_HF_{stracer}_{zsnap}_{stracer}_fit_dv_AbacusSummit_base_c000_ph{imock:03d}_{hod}_z{zrange[0]}_{zrange[-1]}_clustering.dat.h5'
         else:
             cat_dir = desi_dir / f'mocks/cai/abacus_HF/DR2_v2.0/AbacusSummit_base_c000_ph{imock:03d}/Boxes/{stracer}'
             return cat_dir / f'abacus_HF_{stracer}_{zsnap}_DR2_v2.0_AbacusSummit_base_c000_ph{imock:03d}_{hod}_clustering.dat.h5'
