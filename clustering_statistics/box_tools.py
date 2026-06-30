@@ -140,12 +140,12 @@ def propose_box_fiducial(kind, tracer, version='abacus-hf-v2'):
         propose_meshsizes = {'meshsize': meshsize}
     if 'abacus-hf' in version:
         hod = 'base'
-        if 'BGS' in tracer or 'LRG' in tracer:
+        if 'lorentzian' in tracer:
+            hod = 'base_lorentzian_dv_cat_fixed'
+        elif 'BGS' in tracer or 'LRG' in tracer:
             hod = 'base_B'
         elif 'ELG' in tracer:
             hod = 'base_conf_nfwexp'
-        elif 'lorentzian' in tracer:
-            hod = 'base_lorentzian_dv_cat_fixed'
         propose_fiducial['catalog'].update({'hod': hod})
     propose_fiducial['zsnaps'] = list(get_zrange_from_snap(tracer, zsnap=None, version=version))
     for stat in ['mesh2_spectrum', 'mesh3_spectrum']:
