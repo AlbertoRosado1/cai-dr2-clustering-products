@@ -9,7 +9,7 @@ from pathlib import Path
 
 from desipipe import Environment, Queue, TaskManager, setup_logging
 
-from cosmo.bindings.combinations import LIKELIHOOD_COMBINATIONS, normalize_likelihood_combination
+from cosmo.cobaya.mapping_likelihoods import LIKELIHOOD_COMBINATIONS, normalize_likelihood_combination
 from cosmo.cobaya import get_cobaya_info, get_likelihood_label, profile_cobaya, sample_cobaya, write_cobaya_yaml, yield_configs
 
 

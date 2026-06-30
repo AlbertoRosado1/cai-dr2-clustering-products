@@ -13,4 +13,4 @@ classifiers = ["Programming Language :: Python :: 3"]
 clustering-stats = "clustering_statistics.compute_stats:main"
 
 [tool.setuptools]
-packages = ["clustering_statistics", "full_shape", "bao", "cosmo", "cosmo.bindings", "cosmo.cobaya_likelihoods", "cosmo.cobaya_likelihoods.bao", "cosmo.cobaya_likelihoods.bbn", "cosmo.cobaya_likelihoods.sn", "cosmo.cobaya_likelihoods.cmb", "cosmo.cobaya_likelihoods.cmb.momento", "cosmo.job_scripts"]
+packages = ["clustering_statistics", "full_shape", "bao", "cosmo", "cosmo.cobaya", "cosmo.cobaya.external_likelihoods", "cosmo.cobaya.external_likelihoods.bao", "cosmo.cobaya.external_likelihoods.bbn", "cosmo.cobaya.external_likelihoods.sn", "cosmo.cobaya.external_likelihoods.cmb", "cosmo.cobaya.external_likelihoods.cmb.momento", "cosmo.job_scripts"]

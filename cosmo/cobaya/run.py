@@ -2,17 +2,17 @@
 
 This module is intentionally small and dictionary-driven. It provides a
 ``desi-clustering``-style entry point for generating and running Cobaya
-configurations from canonical likelihood names registered in ``cosmo.bindings``.
+configurations from canonical likelihood names registered in ``cosmo.cobaya.mapping_likelihoods``.
 """
 
 import os
 from pathlib import Path
 
-from cosmo.bindings.bao import make_list
-from cosmo.bindings.combinations import normalize_likelihood_combination
-from cosmo.bindings.cobaya import get_cobaya_likelihoods, get_cobaya_priors
-from cosmo.bindings.registry import get_parameterization as get_likelihood_parameterization, normalize_likelihoods
-from cosmo.cobaya_params import SUPPORTED_MODELS, SUPPORTED_THEORIES, get_cobaya_params
+from cosmo.cobaya.mapping_likelihoods import make_list
+from cosmo.cobaya.mapping_likelihoods import normalize_likelihood_combination
+from cosmo.cobaya.mapping_likelihoods import get_cobaya_likelihoods, get_cobaya_priors
+from cosmo.cobaya.mapping_likelihoods import get_parameterization as get_likelihood_parameterization, normalize_likelihoods
+from cosmo.cobaya.parameters import SUPPORTED_MODELS, SUPPORTED_THEORIES, get_cobaya_params
 
 
 DEFAULT_COSMO_OUTPUT_DIR = Path(os.getenv('SCRATCH', '.')) / 'desi-clustering' / 'cosmo'

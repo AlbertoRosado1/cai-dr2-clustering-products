@@ -33,9 +33,9 @@ cosmology-runtime requirement.
 ## Current scope
 
 BAO likelihoods use native lightweight Cobaya wrapper classes in
-`cosmo.cobaya_likelihoods.bao.desi_dr2`. Shared BAO dataset metadata is kept in
-`cosmo.bindings.bao`, registered in `cosmo.bindings.registry`, and translated to
-Cobaya likelihood dictionaries by `cosmo.bindings.cobaya`. The registry uses a
+`cosmo.cobaya.external_likelihoods.bao.desi_dr2`. Shared BAO dataset metadata is kept in
+`cosmo.cobaya.mapping_likelihoods.bao`, registered in `cosmo.cobaya.mapping_likelihoods.registry`, and translated to
+Cobaya likelihood dictionaries by `cosmo.cobaya.mapping_likelihoods.cobaya`. The registry uses a
 general `likelihoods` interface so likelihood families can be combined without
 changing the runtime helpers.
 
@@ -55,7 +55,7 @@ export DESI_CLUSTERING_COSMO_BAO_DATA_PATH=/path/to/cobaya_data
 Registered likelihoods include DESI BAO DR2, SN, BBN, compressed CMB, full CMB,
 and CMB-lensing entries. BBN, SN zmin variants, compressed-CMB priors, and the
 Momento/SROLL wrapper are native `desi-clustering` likelihoods under
-`cosmo.cobaya_likelihoods`. The Cobaya helper supports background-only
+`cosmo.cobaya.external_likelihoods`. The Cobaya helper supports background-only
 combinations, such as BAO+SN+BBN+compressed-CMB priors, and full-CMB Cobaya
 configs for standard external Planck/ACT/lensing likelihoods. Full-CMB
 initialization and production runs depend on the external Cobaya likelihood
@@ -257,7 +257,7 @@ configs/cobaya/base/bao-cmb-spa.yaml
 
 ## Validation notebooks
 
-`cosmo/notebooks/simple_chain_comparison.ipynb` validates the simple/background
+`cosmo/nb/simple_chain_comparison.ipynb` validates the simple/background
 Cobaya chains from `desi-clustering-cosmo` against archived DESI KP/Y3 reference
 chains. It includes BAO-only, SN-only, and BAO+DESY5-Dovekie diagnostics to
 separate the standard v1p2 BAO product from Cristhian's `bao.desi_dr2_updated`

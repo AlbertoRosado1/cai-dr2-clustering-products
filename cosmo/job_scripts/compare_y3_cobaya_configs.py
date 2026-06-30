@@ -66,17 +66,17 @@ def _canonical_likelihood(name):
     # Canonicalize native desi-clustering classes against reference classes.
     replacements = {
         'desi_y3_cosmo_bindings.cobaya_likelihoods.bao_likelihoods_v1p2.desi_bao_all': 'DESI_BAO_ALL',
-        'cosmo.cobaya_likelihoods.bao.desi_dr2.desi_dr2_bao_all': 'DESI_BAO_ALL',
+        'cosmo.cobaya.external_likelihoods.bao.desi_dr2.desi_dr2_bao_all': 'DESI_BAO_ALL',
         'desi_y3_cosmo_bindings.cobaya_likelihoods.bbn_likelihoods.schoneberg2024': 'BBN_SCHONEBERG2024',
-        'cosmo.cobaya_likelihoods.bbn.schoneberg2024': 'BBN_SCHONEBERG2024',
+        'cosmo.cobaya.external_likelihoods.bbn.schoneberg2024': 'BBN_SCHONEBERG2024',
         'desi_y3_cosmo_bindings.cobaya_likelihoods.bbn_likelihoods.schoneberg2024_fixed_nnu': 'BBN_SCHONEBERG2024_FIXED_NNU',
-        'cosmo.cobaya_likelihoods.bbn.schoneberg2024_fixed_nnu': 'BBN_SCHONEBERG2024_FIXED_NNU',
+        'cosmo.cobaya.external_likelihoods.bbn.schoneberg2024_fixed_nnu': 'BBN_SCHONEBERG2024_FIXED_NNU',
         'desi_y3_cosmo_bindings.cobaya_likelihoods.cmb_likelihoods.CMB_standard_compression_PR4': 'CMB_STANDARD_COMPRESSION_PR4',
-        'cosmo.cobaya_likelihoods.cmb.CMB_standard_compression_PR4': 'CMB_STANDARD_COMPRESSION_PR4',
+        'cosmo.cobaya.external_likelihoods.cmb.CMB_standard_compression_PR4': 'CMB_STANDARD_COMPRESSION_PR4',
         'desi_y3_cosmo_bindings.cobaya_likelihoods.cmb_likelihoods.CMB_shift_parameters_compression_PR3': 'CMB_SHIFT_PARAMETERS_COMPRESSION_PR3',
-        'cosmo.cobaya_likelihoods.cmb.CMB_shift_parameters_compression_PR3': 'CMB_SHIFT_PARAMETERS_COMPRESSION_PR3',
+        'cosmo.cobaya.external_likelihoods.cmb.CMB_shift_parameters_compression_PR3': 'CMB_SHIFT_PARAMETERS_COMPRESSION_PR3',
         'planck_NPIPE_highl_CamSpec.TTTEEE': 'PLANCK_NPIPE_CAMSPEC_TTTEEE',
-        'cosmo.cobaya_likelihoods.cmb.planck_npipe.TTTEEENoCache': 'PLANCK_NPIPE_CAMSPEC_TTTEEE',
+        'cosmo.cobaya.external_likelihoods.cmb.planck_npipe.TTTEEENoCache': 'PLANCK_NPIPE_CAMSPEC_TTTEEE',
     }
     return replacements.get(name, name)
 
