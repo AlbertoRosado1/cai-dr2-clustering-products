@@ -13,4 +13,4 @@ classifiers = ["Programming Language :: Python :: 3"]
 clustering-stats = "clustering_statistics.compute_stats:main"
 
 [tool.setuptools]
-packages = ["clustering_statistics", "full_shape"]
+packages = ["clustering_statistics", "full_shape", "bao"]

@@ -53,10 +53,13 @@ def run_fit(actions=('profile',), template='direct',
     import os
     from pathlib import Path
     import functools
-    from desilike.mpi import CurrentMPIComm
-    mpicomm = CurrentMPIComm.get()
+    from mpi4py import MPI
+    mpicomm = MPI.COMM_WORLD
+    if local_safe_threads:
+        _apply_local_safe_threads()
     os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(mpicomm.rank)
+    from desilike import distributed
+    distributed.initialize()
     import jax
     from jax import config
     config.update('jax_enable_x64', True)
