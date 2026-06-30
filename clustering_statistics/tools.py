@@ -534,6 +534,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
 
     propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'LGE': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
+    propose_fiducial['systematic_templates'] = {}
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
@@ -1036,7 +1037,7 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 # return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/raw/rands_intiles_DARK_{iran:d}_NO_imagingmask_withz.fits' for iran in range(8,18)]
                 # return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/imaging_mask_applied/rands_intiles_DARK_{iran:d}_withz.fits' for iran in range(8,18)]
                 return [desi_dir / f'mocks/cai/abacus_HF/DR2_v1.0/randoms/imaging_mask_applied/rands_intiles_DARK_{iran:d}_withz.fits' for iran in range(8,18)]
-                
+
         elif version == 'abacus-hf-dr2-v2-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -2945,129 +2946,6 @@ def add_photometric_template_values(
     for i, name in enumerate(template_names):
         catalog[name] = template_values[:, i]
     return catalog
-
-
-def interpolate_window_realizations(window_geometry: types.WindowMatrix, window_realizations: list[types.WindowMatrix],
-                                    method: str='spline', **kwargs) -> types.WindowMatrix:
-
-    """
-    Interpolate window function realizations onto a common theory grid using spline or Gaussian process regression.
-
-    This function takes multiple window matrix realizations (e.g., from different
-    forward-model batches) and combines them into a single smooth window matrix by interpolating
-    onto the theory grid of a reference window. This is useful for obtaining a robust
-    window estimate when individual realizations are noisy or computed at different k-points.
-
-    Parameters
-    ----------
-    window_geometry : types.WindowMatrix
-        Reference window matrix defining the output theory and observable grids. Typically computed
-        from the survey geometry (mask, selection, etc.) without systematics. The theory and
-        observable axes are used as the interpolation targets.
-    window_realizations : list[types.WindowMatrix] or types.WindowMatrix
-        List of window matrix realizations to interpolate and combine. Each realization should have
-        the same observable structure as ``window_geometry``.
-        Indicate theory bins for why the window has *not* been computed with 0 (else 1) in
-        ``[pole.get('nmodes') for pole in window.theory]``.
-        If a single WindowMatrix is provided, it is converted to a list of length 1.
-    method : str, optional
-        Interpolation method. Options are:
-        - 'spline': 2D spline (default). Uses :class:`scipy.interpolate.SmoothBivariateSpline`
-          with default kx=ky=3 (cubic). Supports additional kwargs 'kx', 'ky'
-          and other spline parameters (s, eps, etc.).
-        - 'gaussian_process': Gaussian process regression. Uses scikit-learn's
-          :class:`GaussianProcessRegressor` with a Matern kernel. Supports additional kwargs
-          for kernel configuration (length_scale, nu, etc.).
-    **kwargs : dict, optional
-        Additional keyword arguments passed to the interpolation method.
-
-    Returns
-    -------
-    window_interpolated : types.WindowMatrix
-        Interpolated window matrix with the same structure as ``window_geometry`` (same observable
-        and theory axes).
-
-    Examples
-    --------
-    Combine multiple forward-model window realizations into a single smooth window::
-
-        import lsstypes as types
-        # Load reference geometry window (from randoms)
-        window_geo = types.read('window_geometry.h5')
-        # Load forward-model windows (e.g., from 10 mock surveys)
-        windows_fm = [types.read(f'window_fm_batch{i}.h5') for i in range(10)]
-        # Interpolate onto geometry grid using cubic splines
-        window_smooth = tools.interpolate_window_realizations(
-            window_geo, windows_fm, method='spline', kx=3, ky=3
-        )
-        window_smooth.write('window_combined.h5')
-
-    Use Gaussian process for smoother results on sparse grids::
-
-        window_smooth = interpolate_window_realizations(
-            window_geo, windows_fm, method='gaussian_process',
-            length_scale=0.1, nu=1.5
-        )
-
-    """
-    if isinstance(window_realizations, types.WindowMatrix):
-        window_realizations = [window_realizations]
-
-    values, weights = [], []
-    for window_realization in window_realizations:
-        values.append(window_realization.value())
-        weights.append(np.ones(window_geometry.observable.size)[:, None] * np.concatenate([pole.values('nmodes') for pole in window_realization.theory.flatten()]))
-
-    mean = sum(value * weight for value, weight in zip(values, weights))
-    sweights = sum(weights)
-    mean = mean / np.where(sweights, sweights, 1.)
-    mean = np.where(sweights != 0, mean, 0.)
-    sweights2 = sum(weight**2 for weight in weights)
-    scale = sweights / np.where(sweights != 0, (sweights**2 - sweights2), 1.)
-    var = scale * sum(weight * (value - mean)**2 for value, weight in zip(values, weights))
-    ivar = 1. / np.where(sweights != 0, var, np.inf)
-    window_mean = window_geometry.clone(value=mean)
-    window_ivar = window_geometry.clone(value=ivar)
-
-    # Iterate on output and input multipoles
-    value = []
-    for olabel, opole in window_mean.observable.items(level=None):
-        row = []
-        for tlabel, tpole in window_mean.theory.items(level=None):
-            block_mean = window_mean.at.theory.get(**tlabel).at.observable.get(**olabel)
-            xt = block_mean.theory.coords(0)  # theory k
-            xo = block_mean.observable.coords(0)  # observable k
-            xt, xo = np.meshgrid(xt, xo, indexing='ij')
-            points = [(xt - xo).ravel(), xo.ravel()]  # interpolation in (xt - xo), xo space
-            points = np.column_stack(points)
-            mean = block_mean.value()
-            ivar = window_ivar.at.theory.get(**tlabel).at.observable.get(**olabel).value()
-            mask = np.ravel(ivar > 0)
-            if method == 'spline':
-                from scipy.interpolate import SmoothBivariateSpline
-                spline = SmoothBivariateSpline(*points[mask].T, mean.ravel()[mask], w=ivar.ravel()[mask], **kwargs)
-                block = spline(*points.T, grid=False)
-            elif method == 'gaussian_process':
-                from sklearn.gaussian_process import GaussianProcessRegressor
-                from sklearn.gaussian_process.kernels import ConstantKernel, Matern
-                # X: shape (M, 2)
-                # y: observed means at each point
-                # se: standard error of each mean
-                kernel = ConstantKernel(1.0) * Matern(**kwargs)
-                gpr = GaussianProcessRegressor(
-                    kernel=kernel,
-                    alpha=1. / ivar.ravel()[mask],
-                    normalize_y=True,
-                    n_restarts_optimizer=5
-                )
-                gpr.fit(points[mask], mean.ravel()[mask])
-                # predict at new points Xnew: shape (K, 2)
-                block, y_std = gpr.predict(points, return_std=True)
-            block = block.reshape(xt.shape)
-            row.append(block)
-        value.append(row)
-    window_mean = window_mean.clone(value=np.block(value))
-    return window_mean
 
 
 def rebinning_matrix(current_theory: types.ObservableTree, new_coords: types.ObservableTree=None, interp_order: int=3, diag: str=None):

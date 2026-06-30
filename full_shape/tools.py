@@ -114,8 +114,8 @@ def get_cosmology(cosmology_options: dict=None):
             params[name].update(fixed=True)
     params['n_s'].update(fixed=is_ns_fixed)
     if has_w0wa:
-        params['w0_fld'].clone(fixed=is_fixed_model)
-        params['wa_fld'].clone(fixed=is_fixed_model)
+        params['w0_fld'].update(fixed=is_fixed_model)
+        params['wa_fld'].update(fixed=is_fixed_model)
     params.set(Parameter('H0', derived=True, latex='H_0'))
     params.set(Parameter('Omega_m', derived=True, latex=r'\Omega_\mathrm{m}'))
     params.set(Parameter('sigma8_m', derived=True, latex=r'\sigma_{8,\mathrm{m}}'))
@@ -256,7 +256,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
                     'snb0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
                     'X_FoG': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
                 })
-                
+
         # ── FoG damping ───────────────────────────────────────────────────
         if 'EFT' in model.upper():
             configs['X_FoG*'] = {'fixed': True}
@@ -461,7 +461,7 @@ def combine_covariances(covariances, observable):
         value[ilabel1][ilabel2] = block
     value = np.block(value)
     if any(observable is None for observable in observables):
-        raise ValueError(f'could not find obseravbles for labels {olabels}')
+        raise ValueError(f'could not find observables for labels {olabels}')
     observable = types.join(observables)
     return types.CovarianceMatrix(observable=observable, value=value)
 
@@ -538,9 +538,35 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     Parameters
     ----------
     observables_options : list[dict]
-        List of observable option dicts describing which stats to load.
+        List of observable option dicts, one per statistic to load. Each dict must have at
+        least the following keys:
+
+        - ``'stat'``: dict with at least ``'kind'`` (e.g. ``'mesh2_spectrum'``,
+          ``'mesh3_spectrum'``, ``'recon_particle2_correlation'``).  Optional keys:
+
+          - ``'select'``: list of per-multipole selection dicts, each with an ``'ells'``
+            key and coordinate-range entries of the form ``[min, max]`` or
+            ``[min, max, step]``.  May also be a callable for custom rebinning.
+          - ``'basis'``: string passed through to the stats-file path builder
+            (e.g. ``'sugiyama-diagonal'`` for bispectrum).
+
+        - ``'catalog'``: dict of catalog metadata keys used to locate measurement files,
+          typically including ``'tracer'``, ``'version'``, ``'zrange'``, ``'region'``,
+          ``'weight'``, ``'stats_dir'``, and optionally ``'imock'`` and ``'project'``.
+
     covariance_options : dict or None
-        Options used to locate covariance/mock files.
+        Options controlling how the covariance matrix is built. Relevant keys:
+
+        - ``'source'``: ``'mock'`` (default), ``'jaxpower'``, or ``'rascalc'``.
+        - ``'version'``: version string for mock or analytic covariance files.
+        - ``'stats_dir'``: base directory for mock realization files.
+        - ``'corrections'``: list of correction names to apply, e.g.
+          ``['hartlap', 'percival']``.
+        - ``'nparams'``: effective parameter count for the Percival correction
+          (inferred automatically when omitted).
+
+        If ``None`` or ``{}``, the covariance-source dispatch falls through to ``None``
+        and no covariance is built.
     unpack : bool, optional
         If ``True`` return unpacked (data, windows, covariance) rather than a :class:`types.GaussianLikelihood`.
     get_stats_fn : callable
@@ -719,6 +745,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         return observable
 
     def _get_mock_stats_fn(stat, file_kw):
+        file_kw = dict(file_kw)
         stats_dir = Path(file_kw.pop('stats_dir'))
         version = file_kw.pop('version', None)
         project = file_kw.pop('project', '')
@@ -845,7 +872,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         data = data.at(**labels).replace(leaf)
         window = window.at.observable.at(**labels).match(data.get(**labels))
     # Analytic covariances
-    if covariance_options['source'] in ['jaxpower', 'rascalc']:
+    if covariance_options.get('source') in ['jaxpower', 'rascalc']:
         # WARNING: not tested yet!
         full_tracers = []
         for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
@@ -877,7 +904,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             raise ValueError(f'no covariances found in {cov_fns}')
         covariance = combine_covariances(covariances, data)
         covariance.attrs['nobs'] = -1
-    elif covariance_options['source'] == 'mock':
+    elif covariance_options.get('source') == 'mock':
         # Mock-based covariance
         cache_fn, imocks_exists = get_covariance_cache_fn_from_manifest()
         covariance_cache_hit = False
@@ -1024,6 +1051,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     """
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable, Spectrum3PolesObservable, Correlation2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike import Parameter
     # likelihood_options: {'observables': [observable_options], 'covariance': {}}
     observables_options = likelihood_options['observables']
     covariance_options = likelihood_options.get('covariance', {})
@@ -1064,8 +1092,20 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             # Compactify window theory
             window = rebin_spectrum3_window(window, data=data)
         window = select_window_theory(window, data)
-
-        observable = cls(data=data, window=window, theory=theory, name=observable_name)
+        templates = None
+        if hasattr(window.theory, 'types'):  # with systematic templates
+            templates = []
+            for label, theory in window.theory.items():
+                if label['types'] != 'theory':
+                    mean, sigma = theory.values('value'), theory.values('sigma')
+                    param = Parameter(basename=label['types'], namespace=namespace,
+                                    ref=dict(dist='norm', loc=mean, scale=sigma),
+                                    prior=dict(dist='norm', loc=mean, scale=sigma),
+                                    derived='best')
+                    template = window.at.theory.get(**label).value()
+                    templates.append((param, template))
+            window = window.at.theory.get('theory')  # window becomes the "standard window"
+        observable = cls(data=data, window=window, theory=theory, templates=templates, name=observable_name)
         if observable_options['emulator']['name']:
             assert cache_dir is not None, 'cache_dir must be provided for emulator'
             read_cache = cache_dir is not None and 'r' in cache_mode
@@ -1076,21 +1116,21 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             _str_cosmology += '_' + observable_options['emulator']['name']
             _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'catalog': 2})
             cache_fn = cache_dir / f'emulator_{_str_cosmology}' / f'emulator_{_str_theory}_{_hash}.h5'
-            from desilike.base import compile as desilike_compile, replace
+            from desilike.base import compile#, replace
             from desilike.emulators import TaylorEmulator
             if read_cache and cache_fn.exists():
                 logger.info(f'Reading cached emulator {cache_fn}')
                 emulator = TaylorEmulator.read(str(cache_fn))
             else:
                 logger.info(f'Fitting emulator {cache_fn}')
-                pt_graph = desilike_compile(theory.pt)
+                pt_graph = compile(theory.pt)
                 emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
                 if write_cache:
                     mkdir(cache_fn.parent)
                     emulator.write(str(cache_fn))
             emulated_pt = emulator.to_calculator()
-            replace(observable, theory.pt, emulated_pt)
+            theory.update(pt=emulated_pt)
         observables.append(observable)
     return ObservablesGaussianLikelihood(observables, covariance=covariance.value())
 
@@ -1271,7 +1311,7 @@ def fill_fiducial_likelihood_options(options):
     """Fill missing likelihood options with fiducial values."""
     if isinstance(options, dict):
         options = dict(options)
-        options['observables'] = [fill_fiducial_observable_options(options) for options in options['observables']]
+        options['observables'] = [fill_fiducial_observable_options(obs_opts) for obs_opts in options['observables']]
         options['covariance'] = propose_fiducial_covariance_options() | (options.get('covariance', {}) or {})
         return options
     return type(options)(fill_fiducial_likelihood_options(opts) for opts in options)
@@ -1715,10 +1755,10 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', 
     _str_from_options = str_from_options(options, level=level)
     _hash = _hash_options(options)
     extra = f'_{extra}' if extra else ''
-    ichain = f'_{ichain:d}' if ichain is not None else ''
     dirname = fits_dir / f'{_str_from_options}-{_hash}{extra}'
+    ichain = f'_{ichain}' if ichain is not None else ''
     basename = f'{kind}{ichain}.{ext}'
-    if ichain == '*':
+    if ichain == '_*':
         return dirname.glob(basename)
     return dirname / basename
 
