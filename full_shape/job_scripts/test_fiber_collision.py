@@ -10,7 +10,7 @@ setup_logging()
 THEORY_MODELS = ["folpsD", "folpsEFT", "reptvelocileptors"]
 COSMO_MODELS = ["base", "base_ns-fixed", "fixed"]
 PRIOR_BASES = ["physical", "physical_aap", "tcm_chudaykin_aap", "standard"]
-SAMPLERS = ["emcee", "mcmc", "pocomc"]
+SAMPLERS = ["emcee", "mh", "pocomc"]
 KRANGES = {
     "mesh2_spectrum": [{"ells": 0, "k": [0.02, 0.30, 0.01]}, {"ells": 2, "k": [0.02, 0.30, 0.01]}],
     "mesh3_spectrum": [{"ells": (0, 0, 0), "k": [0.02, 0.20, 0.01]}, {"ells": (2, 0, 2), "k": [0.02, 0.10, 0.01]}],
@@ -102,7 +102,7 @@ def build_likelihoods_options(**kwargs):
 def build_run_options(**kwargs):
     from full_shape import tools
     template, cosmo_model = kwargs.pop('template', 'direct'), kwargs.pop('cosmo_model', 'base')
-    sampler, nchains, resume, thinning, gelman_rubin = kwargs.pop('sampler', 'mcmc'), kwargs.pop('nchains', 1), kwargs.pop('resume', False), kwargs.pop('thinning', 1), kwargs.pop('gelman_rubin', 0.02)
+    sampler, nchains, resume, thinning, gelman_rubin = kwargs.pop('sampler', 'mh'), kwargs.pop('nchains', 1), kwargs.pop('resume', False), kwargs.pop('thinning', 1), kwargs.pop('gelman_rubin', 0.02)
     options = {}
     options["likelihoods"] = build_likelihoods_options(**kwargs)
     options["cosmology"] = {"template": template, "model": cosmo_model}
@@ -195,7 +195,7 @@ def get_parser():
              "base_ns-fixed varies h, omega_cdm, omega_b, logA; "
              "fixed varies only nuisance parameters. Defaults to %(default).")
     parser.add_argument(
-        "--sampler", type=str, default='mcmc', choices=SAMPLERS,
+        "--sampler", type=str, default='mh', choices=SAMPLERS,
         help="desilike sampler backend to use. Defaults to %(default)s.")
     parser.add_argument("--nchains", type=int, default=1, help="Number of MCMC chains to run with desilike. Defaults to 1.")
     parser.add_argument(

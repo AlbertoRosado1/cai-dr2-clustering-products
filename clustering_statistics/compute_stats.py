@@ -30,8 +30,8 @@ import jax.experimental.multihost_utils
 import lsstypes as types
 
 from . import tools
+from .tools import fill_fiducial_options, _merge_options, Catalog, _compute_binned_weight, setup_logging
 from . import catalog_blinding
-from .tools import fill_fiducial_options, _merge_options, Catalog, interpolate_window_realizations, _compute_binned_weight, setup_logging
 
 from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction, compute_covariance_particle2_correlation
 from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
@@ -40,6 +40,7 @@ from .correlation3_tools import compute_particle3_angular_upweights, compute_par
 from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction
 
 from .recon_tools import compute_reconstruction
+from .systematic_templates import include_systematic_templates
 
 
 logger = logging.getLogger('summary-statistics')
@@ -265,7 +266,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                     tools.renormalize_randoms_over_data(random, _cache_auw[kind.replace('randoms', 'data')], tracer=tracer)
                         else:
                             _cache_auw[kind] = prepare_catalog(raw_full_data[tracer], kind=kind, **_catalog_options)
-                            
+
                     toret[kind] = _cache_auw[kind]
                 return toret
 
@@ -588,12 +589,12 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                     covariance_options = dict(options[stat])
                     theory_stat = stat.replace('covariance_', 'theory_')
                     theory_fn = covariance_options.pop('theory', None)
-    
+
                     def get_data(tracer):
                         # Prepare catalogs for covariance computation
                         czrandoms = Catalog.concatenate(zrandoms[tracer])
                         return {'data': zdata[tracer], 'randoms': czrandoms}
-    
+
                     def _check_fn(fn, tracers, name=''):
                         # Convert single filename to tracer pair dictionary
                         if len(tracers) == 1:
@@ -601,12 +602,12 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         else:
                             raise ValueError(f'provide a dictionary of (tracer1, tracer2): {name} for tracer1, tracer2 in {tracers}')
                         return fn
-    
+
                     def _read_tracer(fns, tracers2):
                         # Read file for tracer pair (handle ordering)
                         if tracers2 not in fns: tracers2 = tracers2[::-1]
                         return types.read(fns[tracers2])
-    
+
                     if theory_fn is None:
                         # Auto-compute fiducial theory from spectrum and window
                         products_fn = {}
@@ -624,7 +625,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             elif not isinstance(fn, dict):
                                 _check_fn(fn, tracers, name=name)
                             products_fn[name] = fn
-    
+
                         # Compute theory for each tracer pair
                         theory_fn = {}
                         for tracers2 in itertools.combinations_with_replacement(tracers, r=2):
@@ -637,15 +638,15 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             tools.write_stats(theory_fn[tracers2], theory)
                     else:
                         _check_fn(theory_fn, tracers, name='theory')
-    
+
                     # Synchronize before reading theory
                     jax.experimental.multihost_utils.sync_global_devices('theory')  # such that theory ready for window
-    
+
                     # Load theory for all tracer pairs
                     fields = {tracer: tools.get_simple_tracer(tracer) for tracer in tracers}
                     theory = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(theory_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
                     theory = types.ObservableTree(list(theory.values()), fields=list(theory.keys()))
-    
+
                     if 'particle2' in stat:
                         RR_fn = covariance_options.pop('RR', None)
                         kind_stat = stat.replace('covariance_', '')
@@ -661,7 +662,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         RR = {tuple(fields[tracer] for tracer in tracers2): _read_tracer(RR_fn, tracers2) for tracers2 in itertools.product(tracers, repeat=2)}
                         RR = {fields: RR[fields].get('RR') if 'count_names' in RR[fields].labels(return_type='keys') else RR[fields] for fields in RR}
                         covariance_options['RR'] = types.ObservableTree(list(RR.values()), fields=list(RR.keys()))
-    
+
                     # Compute covariance matrix
                     covariance = func(*[functools.partial(get_data, tracer) for tracer in tracers], theory=theory, fields=list(fields.values()), **covariance_options)
 
@@ -677,7 +678,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
                         if key in covariance:
                             tools.write_stats(fn, add_label(covariance[key]))
-    
+
                     # Write intermediate correlation functions to disk
                     for key in covariance:
                         if 'correlation' in key:  # window functions
@@ -739,7 +740,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
     ----------
     postprocess : str or list of str
         Postprocessing.
-        Choices: ['combine_regions', 'combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum']
+        Choices: ['combine_regions', 'combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum', 'systematic_templates']
     analysis : str, optional
         Type of analysis, 'full_shape' or 'png_local', to set fiducial options.
     get_stats_fn : callable, optional
@@ -768,9 +769,10 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
     # Build redshift range lists
     zranges = {tracer: _make_list_zrange(catalog_options[tracer]['zrange']) for tracer in tracers}
     # Default imock if not specified
-    if imocks is None: imocks = [catalog_options[tracers[0]].get('imock', None)]
+    if imocks is None:
+        imocks = [catalog_options[tracers[0]].get('imock', None)]
 
-    def _iter_on_mocks(options):
+    def _iter_on_mocks(options, imocks=imocks):
         # Helper to iterate over multiple mock realizations
         _options = copy.deepcopy(options)
         for imock in imocks:
@@ -798,7 +800,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                     kwargs['catalog'] = {tracer: options['catalog'][tracer] | dict(region=region) for tracer in options['catalog']}
                     all_fns[region] = list_stats(stat, get_stats_fn=get_stats_fn, **kwargs)
                 stats = next(iter(all_fns.values())).keys()
-                # Combine each statistic variant
+                # Combine each statistic variant (auw, cut)
                 for stat in stats:
                     for ifn, (fn_comb, _) in enumerate(all_fns[region_comb][stat]):
                         fns = [all_fns[region][stat][ifn][0] for region in regions]  # [1] is kwargs
@@ -818,15 +820,14 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                         _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(options| {"extra": extra}))
                     else:
                         # Measurements need to loop over mocks
-                        for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options)):
-                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(_options| {"extra": extra}))
+                        for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options), imocks=imocks):
+                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(_options | {"extra": extra}))
 
         if 'combine_window_mesh2_spectrum' in postprocess:
             # Combine base window calculation with forward-modeled windows
             stat = 'window_mesh2_spectrum'
             combine_options = dict(options.get('combine_window_mesh2_spectrum', {}))
             effect = combine_options.pop('effect', 'RIC+AMR')
-            kw_interpolate = dict(combine_options)
             window_options = options.get(stat, {})
             window_fm_options = options.get(f'{stat}_fm', {})
             window_fm = None
@@ -856,6 +857,29 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                 # Adding all effects
                 window = window_geometry.clone(value=window_geometry.value() + window_fm.value())
                 tools.write_stats(fn, window)
+
+        if 'systematic_templates' in postprocess:
+            stat = 'systematic_templates'
+            systematic_options = dict(options.get(stat, {}))
+            for stat in systematic_options.get('stats', []):
+                for window_fn, kw_window in list_stats(f'window_{stat}', get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **{stat: options.get(stat, {}), f'window_{stat}': options.get(f'window_{stat}', {})})[f'window_{stat}']:
+                    window = types.read(window_fn)
+                    effects = list(systematic_options.get('effects', []))
+                    templates = {}
+                    for key, fns in systematic_options.get('templates', {}).items():
+                        if key == 'auw' and kw_window.get('cut', None):
+                            effects = [effect for effect in effects if effect != 'auw']
+                            continue
+                        if isinstance(fns, dict):
+                            imocks = fns.get('imock', imocks)
+                            fns = [get_stats_fn(kind=stat, **{**kw_window, 'imock': imock, 'auw': None, 'cut': None, **fns}) for imock in imocks]
+                        if not isinstance(fns, (tuple, list)):
+                            fns = [fns]
+                        templates[key] = types.mean([types.read(fn) for fn in fns])
+                    if effects:
+                        window = include_systematic_templates(window, templates=templates, effects=effects)
+                        fn = get_stats_fn(kind=f'window_{stat}', **kw_window, templates=list(effects))
+                        tools.write_stats(fn, window)
 
         if 'rotation_mesh2_spectrum' in postprocess:
             # Compute rotation matrix for power spectrum (corrections for systematic effects)

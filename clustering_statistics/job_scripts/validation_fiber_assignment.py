@@ -29,7 +29,7 @@ mode = 'interactive'
 if mode == 'slurm':
     queue = Queue('abacus_mocks5')
     queue.clear(kill=False)
-    
+
     output, error = 'slurm_outputs/abacus_mocks/slurm-%j.out', 'slurm_outputs/abacus_mocks/slurm-%j.err'
     kwargs = {}
     environ = Environment('nersc-cosmodesi', command=['module unload desi-clustering'])
@@ -88,18 +88,18 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             particle2_correlation |= {'auw': auw}
             particle3_correlation |= {'auw': auw}
             #particle3_correlation = {'split_randoms': (2., 10), 'battrs': dict(s=np.linspace(0., 20., 21), pole=(list(range(6)), 'firstpoint'))}
-            options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock), 
+            options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, region=region, weight=weight, imock=imock),
                            mesh2_spectrum=mesh2_spectrum, window_mesh2_spectrum=window_mesh2_spectrum,
                            mesh3_spectrum=mesh3_spectrum, window_mesh3_spectrum=window_mesh3_spectrum,
                            particle2_correlation=particle2_correlation,
                            particle3_correlation=particle3_correlation)
             options = fill_fiducial_options(options, analysis=analysis)
-            
+
             for itracer in options['catalog']:
                 #options['catalog'][itracer]['nran'] = 5
                 #if 'BGS_BRIGHT' in itracer:
                 #    options['catalog'][itracer]['tracer'] = 'BGS_BRIGHT'
-                options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges 
+                options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
                     options['catalog'][itracer]['complete'] = {'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
@@ -129,8 +129,12 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     from clustering_statistics import postprocess_stats_from_options
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks, combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'particle2_correlation', 'particle3_correlation']}, mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True}, mesh3_spectrum={'auw': True}, window_mesh3_spectrum={})
-    stats_dir_kws = dict(stats_dir=stats_dir, project=project)
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks,
+                   combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'particle2_correlation', 'particle3_correlation']},
+                   mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True},
+                   mesh3_spectrum={'auw': True}, window_mesh3_spectrum={},
+                   systematic_templates={'stats': ['mesh2_spectrum', 'mesh3_spectrum'], 'effects': ['auw'],
+                                        'templates': {'auw': {'extra': 'auw'}, 'raw': {}}})
     _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly)
     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=_get_stats_fn, **options)
 
@@ -141,7 +145,9 @@ if __name__ == '__main__':
     check_for_existing_measurements = False
     stats, postprocess = [], []
     #version = 'abacus-hf-dr2-v2-altmtl'
-    version = 'glam-uchuu-v2-altmtl'
+    #version = 'glam-uchuu-v2-altmtl'
+    version = 'abacus-hf-dr2-v2-altmtl'
+    #version = 'glam-uchuu-v2-altmtl'
     #version = 'abacus-2ndgen-dr2-complete'
     #version = 'abacus-2ndgen-dr2-altmtl'
     #version = 'data-dr2-v2'
@@ -157,7 +163,7 @@ if __name__ == '__main__':
     project = f'{analysis}/fiber_assignment_systematics'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
-    imocks = np.arange(1)
+    imocks = np.arange(10)
     #imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
@@ -167,14 +173,14 @@ if __name__ == '__main__':
         imocks = [None]
 
     if version == 'glam-uchuu-v2-altmtl':
-        check_for_existing_measurements = True
+        check_for_existing_measurements = False
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
-        imocks = [150]
+        #imocks = [150]
 
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:3]
+    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][1:]
     #tracers = ['ELG', 'LRG']
     #tracers = ['LRG']
     #tracers = ['ELG', 'QSO'][:1]
@@ -185,7 +191,7 @@ if __name__ == '__main__':
     #tracers = ['BGS_BRIGHT-02']
     #tracers = ['BGS_ANY-02']
 
-    # run data_splits for lensing group with full_shape setup 
+    # run data_splits for lensing group with full_shape setup
     #stats = ['mesh2_spectrum', 'mesh3_spectrum']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh2_spectrum', 'window_mesh2_spectrum'][:1]
@@ -194,10 +200,10 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:0]
     #stats = ['mesh3_spectrum', 'close_pair_correction']
-    #stats = ['particle3_correlation'][:0]
-    postprocess = ['combine_regions'][:0]
+    #postprocess = ['combine_regions']
+    postprocess = ['systematic_templates']
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'
@@ -216,7 +222,7 @@ if __name__ == '__main__':
     #onthefly = 'complete-fibered'
     #onthefly = 'complete'
     #onthefly = 'altmtl'
-    
+
     for tracer in tracers:
         if 'BGS_BRIGHT-02' not in tracer:
             tracer = tools.get_full_tracer(tracer, version=version)
