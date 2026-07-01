@@ -64,7 +64,7 @@ def run_fit_from_options(actions,
     mpicomm = get_mpicomm()
     if mpicomm.rank == 0:
         logger.info('priors:')
-        print_priors(get_params(likelihood).select(varied=True, derived=False))
+        print_priors(get_params(likelihood).select(varied=True))
     fn = get_fits_fn(kind='config', **options, ext='yaml')
     tools.write_options(fn, options)
     profiles_fn = get_fits_fn(kind='profiles', **options)

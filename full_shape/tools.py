@@ -1118,7 +1118,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
                 for label, wtheory in window.theory.items():
                     if label['types'] != 'theory':
                         mean, sigma = wtheory.values('value'), wtheory.values('scale')
-                        # FIXME: non-trivial shapes in desilike analytic marginalization
+                        # FIXME: non-trivial shapes in gelman-rubin
                         assert mean.size == 1
                         prior = dict(dist='norm', loc=mean.flat[0], scale=sigma.flat[0])
                         param = Parameter(label['types'], namespace=namespace, value=mean.flat[0],
