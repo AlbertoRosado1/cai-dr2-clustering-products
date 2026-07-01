@@ -271,7 +271,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
             for param in params.select(basename=basename):
                 param.update(**config)
     elif 'comet' in model:
-        if marg:  # need to speed this up
+        if marg:
             for param in params.select(basename=['a[0:5]', 'NP*']):
                 param.update(derived='marg')
         if user_params:
@@ -1076,23 +1076,23 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             _str_cosmology += '_' + observable_options['emulator']['name']
             _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'catalog': 2})
             cache_fn = cache_dir / f'emulator_{_str_cosmology}' / f'emulator_{_str_theory}_{_hash}.h5'
-            from desilike.base import compile as desilike_compile, replace
+            from desilike.base import compile
             from desilike.emulators import TaylorEmulator
             if read_cache and cache_fn.exists():
                 logger.info(f'Reading cached emulator {cache_fn}')
                 emulator = TaylorEmulator.read(str(cache_fn))
             else:
                 logger.info(f'Fitting emulator {cache_fn}')
-                pt_graph = desilike_compile(theory.pt)
+                pt_graph = compile(theory.pt)
                 emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
                 if write_cache:
                     mkdir(cache_fn.parent)
                     emulator.write(str(cache_fn))
             emulated_pt = emulator.to_calculator()
-            replace(observable, theory.pt, emulated_pt)
+            theory.update(pt=emulated_pt)
         observables.append(observable)
-    return ObservablesGaussianLikelihood(observables, covariance=covariance.value())
+    return ObservablesGaussianLikelihood(observables=observables, covariance=covariance.value())
 
 
 def get_likelihood(likelihoods_options: dict | list[dict], cosmology_options: dict=None, get_stats_fn=clustering_tools.get_stats_fn,
