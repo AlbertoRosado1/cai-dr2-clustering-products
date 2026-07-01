@@ -161,7 +161,7 @@ if __name__ == '__main__':
     project = f'{analysis}/fiber_assignment_systematics'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
-    imocks = np.arange(1)
+    imocks = np.arange(10)
     #imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)

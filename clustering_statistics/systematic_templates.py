@@ -12,7 +12,7 @@ def include_systematic_templates(window: types.WindowMatrix, templates: dict, ef
         if effect == 'auw':
             diff = templates['auw'].match(observable).value() - templates['raw'].match(observable).value()
             windows.append(diff[:, None])
-            theories.append(types.ObservableLeaf(value=np.array([0.]), scale=np.array([0.2])))
+            theories.append(types.ObservableLeaf(value=np.array([1.]), scale=np.array([0.3])))
             _types.append(effect)
         elif effect == 'photo':
             diff_amr = templates['mock_wsys'].match(observable).value() - templates['data_nowsys'].match(observable).value()

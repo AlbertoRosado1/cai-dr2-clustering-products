@@ -867,7 +867,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                         file_kw['imock'] = 0
                     file_kw.pop('auw', None)  # auw stat has the same window as non-auw stat
                     file_kw = file_kw | observables_options[iobs]['window']
-                    #fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
+                    fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
                     fn = get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
@@ -1080,7 +1080,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
         data_attrs = dict(data.attrs) | label
-        namespace = _str_from_observable_options(observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
+        namespace = _str_from_observable_options(observable_options, level={'catalog': 1, 'stat': 0, 'window': 0, 'theory': 0, 'covariance': 0})
         data_attrs['tracers'] = namespace.split('x')
         if namespace not in nbar:
             nbar[namespace] = 1. / stats.observable.get(observables='spectrum2', tracers=label['tracers'], ells=0).values('shotnoise').mean()
@@ -1115,15 +1115,16 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             templates = None
             if hasattr(window.theory, 'types'):  # with systematic templates
                 templates = []
-                for label, theory in window.theory.items():
+                for label, wtheory in window.theory.items():
                     if label['types'] != 'theory':
-                        mean, sigma = theory.values('value'), theory.values('sigma')
-                        param = Parameter(basename=label['types'], namespace=namespace,
-                                        ref=dict(dist='norm', loc=mean, scale=sigma),
-                                        prior=dict(dist='norm', loc=mean, scale=sigma),
-                                        derived='best')
+                        mean, sigma = wtheory.values('value'), wtheory.values('scale')
+                        # FIXME: non-trivial shapes in desilike analytic marginalization
+                        assert mean.size == 1
+                        prior = dict(dist='norm', loc=mean.flat[0], scale=sigma.flat[0])
+                        param = Parameter(label['types'], namespace=namespace, value=mean.flat[0],
+                                        ref=prior, prior=prior, derived='best')
                         template = window.at.theory.get(**label).value()
-                        templates.append((param, template))
+                        templates.append((param, template[..., 0]))
                 window = window.at.theory.get('theory')  # window becomes the "standard window"
             observable = cls(data=data, window=window, theory=theory, templates=templates, name=observable_name)
         if observable_options['emulator']['name']:

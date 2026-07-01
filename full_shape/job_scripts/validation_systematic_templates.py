@@ -82,6 +82,8 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
             observable_options['theory']['model'] = theory_model
             #observable_options['theory']['marg'] = False
             observable_options['theory']['prior_basis'] = prior_basis
+        likelihood_options['covariance']['source'] = 'mock'
+        likelihood_options['covariance']['project'] = 'full_shape/base'
         likelihoods.append(likelihood_options)
     return likelihoods
 
