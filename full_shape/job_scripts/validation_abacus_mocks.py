@@ -98,6 +98,7 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, project, 
         project=project,
         theory_model=theory_model,
         prior_basis=prior_basis,
+        emulator=emulator,
     )
     options['cosmology'] = {'template': template, 'model': cosmo_model, 'engine': 'eisenstein_hu' if 'comet' in theory_model else 'class'}
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler=sampler)
@@ -161,6 +162,7 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
         nchains=nchains,
         resume=resume,
         prior_basis=prior_basis,
+        emulator=emulator,
     )
     get_fits_fn = functools.partial(tools.get_fits_fn, fits_dir=fits_dir)
     cache_dir = Path(cache_dir)
@@ -220,6 +222,9 @@ def _get_parser():
                         help='Number of MCMC chains to run with desilike. Defaults to 1.')
     parser.add_argument('--resume', action='store_true',
                         help='Resume sampling from existing chain files in the derived fits directory.')
+    parser.add_argument('--no_emulator', action='store_true',
+                        help='Disable Taylor emulators and evaluate the theory directly. '
+                             'Useful for fixed-cosmology, nuisance-only fits.')
     parser.add_argument('--local_safe_threads', action='store_true',
                         help='Limit OpenMP/BLAS thread counts for local macOS CLASS/OpenMP crashes. '
                              'Defaults to off so cluster runs keep their normal threading.')
