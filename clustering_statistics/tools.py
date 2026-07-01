@@ -1222,6 +1222,13 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         full = f'mesh3_spectrum{basis}_poles'
         if full not in kind:
             kind = kind.replace('mesh3_spectrum', full)
+    if 'window' in kind:
+        templates = kwargs.get('templates', None)
+        if templates is not None and templates:
+            if isinstance(templates, str):
+                templates = [templates]
+            templates = '-'.join(['syst'] + list(templates))
+            extra = f'{extra}-{templates}' if extra else f'_{templates}'
     basename = f'{kind}_{tracer}{zrange}_{region}_weight-{weight}{auw}{cut}{extra}{imock}.{ext}'
     return stats_dir / basename
 

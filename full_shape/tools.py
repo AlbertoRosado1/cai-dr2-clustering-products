@@ -517,7 +517,7 @@ def _get_covariance_correction_factor(covariance: types.CovarianceMatrix,
 
 
 def _get_prepared_cache_options(observables_options: list[dict], covariance_options: dict=None, kind: str=None):
-    options = {'observables': [{name: dict(observable_options[name]) for name in ['stat', 'catalog']} for observable_options in observables_options]}
+    options = {'observables': [{name: dict(observable_options[name]) for name in ['stat', 'catalog', 'window']} for observable_options in observables_options]}
     if kind == 'covariance':
         options['covariance'] = covariance_options or {}
     return options
@@ -596,7 +596,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         if cache_dir is None:
             return None
         _full_options = _get_prepared_cache_options(observables_options, covariance_options, kind=kind)
-        _level = {'stat': 1, 'catalog': 2, 'covariance': 0}
+        _level = {'stat': 1, 'catalog': 2, 'window': 1, 'covariance': 0}
         if kind == 'covariance':
             _level['covariance'] = 1
         _str_from_options = str_from_likelihood_options(_full_options, level=_level)
@@ -861,11 +861,14 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                 elif _windows:
                     windows.append(_windows[0])
                 else:
+                    file_kw = dict(file_kw)
                     imock = file_kw.get('imock', None)
                     if imock is not None:  # FIXME
                         file_kw['imock'] = 0
                     file_kw.pop('auw', None)  # auw stat has the same window as non-auw stat
-                    fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
+                    file_kw = file_kw | observables_options[iobs]['window']
+                    #fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
+                    fn = get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
             # Join mesh2_spectrum, mesh3_spectrum, etc.
@@ -1060,7 +1063,8 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     -------
     ObservablesGaussianLikelihood
     """
-    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable, Spectrum3PolesObservable, Correlation2PolesObservable, BAOCompressionObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable, Spectrum3PolesObservable, Correlation2PolesObservable
+    from desilike.observables.galaxy_clustering.compressed import BAOCompressionObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike import Parameter
     # likelihood_options: {'observables': [observable_options], 'covariance': {}}
@@ -1099,11 +1103,11 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         if is_compressed:  # e.g. BAO
             observable = cls(data=data.value(), z=data.attrs['zeff'], parameters=list(data.params))
         else:
-            theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
             for _, pole in window.observable.items(level=None):
                 data_attrs['z'] = pole.attrs['zeff']
             if mpicomm.rank == 0:
                 logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
+            theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
             if cls == Spectrum3PolesObservable:
                 # Compactify window theory
                 window = rebin_spectrum3_window(window, data=data)
@@ -1225,6 +1229,7 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
     """Propose fiducial fitting options for given statistics and tracer."""
     propose_fiducial = {'stat': {'kind': stat},
                         'catalog': {'weight': 'default-FKP'},
+                        'window': {'templates': []},
                         'theory': {},
                         'emulator': {'name': 'taylor', 'order': 3},
                         'window': {}}
@@ -1530,7 +1535,7 @@ def get_full_tracer_zrange(tracerz=None, zrange=None):
 
 def _get_level(level: int | dict=None):
     """Compact helper to normalise verbosity level for string helpers."""
-    _default_level = {'stat': 1, 'catalog': 1, 'theory': 0, 'covariance': 0, 'cosmology': 1}
+    _default_level = {'stat': 1, 'catalog': 1, 'window': 1, 'theory': 0, 'covariance': 0, 'cosmology': 1}
     if level is None: level = {}
     if not isinstance(level, dict):
         level = {name: level for name in _default_level}
@@ -1654,6 +1659,11 @@ def _str_from_observable_options(options: dict, level: int=None) -> str:
                 select_str.append('-'.join(label))
         select_str = '-'.join(select_str)
         out_str.append(select_str)
+    if level['window'] > 0:
+        templates = list(options['window']['templates'])
+        if templates:
+            out_str.append('w')
+            out_str.extend(templates)
 
     if level['theory'] > 0:
         out_str.append('th')

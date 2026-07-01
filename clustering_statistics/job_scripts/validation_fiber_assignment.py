@@ -144,19 +144,19 @@ if __name__ == '__main__':
 
     check_for_existing_measurements = False
     stats, postprocess = [], []
-    #version = 'abacus-hf-dr2-v2-altmtl'
+    version = 'abacus-hf-dr2-v2-altmtl'
     #version = 'glam-uchuu-v2-altmtl'
     #version = 'abacus-2ndgen-dr2-complete'
     #version = 'abacus-2ndgen-dr2-altmtl'
     #version = 'data-dr2-v2'
     #version = 'data-dr2-test-maskedfracz'
-    version = 'data-dr2-test-maskedfraczpNN'
+    #version = 'data-dr2-test-maskedfraczpNN'
     analysis = 'full_shape'
     cat_dir = None
     #compweight = 'tilelocid-LRG1'
     #compweight = 'tilelocid-LRG0'
     #cat_dir = tools.base_stats_dir / f'auxiliary_data/fiber_assignment_systematics_ELG_{compweight}' / version
-    cat_dir = tools.desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/test/maskedfraczpNN'
+    #cat_dir = tools.desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/test/maskedfraczpNN'
 
     project = f'{analysis}/fiber_assignment_systematics'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
@@ -171,14 +171,14 @@ if __name__ == '__main__':
         imocks = [None]
 
     if version == 'glam-uchuu-v2-altmtl':
-        check_for_existing_measurements = True
+        check_for_existing_measurements = False
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
-        imocks = [150]
+        #imocks = [150]
 
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:3]
+    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][1:]
     #tracers = ['ELG', 'LRG']
     #tracers = ['LRG']
     #tracers = ['ELG', 'QSO'][:1]
@@ -198,10 +198,10 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:0]
     #stats = ['mesh3_spectrum', 'close_pair_correction']
-    #stats = ['particle3_correlation'][:0]
-    postprocess = ['combine_regions'][:0]
+    #postprocess = ['combine_regions']
+    postprocess = ['systematic_templates']
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'
@@ -228,7 +228,7 @@ if __name__ == '__main__':
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
-            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
 
         def get_run_stats():
             if mode == 'interactive':

@@ -62,7 +62,7 @@ def _apply_kranges(observable_options):
 
 
 def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, project, theory_model,
-                               prior_basis='physical_aap', emulator=True):
+                               syst_templates=tuple(), emulator=True, prior_basis='physical_aap'):
     _validate_theory_model(stats, theory_model)
     likelihoods = []
     for tracer in tracers:
@@ -77,6 +77,7 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
         )
         for observable_options in likelihood_options['observables']:
             _apply_kranges(observable_options)
+            observable_options['window']['templates'] = syst_templates
             observable_options.setdefault('theory', {})
             observable_options['theory']['model'] = theory_model
             #observable_options['theory']['marg'] = False
@@ -87,7 +88,7 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
 
 def _build_run_options(stats, tracers, version, covariance, stats_dir, project, theory_model,
                        cosmo_model='base', template='direct', sampler='emcee', nchains=1,
-                       resume=False, prior_basis='physical_aap', emulator=True):
+                       resume=False, prior_basis='physical_aap', emulator=True, syst_templates=tuple()):
     options = {}
     options['likelihoods'] = _build_likelihoods_options(
         stats=stats,
@@ -99,6 +100,7 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, project, 
         theory_model=theory_model,
         prior_basis=prior_basis,
         emulator=emulator,
+        syst_templates=syst_templates,
     )
     options['cosmology'] = {'template': template, 'model': cosmo_model, 'engine': 'eisenstein_hu' if 'comet' in theory_model else 'class'}
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler=sampler)
@@ -126,7 +128,7 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
             cache_dir=DEFAULT_CACHE_DIR,
             stats=['mesh2_spectrum'], tracers=None, theory_model='folpsD',
             cosmo_model='base', sampler='emcee', nchains=1, resume=False,
-            prior_basis='physical_aap', emulator=True, local_safe_threads=False):
+            syst_templates=tuple(), prior_basis='physical_aap', emulator=True, local_safe_threads=False):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -163,6 +165,7 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
         resume=resume,
         prior_basis=prior_basis,
         emulator=emulator,
+        syst_templates=syst_templates,
     )
     get_fits_fn = functools.partial(tools.get_fits_fn, fits_dir=fits_dir)
     cache_dir = Path(cache_dir)
@@ -186,8 +189,8 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
 def _get_parser():
     datasets = ['abacus-2ndgen-dr2-altmtl', 'abacus-2ndgen-dr2-complete', 'abacus-hf-dr2-v2-altmtl']
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', choices=datasets, default='abacus-2ndgen-dr2-complete',
-                        help='Dataset to fit. Defaults to abacus-2ndgen-dr2-complete.')
+    parser.add_argument('--dataset', choices=datasets, default='abacus-hf-dr2-v2-altmtl',
+                        help='Dataset to fit..')
     parser.add_argument('--todo', type=str, nargs='*', default=['profile'],
                         choices=['build', 'profile', 'sample'],
                         help='Run build, profile, and / or sample. Defaults to profile.')
@@ -214,8 +217,10 @@ def _get_parser():
                         help='Base directory for fits. Defaults to $SCRATCH/fits_abacus_mocks or ./fits_abacus_mocks.')
     parser.add_argument('--stats_dir', type=str, default=DEFAULT_STATS_DIR,
                         help=f'Base directory for clustering statistics. Defaults to {DEFAULT_STATS_DIR}.')
-    parser.add_argument('--project', type=str, default=DEFAULT_PROJECT,
-                        help=f'Base directory for clustering statistics. Defaults to {DEFAULT_PROJECT}.')
+    parser.add_argument('--project', type=str, default='full_shape/fiber_assignment_systematics',
+                        help=f'Base directory for clustering statistics.')
+    parser.add_argument('--syst_templates', type=str, nargs='*', default=[], choices=['auw'],
+                        help=f'Systematic templates.')
     parser.add_argument('--cache_dir', type=str, default=DEFAULT_CACHE_DIR,
                         help=f'Base directory for cached prepared stats and emulators. Defaults to {DEFAULT_CACHE_DIR}.')
     parser.add_argument('--nchains', type=int, default=1,
@@ -246,6 +251,6 @@ if __name__ == '__main__':
     _validate_theory_model(stats, args.theory_model)
     run_fit(actions=args.todo, version=version, covariance=covariance, stats_dir=stats_dir, project=args.project,
             fits_dir=fits_dir, cache_dir=cache_dir, stats=stats, tracers=tracers, theory_model=args.theory_model,
-            cosmo_model=args.cosmo_params, sampler=args.sampler, nchains=args.nchains,
+            syst_templates=args.syst_templates, cosmo_model=args.cosmo_params, sampler=args.sampler, nchains=args.nchains,
             resume=args.resume, prior_basis=args.prior_basis,
             local_safe_threads=args.local_safe_threads, emulator=not args.no_emulator)

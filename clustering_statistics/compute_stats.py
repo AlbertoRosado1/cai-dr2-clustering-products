@@ -769,9 +769,10 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
     # Build redshift range lists
     zranges = {tracer: _make_list_zrange(catalog_options[tracer]['zrange']) for tracer in tracers}
     # Default imock if not specified
-    if imocks is None: imocks = [catalog_options[tracers[0]].get('imock', None)]
+    if imocks is None:
+        imocks = [catalog_options[tracers[0]].get('imock', None)]
 
-    def _iter_on_mocks(options):
+    def _iter_on_mocks(options, imocks=imocks):
         # Helper to iterate over multiple mock realizations
         _options = copy.deepcopy(options)
         for imock in imocks:
@@ -799,7 +800,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                     kwargs['catalog'] = {tracer: options['catalog'][tracer] | dict(region=region) for tracer in options['catalog']}
                     all_fns[region] = list_stats(stat, get_stats_fn=get_stats_fn, **kwargs)
                 stats = next(iter(all_fns.values())).keys()
-                # Combine each statistic variant
+                # Combine each statistic variant (auw, cut)
                 for stat in stats:
                     for ifn, (fn_comb, _) in enumerate(all_fns[region_comb][stat]):
                         fns = [all_fns[region][stat][ifn][0] for region in regions]  # [1] is kwargs
@@ -819,8 +820,8 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                         _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(options| {"extra": extra}))
                     else:
                         # Measurements need to loop over mocks
-                        for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options)):
-                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(_options| {"extra": extra}))
+                        for _options in _iter_on_mocks(options | dict(catalog=fn_catalog_options), imocks=imocks):
+                            _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **(_options | {"extra": extra}))
 
         if 'combine_window_mesh2_spectrum' in postprocess:
             # Combine base window calculation with forward-modeled windows
@@ -860,22 +861,25 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
         if 'systematic_templates' in postprocess:
             stat = 'systematic_templates'
             systematic_options = dict(options.get(stat, {}))
-            effects = systematic_options.pop('effects', [])
-            for stat in options.get('stats', []):
-                window_options = options.get('window_mesh2_spectrum', {})
-                fn = get_stats_fn(kind=f'window_{stat}', catalog=fn_catalog_options, **{stat: options.get(stat, {}), f'window_{stat}': options.get(f'window_{stat}', {})})
-                window = types.read(fn)
-                templates = dict(systematic_options.pop('templates', {}))
-                for key, fns in templates.items():
-                    if isinstance(fns, dict):
-                        imocks = fns.get('imock', [None])
-                        fns = [get_stats_fn(kind=stat, catalog=fn_catalog_options, imock=imock, **{stat: options.get(stat, {})}) for imock in imocks]
-                    if not isinstance((tuple, list)):
-                        fns = [fns]
-                    templates[key] = types.mean([types.read(fn) for fn in fns])
-                window = include_systematic_templates(window, templates=templates, effects=effects)
-                fn = get_stats_fn(kind=f'window_{stat}', catalog=fn_catalog_options, **{stat: options.get(stat, {}), f'window_{stat}': options.get(f'window_{stat}', {}), 'extra': 'with_templates'})
-                tools.write_stats(fn, window)
+            for stat in systematic_options.get('stats', []):
+                for window_fn, kw_window in list_stats(f'window_{stat}', get_stats_fn=get_stats_fn, catalog=fn_catalog_options, **{stat: options.get(stat, {}), f'window_{stat}': options.get(f'window_{stat}', {})})[f'window_{stat}']:
+                    window = types.read(window_fn)
+                    effects = list(systematic_options.get('effects', []))
+                    templates = {}
+                    for key, fns in systematic_options.get('templates', {}).items():
+                        if key == 'auw' and kw_window.get('cut', None):
+                            effects = [effect for effect in effects if effect != 'auw']
+                            continue
+                        if isinstance(fns, dict):
+                            imocks = fns.get('imock', imocks)
+                            fns = [get_stats_fn(kind=stat, **{**kw_window, 'imock': imock, 'auw': None, 'cut': None, **fns}) for imock in imocks]
+                        if not isinstance(fns, (tuple, list)):
+                            fns = [fns]
+                        templates[key] = types.mean([types.read(fn) for fn in fns])
+                    if effects:
+                        window = include_systematic_templates(window, templates=templates, effects=effects)
+                        fn = get_stats_fn(kind=f'window_{stat}', **kw_window, templates=list(effects))
+                        tools.write_stats(fn, window)
 
         if 'rotation_mesh2_spectrum' in postprocess:
             # Compute rotation matrix for power spectrum (corrections for systematic effects)
