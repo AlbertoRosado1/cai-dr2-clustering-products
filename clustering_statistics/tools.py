@@ -1183,7 +1183,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
     version = join_if_not_none(str, 'version')
     if version: stats_dir = stats_dir / version
     imock = join_if_not_none(str, 'imock')
-    if (project != '') and imock: stats_dir = stats_dir / f'mock{imock}'
+    if project and imock: stats_dir = stats_dir / f'mock{imock}'
     imock = f'_{imock}' if imock and (project == '') else ''
     tracer = join_tracers(check_is_not_none('tracer'))
     zrange = join_if_not_none(lambda zrange: f'z{float2str(zrange[0], 1, 3)}-{float2str(zrange[1], 1, 3)}', 'zrange')

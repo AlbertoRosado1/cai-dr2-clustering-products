@@ -32,13 +32,14 @@ import lsstypes as types
 from lsstypes.utils import get_hartlap2007_factor, get_percival2014_factor, mkdir
 
 from clustering_statistics.tools import (write_stats, float2str, get_full_tracer, get_simple_tracer, _make_tuple,
-                                         get_simple_stats, _unzip_catalog_options, base_stats_dir, default_mpicomm,
+                                         get_simple_stats, _unzip_catalog_options, default_mpicomm,
                                          rebinning_matrix, setup_logging)
 from clustering_statistics import tools as clustering_tools
 
 
 logger = logging.getLogger('tools')
 base_fits_dir = Path('/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/fits/')
+base_stats_dir = Path('/dvs_ro') / clustering_tools.base_stats_dir.relative_to('/global')
 
 
 _fiducial = None
@@ -368,7 +369,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
         if kw['mode'] is None: kw['mode'] = ''  # no reconstruction
         kw['broadband'] = theory_options.get('broadband', 'pcs2')
-        theory = DampedBAOWigglesTracerCorrelation2Poles(**kw, ells=[0, 2, 4])
+        theory = DampedBAOWigglesTracerCorrelation2Poles(template=template, **kw, ells=[0, 2, 4])
         # FIXME level=2
         theory.update(params=update_theory_nuisance_priors(get_params(theory, level=2), theory_options['model'], stat, prior_basis=kw['mode'], tracer=tracers, marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
     if theory is None:
@@ -890,10 +891,10 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         # WARNING: not tested yet!
         full_tracers = []
         for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
-            file_kw = file_kw | covariance_options
             imock = file_kw.get('imock', None)
             if imock is not None:  # FIXME
                 file_kw['imock'] = 0
+            file_kw = file_kw | covariance_options
             full_tracers.append(file_kw['tracer'] + (file_kw['tracer'][-1],) * (len(labels['tracers']) - len(file_kw['tracer'])))
         tracers = sorted({t for tpl in full_tracers for t in tpl})
         all_combinations = []
@@ -1082,9 +1083,9 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
         data_attrs = dict(data.attrs) | label
         namespace = _str_from_observable_options(observable_options, level={'catalog': 1, 'stat': 0, 'window': 0, 'theory': 0, 'covariance': 0})
         data_attrs['tracers'] = namespace.split('x')
-        if namespace not in nbar:
+        if namespace not in nbar and 'spectrum2' in stats.observable.observables:
             nbar[namespace] = 1. / stats.observable.get(observables='spectrum2', tracers=label['tracers'], ells=0).values('shotnoise').mean()
-        data_attrs['nbar'] = nbar[namespace]
+        data_attrs['nbar'] = nbar.get(namespace, None)
         suffix = 'x'.join(data_attrs['tracers'])
         if suffix:
             suffix = '_' + suffix
@@ -1232,8 +1233,7 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
                         'catalog': {'weight': 'default-FKP'},
                         'window': {'templates': []},
                         'theory': {},
-                        'emulator': {'name': 'taylor', 'order': 3},
-                        'window': {}}
+                        'emulator': {'name': 'taylor', 'order': 3}}
     propose_stat = {'mesh2_spectrum': {'select': [{'ells': ell, 'k': [0.02, 0.2, 0.01]} for ell in [0, 2]]},
                     'mesh3_spectrum': {'select': [{'ells': (0, 0, 0), 'k': [0.02, 0.12, 0.01]}, {'ells': (2, 0, 2), 'k': [0.02, 0.08, 0.01]}],
                                         'basis': 'sugiyama-diagonal'},
@@ -1317,7 +1317,7 @@ def propose_fiducial_profiler_options(profiler=None):
     """Return dictionary of default profiler configuration."""
     if profiler is None:
         profiler = 'minuit'
-    fiducial_options = {'profiler': profiler, 'init': {}, 'maximize': {}}
+    fiducial_options = {'profiler': profiler, 'init': {}, 'maximize': {'niterations': 1}}
     return fiducial_options
 
 
@@ -1364,6 +1364,7 @@ def fill_fiducial_options(options):
 def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'),
                                        tracer='LRG', zrange=None, region='GCcomb',
                                        version='abacus-hf-dr2-v2-altmtl',
+                                       imock=None,
                                        covariance='holi-v3-altmtl',
                                        stats_dir=base_stats_dir,
                                        project='full_shape/base',
@@ -1383,6 +1384,8 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
         Sky region.
     version : str
         Version of data to use.
+    imock : int
+        If data is a mock, mock number.
     covariance : str
         Version of covariance mocks to use.
     project : str, optional
@@ -1403,10 +1406,10 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     observables = []
     for tracer, stat in itertools.product(tracers, stats):
         tracer, zrange = get_full_tracer_zrange(tracer, zrange)
-        catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir}
+        catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir, 'imock': imock}
         if project:
             catalog['project'] = project
-        if 'data' not in version:
+        if 'data' not in version and imock is None:
             catalog['imock'] = '*'  # read all available mocks
         observable_options = {'stat': {'kind': stat}, 'catalog': catalog}
         if emulator is False: emulator_options = {'name': ''}
@@ -1755,7 +1758,7 @@ def str_from_options(options: dict, level: int | dict=None):
 
 def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', kind='chain', likelihoods: list=None,
                 sampler: dict=None, profiler: dict=None, cosmology: dict=None, ichain: int=None,
-                level=None, extra='', ext='h5'):
+                level=None, extra='', ext='h5', **kwargs):
     """
     Construct a file path for fit outputs based on likelihood and run options.
 
@@ -1783,6 +1786,11 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', 
     """
     fits_dir = Path(fits_dir)
     fits_dir = fits_dir / project
+    imock = kwargs.get('imock', None)
+    if imock is not None:
+        imock = str(imock)
+    if project and imock:
+        fits_dir = fits_dir / f'mock{imock}'
     options = {'likelihoods': likelihoods, 'cosmology': cosmology}
     _str_from_options = str_from_options(options, level=level)
     _hash = _hash_options(options)
