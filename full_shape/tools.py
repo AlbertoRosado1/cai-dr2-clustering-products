@@ -523,6 +523,11 @@ def _get_prepared_cache_options(observables_options: list[dict], covariance_opti
     return options
 
 
+def _stat_is_compressed(stat):
+    # Meaning, no window
+    return 'bao' in stat
+
+
 @default_mpicomm
 def get_stats(observables_options: list[dict], covariance_options: dict=None, unpack: bool=False,
               get_stats_fn=clustering_tools.get_stats_fn, cache_dir: str | Path=None, cache_mode: str='rw', mpicomm=None):
@@ -836,6 +841,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         if mpicomm.rank == 0:
             data, windows = [], []
             for iobs, (stat, labels, file_kw, kw) in enumerate(iter_stat_tracer_combinations(observables_options, with_stat_kw=True)):
+                is_compressed = _stat_is_compressed(stat)
                 _data, _windows = [], []
                 logger.info(f"Reading data vector for {stat} from {_format_log_fns(all_data_fns[iobs])}")
                 for fn in all_data_fns[iobs]:
@@ -847,7 +853,12 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     else:  # power spectrum
                         _data.append(observable)
                 data.append(types.mean(_data))
-                if _windows:
+                if is_compressed:
+                    # Placeholder
+                    windows.append(types.WindowMatrix(value=np.eye(data[-1].size),
+                                                      observable=data.clone(value=np.zeros_like(data.value())),
+                                                      theory=data.clone(value=np.zeros_like(data.value()))))
+                elif _windows:
                     windows.append(_windows[0])
                 else:
                     imock = file_kw.get('imock', None)
@@ -1049,7 +1060,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     -------
     ObservablesGaussianLikelihood
     """
-    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable, Spectrum3PolesObservable, Correlation2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable, Spectrum3PolesObservable, Correlation2PolesObservable, BAOCompressionObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike import Parameter
     # likelihood_options: {'observables': [observable_options], 'covariance': {}}
@@ -1065,16 +1076,12 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
         data_attrs = dict(data.attrs) | label
-        for _, pole in window.observable.items(level=None):
-            data_attrs['z'] = pole.attrs['zeff']
         namespace = _str_from_observable_options(observable_options, level={'catalog': 1, 'stat': 0, 'theory': 0, 'covariance': 0})
         data_attrs['tracers'] = namespace.split('x')
         if namespace not in nbar:
-            nbar[namespace] = 1. / stats.observable.get(observables=label['observables'], tracers=label['tracers'], ells=0).values('shotnoise').mean()
+            nbar[namespace] = 1. / stats.observable.get(observables='spectrum2', tracers=label['tracers'], ells=0).values('shotnoise').mean()
         data_attrs['nbar'] = nbar[namespace]
         suffix = 'x'.join(data_attrs['tracers'])
-        if mpicomm.rank == 0:
-            logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
         if suffix:
             suffix = '_' + suffix
         observable_name = stat + suffix
@@ -1084,28 +1091,37 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             cls = Spectrum3PolesObservable
         elif 'particle2_correlation' in stat:
             cls = Correlation2PolesObservable
+        elif 'bao' in stat:
+            cls = BAOCompressionObservable
         else:
             raise NotImplementedError(stat)
-        theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
-
-        if cls == Spectrum3PolesObservable:
-            # Compactify window theory
-            window = rebin_spectrum3_window(window, data=data)
-        window = select_window_theory(window, data)
-        templates = None
-        if hasattr(window.theory, 'types'):  # with systematic templates
-            templates = []
-            for label, theory in window.theory.items():
-                if label['types'] != 'theory':
-                    mean, sigma = theory.values('value'), theory.values('sigma')
-                    param = Parameter(basename=label['types'], namespace=namespace,
-                                    ref=dict(dist='norm', loc=mean, scale=sigma),
-                                    prior=dict(dist='norm', loc=mean, scale=sigma),
-                                    derived='best')
-                    template = window.at.theory.get(**label).value()
-                    templates.append((param, template))
-            window = window.at.theory.get('theory')  # window becomes the "standard window"
-        observable = cls(data=data, window=window, theory=theory, templates=templates, name=observable_name)
+        is_compressed = _stat_is_compressed(stat)
+        if is_compressed:  # e.g. BAO
+            observable = cls(data=data.value(), z=data.attrs['zeff'], parameters=list(data.params))
+        else:
+            theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
+            for _, pole in window.observable.items(level=None):
+                data_attrs['z'] = pole.attrs['zeff']
+            if mpicomm.rank == 0:
+                logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
+            if cls == Spectrum3PolesObservable:
+                # Compactify window theory
+                window = rebin_spectrum3_window(window, data=data)
+            window = select_window_theory(window, data)
+            templates = None
+            if hasattr(window.theory, 'types'):  # with systematic templates
+                templates = []
+                for label, theory in window.theory.items():
+                    if label['types'] != 'theory':
+                        mean, sigma = theory.values('value'), theory.values('sigma')
+                        param = Parameter(basename=label['types'], namespace=namespace,
+                                        ref=dict(dist='norm', loc=mean, scale=sigma),
+                                        prior=dict(dist='norm', loc=mean, scale=sigma),
+                                        derived='best')
+                        template = window.at.theory.get(**label).value()
+                        templates.append((param, template))
+                window = window.at.theory.get('theory')  # window becomes the "standard window"
+            observable = cls(data=data, window=window, theory=theory, templates=templates, name=observable_name)
         if observable_options['emulator']['name']:
             assert cache_dir is not None, 'cache_dir must be provided for emulator'
             read_cache = cache_dir is not None and 'r' in cache_mode
@@ -1123,14 +1139,17 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
                 emulator = TaylorEmulator.read(str(cache_fn))
             else:
                 logger.info(f'Fitting emulator {cache_fn}')
-                pt_graph = compile(theory.pt)
+                pt_graph = compile(observable.theory if is_compressed else theory.pt)
                 emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
                 if write_cache:
                     mkdir(cache_fn.parent)
                     emulator.write(str(cache_fn))
             emulated_pt = emulator.to_calculator()
-            theory.update(pt=emulated_pt)
+            if is_compressed:
+                observable.update(theory=emulated_pt)
+            else:
+                theory.update(pt=emulated_pt)
         observables.append(observable)
     return ObservablesGaussianLikelihood(observables, covariance=covariance.value())
 
@@ -1212,12 +1231,14 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
     propose_stat = {'mesh2_spectrum': {'select': [{'ells': ell, 'k': [0.02, 0.2, 0.01]} for ell in [0, 2]]},
                     'mesh3_spectrum': {'select': [{'ells': (0, 0, 0), 'k': [0.02, 0.12, 0.01]}, {'ells': (2, 0, 2), 'k': [0.02, 0.08, 0.01]}],
                                         'basis': 'sugiyama-diagonal'},
-                   'recon_particle2_correlation': {'select': [{'ells': ell, 's': [60., 150., 4.]} for ell in [0, 2]]}}
+                   'recon_particle2_correlation': {'select': [{'ells': ell, 's': [60., 150., 4.]} for ell in [0, 2]]},
+                   'recon_bao': {}}
     base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'damping': 'lor', 'marg': True}
     base_bao_theory = {'model': 'bao', 'broadband': 'pcs2', 'marg': True}
     propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'coevolution': '', 'A_full': False},
                       'mesh3_spectrum': base_full_shape_theory | {'A_full': False},
-                      'recon_particle2_correlation': base_bao_theory}
+                      'recon_particle2_correlation': base_bao_theory,
+                      'recon_bao': {}}
     for _stat in propose_stat:
         if _stat in stat:
             propose_fiducial['stat'].update(propose_stat[_stat])

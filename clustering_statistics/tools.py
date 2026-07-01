@@ -144,6 +144,8 @@ def get_simple_stats(stats):
         return 'correlation3'
     elif stats == 'recon_particle3_correlation':
         return 'correlation3recon'
+    elif stats == 'recon_bao':
+        return 'baorecon'
     else:
         raise NotImplementedError(f'stats {stats} is unknown')
 
