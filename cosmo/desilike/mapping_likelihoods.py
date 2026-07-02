@@ -14,6 +14,8 @@ Skipped families / individual names:
   - CMB-compressed-fake-* : uses a non-existent cobaya class, skipped
 """
 
+import functools
+
 
 # ---------------------------------------------------------------------------
 # BAO
@@ -29,6 +31,17 @@ _BAO_ZBINS = {
     'desi-dr2-bao-elg':        ['ELG2'],
     'desi-dr2-bao-qso':        ['QSO'],
     'desi-dr2-bao-lya':        ['Lya'],
+}
+
+
+# Likelihoods backed by external measurement files (mean + covariance txt).
+# Built on-the-fly via bao_likelihood_from_files; not downloaded by install().
+_BAO_MEASUREMENT_FILES_DIR = '/global/cfs/cdirs/desicollab/science/cpe/dr2_fs/lya_fs/likelihood/cobaya/measurements'
+_BAO_MEASUREMENT_FILES = {
+    'desi-dr2-bao-gqc-lya-fs': (
+        'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_mean.txt',
+        'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_cov.txt',
+    ),
 }
 
 
@@ -101,6 +114,196 @@ _CMB_NOT_IMPLEMENTED = {
     'planck2018-lensing-clik',
 }
 
+# CMB — PR4 standard compression (thetastar, ombh2, ombch2)
+_PR4_STANDARD_MAP = {
+    'CMB-compressed-theta':                       (['thetastar'],                     False),
+    'CMB-compressed-ombh2':                       (['ombh2'],                         False),
+    'CMB-compressed-ombch2':                      (['ombch2'],                        False),
+    'CMB-compressed-theta-ombh2':                 (['thetastar', 'ombh2'],            False),
+    'CMB-compressed-ombh2-ombch2':                (['ombh2', 'ombch2'],               False),
+    'CMB-compressed-theta-ombh2-ombch2':          (['thetastar', 'ombh2', 'ombch2'], False),
+    'CMB-compressed-theta-ombh2-marg-nnu':        (['thetastar', 'ombh2'],            True),
+    'CMB-compressed-ombh2-ombch2-marg-nnu':       (['ombh2', 'ombch2'],               True),
+    'CMB-compressed-theta-ombh2-ombch2-marg-nnu': (['thetastar', 'ombh2', 'ombch2'], True),
+}
+
+# CMB — PR3 shift-parameter compression (R, lA, ombh2, omch2)
+_PR3_SHIFT_MAP = {
+    'CMB-compressed-R-lA':                       (['R', 'lA'],               False),
+    'CMB-compressed-R-lA-ombh2':                 (['R', 'lA', 'ombh2'],      False),
+    'CMB-compressed-R-lA-ombh2-ombch2':          (['R', 'lA', 'ombh2', 'omch2'], False),
+    'CMB-compressed-R-lA-marg-nnu':              (['R', 'lA'],               True),
+    'CMB-compressed-R-lA-ombh2-marg-nnu':        (['R', 'lA', 'ombh2'],      True),
+    'CMB-compressed-R-lA-ombh2-ombch2-marg-nnu': (['R', 'lA', 'ombh2', 'omch2'], True),
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _likelihood_map():
+    """Return the name → [(cls, init_kwargs)] mapping for all non-FS likelihoods.
+
+    Values are lists of (class, kwargs) pairs; ``cosmo`` is always added by the
+    caller at instantiation time.  The result is cached after the first call so
+    the imports run only once.
+    """
+    from desilike.likelihoods.bao import DESIDR2BAOLikelihood
+    from desilike.likelihoods.bbn import Schoneberg2024BBNLikelihood, BaseBBNLikelihood
+    import desilike.likelihoods.supernovae as _sn_mod
+    from desilike.likelihoods.cmb.candl import (
+        PlanckPR3LowlTTLikelihood, PlanckPR3LowlEELikelihood, PlanckPR3LowlEESroll2Likelihood,
+        PlanckPR3TTLikelihood, PlanckPR3TTTEEELikelihood, PlanckPR3TTTEEELiteLikelihood,
+        ACTDR6TTTEEELikelihood, SPT3GD1TnELikelihood,
+    )
+    from desilike.likelihoods.cmb import (
+        TTHighlPlanckNPIPECamspecLikelihood, TTTEEEHighlPlanckNPIPECamspecLikelihood,
+        TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood, TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood,
+        ACTDR6SPTLensingLikelihood,
+    )
+    from desilike.likelihoods.cmb.camspec import CamspecNPIPELiteLikelihood
+    from cosmo.desilike.external_likelihoods.cmb import (
+        PlanckPR3ThetaStarFixedNnuLikelihood, PlanckPR3ThetaStarVariedNnuLikelihood,
+        PlanckPR3ThetaStarMargNnuLikelihood, PlanckPR3RdragLikelihood,
+        PlanckPR4StandardCompressionLikelihood, PlanckPR3ShiftParameterCompressionLikelihood,
+    )
+
+    m = {}
+
+    for bao_name, zbins in _BAO_ZBINS.items():
+        m[bao_name] = [(DESIDR2BAOLikelihood, {'zbins': zbins})]
+
+    m['schoneberg2024-bbn'] = [(Schoneberg2024BBNLikelihood, {})]
+
+    for sn_name, (cls_name, zrange) in _SN_MAP.items():
+        m[sn_name] = [(getattr(_sn_mod, cls_name), {'zrange': zrange})]
+
+    for alias in ('planck2018-lowl-TT', 'planck2018-lowl-TT-clik', 'planck2018-lowl-TT-11-29-clik'):
+        m[alias] = [(PlanckPR3LowlTTLikelihood, {})]
+    for alias in ('planck2018-lowl-EE', 'planck2018-lowl-EE-clik'):
+        m[alias] = [(PlanckPR3LowlEELikelihood, {})]
+    m['planck2018-lowl-EE-sroll2'] = [(PlanckPR3LowlEESroll2Likelihood, {})]
+
+    m['planck2018-highl-plik-TT'] = [(PlanckPR3TTLikelihood, {})]
+    m['planck2018-highl-plik-TTTEEE'] = [(PlanckPR3TTTEEELikelihood, {})]
+    m['planck2018-highl-plik-TTTEEE-lite'] = [(PlanckPR3TTTEEELiteLikelihood, {})]
+
+    m['planck-NPIPE-highl-CamSpec-TT'] = [(TTHighlPlanckNPIPECamspecLikelihood, {})]
+    m['planck-NPIPE-highl-CamSpec-TTTEEE'] = [(TTTEEEHighlPlanckNPIPECamspecLikelihood, {})]
+    m['planck-NPIPE-highl-CamSpec-TTTEEE-ell-max-600'] = [(TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood, {})]
+    m['planck-NPIPE-highl-CamSpec-TTTEEE-cuts-for-act'] = [(TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood, {})]
+
+    # Planck plik-lite/ACT/SPT-3G ell ranges chosen to avoid overlap between datasets
+    _cmb_spa_entries = [
+        (PlanckPR3LowlTTLikelihood, {}),
+        (PlanckPR3LowlEESroll2Likelihood, {}),
+        (PlanckPR3TTTEEELiteLikelihood, {'data_selection': ['TT ell<1001 only', 'TE ell<601 only', 'EE ell<601 only']}),
+        (ACTDR6TTTEEELikelihood, {'data_selection': ['ell>600 only']}),
+        (SPT3GD1TnELikelihood, {'variant': 'lite'}),
+        (ACTDR6SPTLensingLikelihood, {'variant': 'actplanckspt3g_baseline'}),
+    ]
+    m['CMB-SPA'] = _cmb_spa_entries
+    m['CMB-SPA-tauprior'] = _cmb_spa_entries + [
+        (BaseBBNLikelihood, {'mean': [0.051], 'covariance': [[0.006 ** 2]], 'quantities': ['tau_reio']}),
+    ]
+
+    m['planck2018-thetastar-fixed-nnu'] = [(PlanckPR3ThetaStarFixedNnuLikelihood, {})]
+    m['planck2018-thetastar-varied-nnu'] = [(PlanckPR3ThetaStarVariedNnuLikelihood, {})]
+    m['planck2018-thetastar-fixed-marg-nnu'] = [(PlanckPR3ThetaStarMargNnuLikelihood, {})]
+    m['planck2018-rdrag-fixed-nnu'] = [(PlanckPR3RdragLikelihood, {})]
+
+    for cname, (observables, inflate_cov) in _PR4_STANDARD_MAP.items():
+        m[cname] = [(PlanckPR4StandardCompressionLikelihood, {'observables': observables, 'inflate_cov': inflate_cov})]
+    for cname, (observables, inflate_cov) in _PR3_SHIFT_MAP.items():
+        m[cname] = [(PlanckPR3ShiftParameterCompressionLikelihood, {'observables': observables, 'inflate_cov': inflate_cov})]
+
+    m['CMB-SP4A'] = [
+        (CamspecNPIPELiteLikelihood, {'ell_cuts': {'TT': [30, 1500], 'TE': [30, 1000], 'EE': [30, 600]}}),
+        (ACTDR6TTTEEELikelihood, {'ell_cuts': {'TT': [1500, 6500], 'TE': [1000, 6500], 'EE': [600, 6500]}}),
+        (SPT3GD1TnELikelihood, {'variant': 'lite'}),
+    ]
+
+    m['act-dr6-lensing'] = [(ACTDR6SPTLensingLikelihood, {'variant': 'act_baseline'})]
+    m['planck-act-dr6-lensing'] = [(ACTDR6SPTLensingLikelihood, {'variant': 'actplanck_baseline'})]
+
+    return m
+
+
+def install(names, **installer_kwargs):
+    """Download and install data files required by the named likelihood(s).
+
+    Parameters
+    ----------
+    names : str or list of str
+        Likelihood names as defined in the registry.
+    **installer_kwargs
+        Passed to :class:`desilike.install.Installer`.
+    """
+    from desilike.install import Installer
+    installer = Installer(**installer_kwargs)
+    installed = set()
+    if isinstance(names, str):
+        names = [names]
+    for name in names:
+        for cls, _ in _likelihood_map().get(name, []):
+            if cls not in installed and hasattr(cls, 'install'):
+                cls.install(installer)
+                installed.add(cls)
+        # FS likelihoods: data lives on NERSC disk — no install needed
+
+
+def bao_likelihood_from_files(mean_fn, cov_fn, cosmo=None, name=None):
+    """Build a BAO Gaussian likelihood directly from cobaya-style text files.
+
+    Uses the same file format and machinery as :class:`~desilike.likelihoods.bao.DESIDR2BAOLikelihood`
+    but accepts arbitrary file paths, making it easy to test alternative measurements
+    or redshift binnings without adding entries to the internal registry.
+
+    Parameters
+    ----------
+    mean_fn : str
+        Path to the mean-values file.  Each non-comment line has the format
+        ``z  value  quantity``, where *quantity* is one of ``DM_over_rs``,
+        ``DH_over_rs``, or ``DV_over_rs``.  Multiple redshifts are supported;
+        each distinct redshift becomes a separate observable.
+    cov_fn : str
+        Path to the covariance file (whitespace-delimited flat list of N² floats,
+        reshaped to N×N where N equals the total number of measurement rows in
+        *mean_fn*).
+    cosmo : BasePrimordialCosmology, optional
+        Shared cosmology calculator.  Defaults to
+        ``CosmoprimoCosmology(fiducial='DESI')``.
+    name : str, optional
+        Base name for the observables.  For multi-z files the per-z name is
+        ``'{name}/{z_eff}'``.  Defaults to the stem of *mean_fn*.
+
+    Returns
+    -------
+    :class:`~desilike.likelihoods.base.ObservablesGaussianLikelihood`
+    """
+    import os
+    from desilike.likelihoods.bao import _read_mean_file, _read_cov_file
+    from desilike.observables.galaxy_clustering.compressed import BAOCompressionObservable
+    from desilike.likelihoods.base import ObservablesGaussianLikelihood
+
+    if cosmo is None:
+        from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+        cosmo = CosmoprimoCosmology(fiducial='DESI')
+    if name is None:
+        name = os.path.splitext(os.path.basename(mean_fn))[0]
+
+    z_groups = _read_mean_file(mean_fn)
+    total_params = sum(len(param_names) for _, _, param_names in z_groups)
+    covariance = _read_cov_file(cov_fn, total_params)
+
+    observables = []
+    for z_eff, meas_values, param_names in z_groups:
+        obs_name = f'{name}/{z_eff}' if len(z_groups) > 1 else name
+        observables.append(BAOCompressionObservable(
+            data=meas_values, parameters=param_names, name=obs_name,
+            z=z_eff, cosmo=cosmo,
+        ))
+
+    return ObservablesGaussianLikelihood(observables, covariance=covariance)
+
 
 def get_likelihood(name, cosmo=None, **kwargs):
     """Return the desilike likelihood instance(s) for a named likelihood.
@@ -127,207 +330,32 @@ def get_likelihood(name, cosmo=None, **kwargs):
     NotImplementedError
         If *name* is known but has no desilike equivalent yet.
     """
-    # ------------------------------------------------------------------
-    # BAO
-    # ------------------------------------------------------------------
-    if name in _BAO_ZBINS:
-        from desilike.likelihoods.bao import DESIDR2BAOLikelihood
-        return DESIDR2BAOLikelihood(zbins=_BAO_ZBINS[name], cosmo=cosmo)
+    entries = _likelihood_map().get(name)
+    if entries is not None:
+        likelihoods = [cls(cosmo=cosmo, **init_kwargs) for cls, init_kwargs in entries]
+        return likelihoods[0] if len(likelihoods) == 1 else likelihoods
 
-    # ------------------------------------------------------------------
-    # BBN
-    # ------------------------------------------------------------------
-    if name == 'schoneberg2024-bbn':
-        from desilike.likelihoods.bbn import Schoneberg2024BBNLikelihood
-        return Schoneberg2024BBNLikelihood(cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # SN
-    # ------------------------------------------------------------------
-    if name in _SN_MAP:
-        cls_name, zrange = _SN_MAP[name]
-        import desilike.likelihoods.supernovae as sn_mod
-        cls = getattr(sn_mod, cls_name)
-        return cls(cosmo=cosmo, zrange=zrange)
-
-    # ------------------------------------------------------------------
-    # CMB — names that have no desilike equivalent
-    # ------------------------------------------------------------------
     if name in _CMB_NOT_IMPLEMENTED:
         raise NotImplementedError(f'No desilike equivalent for likelihood {name!r}.')
 
     # ------------------------------------------------------------------
-    # CMB — Planck 2018 low-ell (via candl/clipy clik wrappers)
+    # File-backed BAO likelihoods (external measurement files, no install)
     # ------------------------------------------------------------------
-    if name in ('planck2018-lowl-TT', 'planck2018-lowl-TT-clik', 'planck2018-lowl-TT-11-29-clik'):
-        from desilike.likelihoods.cmb.candl import PlanckPR3LowlTTLikelihood
-        return PlanckPR3LowlTTLikelihood(cosmo=cosmo)
-
-    if name in ('planck2018-lowl-EE', 'planck2018-lowl-EE-clik'):
-        from desilike.likelihoods.cmb.candl import PlanckPR3LowlEELikelihood
-        return PlanckPR3LowlEELikelihood(cosmo=cosmo)
-
-    if name == 'planck2018-lowl-EE-sroll2':
-        from desilike.likelihoods.cmb.candl import PlanckPR3LowlEESroll2Likelihood
-        return PlanckPR3LowlEESroll2Likelihood(cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # CMB — Planck 2018 plik high-ell (via candl/clipy clik wrappers)
-    # ------------------------------------------------------------------
-    if name == 'planck2018-highl-plik-TT':
-        from desilike.likelihoods.cmb.candl import PlanckPR3TTLikelihood
-        return PlanckPR3TTLikelihood(cosmo=cosmo)
-
-    if name == 'planck2018-highl-plik-TTTEEE':
-        from desilike.likelihoods.cmb.candl import PlanckPR3TTTEEELikelihood
-        return PlanckPR3TTTEEELikelihood(cosmo=cosmo)
-
-    if name == 'planck2018-highl-plik-TTTEEE-lite':
-        from desilike.likelihoods.cmb.candl import PlanckPR3TTTEEELiteLikelihood
-        return PlanckPR3TTTEEELiteLikelihood(cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # CMB — Planck NPIPE CamSpec high-ell (native Python)
-    # ------------------------------------------------------------------
-    if name == 'planck-NPIPE-highl-CamSpec-TT':
-        from desilike.likelihoods.cmb import TTHighlPlanckNPIPECamspecLikelihood
-        return TTHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo)
-
-    if name == 'planck-NPIPE-highl-CamSpec-TTTEEE':
-        from desilike.likelihoods.cmb import TTTEEEHighlPlanckNPIPECamspecLikelihood
-        return TTTEEEHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo)
-
-    if name == 'planck-NPIPE-highl-CamSpec-TTTEEE-ell-max-600':
-        from desilike.likelihoods.cmb import TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood
-        return TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood(cosmo=cosmo)
-
-    if name == 'planck-NPIPE-highl-CamSpec-TTTEEE-cuts-for-act':
-        from desilike.likelihoods.cmb import TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood
-        return TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood(cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # CMB — CMB-SPA composite (Planck low-ell + ACT DR6 CMB + SPT-3G + lensing)
-    # ------------------------------------------------------------------
-    if name in ('CMB-SPA', 'CMB-SPA-tauprior'):
-        from desilike.likelihoods.cmb.candl import (
-            PlanckPR3LowlTTLikelihood, PlanckPR3LowlEESroll2Likelihood,
-            PlanckPR3TTTEEELiteLikelihood, ACTDR6TTTEEELikelihood, SPT3GD1TnELikelihood,
+    if name in _BAO_MEASUREMENT_FILES:
+        import os
+        mean_fn, cov_fn = _BAO_MEASUREMENT_FILES[name]
+        data_dir = kwargs.get('data_dir', _BAO_MEASUREMENT_FILES_DIR)
+        return bao_likelihood_from_files(
+            os.path.join(data_dir, mean_fn),
+            os.path.join(data_dir, cov_fn),
+            cosmo=cosmo, name=name,
         )
-        from desilike.likelihoods.cmb import ACTDR6SPTLensingLikelihood
-        likelihoods = [
-            PlanckPR3LowlTTLikelihood(cosmo=cosmo),
-            PlanckPR3LowlEESroll2Likelihood(cosmo=cosmo),
-            # Planck plik-lite restricted to ell ≤ 1000 (TT) / ≤ 600 (TE, EE)
-            # to avoid overlap with ACT DR6 primary CMB at higher ell.
-            PlanckPR3TTTEEELiteLikelihood(cosmo=cosmo,
-                data_selection=['TT ell<1001 only', 'TE ell<601 only', 'EE ell<601 only']),
-            # ACT DR6 foreground-marginalized CMB-only (same data as candl_data.ACT_DR6_TTTEEE)
-            # restricted to ell > 600 to complement the Planck plik-lite cut above.
-            ACTDR6TTTEEELikelihood(cosmo=cosmo, data_selection=['ell>600 only']),
-            SPT3GD1TnELikelihood(variant='lite', cosmo=cosmo),
-            ACTDR6SPTLensingLikelihood(variant='actplanckspt3g_baseline', cosmo=cosmo),
-        ]
-        if name == 'CMB-SPA-tauprior':
-            from desilike.likelihoods.bbn import BaseBBNLikelihood
-            # External Gaussian prior on tau_reio used in place of a low-ell EE data constraint.
-            likelihoods.append(
-                BaseBBNLikelihood(mean=[0.051], covariance=[[0.006 ** 2]],
-                                  quantities=['tau_reio'], cosmo=cosmo)
-            )
-        return likelihoods
 
     # ------------------------------------------------------------------
-    # CMB — Planck 2018 thetastar priors
-    # ------------------------------------------------------------------
-    if name == 'planck2018-thetastar-fixed-nnu':
-        from cosmo.desilike.external_likelihoods.cmb import PlanckPR3ThetaStarFixedNnuLikelihood
-        return PlanckPR3ThetaStarFixedNnuLikelihood(cosmo=cosmo)
-
-    if name == 'planck2018-thetastar-varied-nnu':
-        from cosmo.desilike.external_likelihoods.cmb import PlanckPR3ThetaStarVariedNnuLikelihood
-        return PlanckPR3ThetaStarVariedNnuLikelihood(cosmo=cosmo)
-
-    if name == 'planck2018-thetastar-fixed-marg-nnu':
-        from cosmo.desilike.external_likelihoods.cmb import PlanckPR3ThetaStarMargNnuLikelihood
-        return PlanckPR3ThetaStarMargNnuLikelihood(cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # CMB — Planck 2018 rdrag prior
-    # ------------------------------------------------------------------
-    if name == 'planck2018-rdrag-fixed-nnu':
-        from cosmo.desilike.external_likelihoods.cmb import PlanckPR3RdragLikelihood
-        return PlanckPR3RdragLikelihood(cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # CMB — PR4 standard compression (thetastar, ombh2, ombch2)
-    # ------------------------------------------------------------------
-    _PR4_STANDARD_MAP = {
-        'CMB-compressed-theta':                    (['thetastar'],               False),
-        'CMB-compressed-ombh2':                    (['ombh2'],                   False),
-        'CMB-compressed-ombch2':                   (['ombch2'],                  False),
-        'CMB-compressed-theta-ombh2':              (['thetastar', 'ombh2'],      False),
-        'CMB-compressed-ombh2-ombch2':             (['ombh2', 'ombch2'],         False),
-        'CMB-compressed-theta-ombh2-ombch2':       (['thetastar', 'ombh2', 'ombch2'], False),
-        'CMB-compressed-theta-ombh2-marg-nnu':     (['thetastar', 'ombh2'],      True),
-        'CMB-compressed-ombh2-ombch2-marg-nnu':    (['ombh2', 'ombch2'],         True),
-        'CMB-compressed-theta-ombh2-ombch2-marg-nnu': (['thetastar', 'ombh2', 'ombch2'], True),
-    }
-    if name in _PR4_STANDARD_MAP:
-        from cosmo.desilike.external_likelihoods.cmb import PlanckPR4StandardCompressionLikelihood
-        observables, inflate_cov = _PR4_STANDARD_MAP[name]
-        return PlanckPR4StandardCompressionLikelihood(observables=observables,
-                                                      inflate_cov=inflate_cov, cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # CMB — PR3 shift-parameter compression (R, lA, ombh2, omch2)
-    # ------------------------------------------------------------------
-    _PR3_SHIFT_MAP = {
-        'CMB-compressed-R-lA':                    (['R', 'lA'],               False),
-        'CMB-compressed-R-lA-ombh2':              (['R', 'lA', 'ombh2'],      False),
-        'CMB-compressed-R-lA-ombh2-ombch2':       (['R', 'lA', 'ombh2', 'omch2'], False),
-        'CMB-compressed-R-lA-marg-nnu':           (['R', 'lA'],               True),
-        'CMB-compressed-R-lA-ombh2-marg-nnu':     (['R', 'lA', 'ombh2'],      True),
-        'CMB-compressed-R-lA-ombh2-ombch2-marg-nnu': (['R', 'lA', 'ombh2', 'omch2'], True),
-    }
-    if name in _PR3_SHIFT_MAP:
-        from cosmo.desilike.external_likelihoods.cmb import PlanckPR3ShiftParameterCompressionLikelihood
-        observables, inflate_cov = _PR3_SHIFT_MAP[name]
-        return PlanckPR3ShiftParameterCompressionLikelihood(observables=observables,
-                                                            inflate_cov=inflate_cov, cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # CMB — CMB-SP4A (CamSpec NPIPE lite + ACT DR6 CMBonly + SPT-3G lite)
-    # ------------------------------------------------------------------
-    if name == 'CMB-SP4A':
-        from desilike.likelihoods.cmb.camspec import CamspecNPIPELiteLikelihood
-        from desilike.likelihoods.cmb.candl import ACTDR6TTTEEELikelihood, SPT3GD1TnELikelihood
-        return [
-            CamspecNPIPELiteLikelihood(
-                ell_cuts={'TT': [30, 1500], 'TE': [30, 1000], 'EE': [30, 600]},
-                cosmo=cosmo),
-            ACTDR6TTTEEELikelihood(
-                ell_cuts={'TT': [1500, 6500], 'TE': [1000, 6500], 'EE': [600, 6500]},
-                cosmo=cosmo),
-            SPT3GD1TnELikelihood(variant='lite', cosmo=cosmo),
-        ]
-
-    # ------------------------------------------------------------------
-    # CMB — ACT DR6 lensing (JAX-native; uses act_dr6_spt_lenslike)
-    # ------------------------------------------------------------------
-    if name == 'act-dr6-lensing':
-        from desilike.likelihoods.cmb import ACTDR6SPTLensingLikelihood
-        return ACTDR6SPTLensingLikelihood(variant='act_baseline', cosmo=cosmo)
-
-    if name == 'planck-act-dr6-lensing':
-        from desilike.likelihoods.cmb import ACTDR6SPTLensingLikelihood
-        return ACTDR6SPTLensingLikelihood(variant='actplanck_baseline', cosmo=cosmo)
-
-    # ------------------------------------------------------------------
-    # Full-shape (FS)
+    # Full-shape (FS) — uses full_shape.tools API, not a simple cls(**kwargs)
     # ------------------------------------------------------------------
     if name in _FS_TRACERS:
         from full_shape.tools import generate_likelihood_options_helper, get_likelihood as _get_fs_likelihood, fill_fiducial_options
-        # Merge registered defaults with any caller overrides (except cache_dir, which goes to _get_fs_likelihood)
         cache_dir = kwargs.get('cache_dir', None)
         helper_kwargs = {**_FS_TRACERS[name], **{k: v for k, v in kwargs.items() if k != 'cache_dir'}}
         tracer = helper_kwargs.pop('tracer', None)
@@ -340,9 +368,6 @@ def get_likelihood(name, cosmo=None, **kwargs):
         cosmology_options = cosmo if cosmo is not None else options.get('cosmology')
         return _get_fs_likelihood(options['likelihoods'], cosmology_options=cosmology_options, cache_dir=cache_dir)
 
-    # ------------------------------------------------------------------
-    # Unknown name
-    # ------------------------------------------------------------------
     try:
         from cosmo.cobaya.mapping_likelihoods import LIKELIHOOD_REGISTRY
         if name in LIKELIHOOD_REGISTRY:

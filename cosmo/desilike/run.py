@@ -168,7 +168,6 @@ def get_profiler_cls(name):
     return translate[name.lower()]
 
 
-
 def profile_desilike(posterior, kernel='minuit', init: dict=None, run: dict=None, output_fn=None):
     from pathlib import Path
     from desilike.profilers import Profiler
