@@ -1633,7 +1633,7 @@ def _str_from_observable_options(options: dict, level: int=None) -> str:
                 found = name
                 break
         if found is None:
-            raise ValueError(f'could not find shot naame for {stat}')
+            raise ValueError(f'could not find shot name for {stat}')
         out_str.append(found)
     if level['stat'] >= 2:
         select_str = []

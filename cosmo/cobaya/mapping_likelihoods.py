@@ -18,42 +18,42 @@ from pathlib import Path
 DEFAULT_BAO_DATA_PATH = Path('/global/cfs/cdirs/desicollab/science/cpe/y3_bao_cosmo/bao_v1p2/bao/cobaya_data')
 
 BAO_DR2_DATASETS = {
-    'desi-bao-all': {
+    'desi-dr2-bao-all': {
         'likelihood': 'desi_dr2_bao_all',
         'measurements_file': 'desi_gaussian_bao_ALL_GCcomb_mean.txt',
         'cov_file': 'desi_gaussian_bao_ALL_GCcomb_cov.txt',
     },
-    'desi-bao-bgs': {
+    'desi-dr2-bao-bgs': {
         'likelihood': 'desi_dr2_bao_bgs_z1',
         'measurements_file': 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4_mean.txt',
         'cov_file': 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4_cov.txt',
     },
-    'desi-bao-lrg-z1': {
+    'desi-dr2-bao-lrg-z1': {
         'likelihood': 'desi_dr2_bao_lrg_z1',
         'measurements_file': 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6_mean.txt',
         'cov_file': 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6_cov.txt',
     },
-    'desi-bao-lrg-z2': {
+    'desi-dr2-bao-lrg-z2': {
         'likelihood': 'desi_dr2_bao_lrg_z2',
         'measurements_file': 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8_mean.txt',
         'cov_file': 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8_cov.txt',
     },
-    'desi-bao-lrgpluselg': {
+    'desi-dr2-bao-lrgpluselg': {
         'likelihood': 'desi_dr2_bao_lrgpluselg_z1',
         'measurements_file': 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1_mean.txt',
         'cov_file': 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1_cov.txt',
     },
-    'desi-bao-elg': {
+    'desi-dr2-bao-elg': {
         'likelihood': 'desi_dr2_bao_elg_z2',
         'measurements_file': 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6_mean.txt',
         'cov_file': 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6_cov.txt',
     },
-    'desi-bao-qso': {
+    'desi-dr2-bao-qso': {
         'likelihood': 'desi_dr2_bao_qso_z1',
         'measurements_file': 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1_mean.txt',
         'cov_file': 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1_cov.txt',
     },
-    'desi-bao-lya': {
+    'desi-dr2-bao-lya': {
         'likelihood': 'desi_dr2_bao_lya',
         'measurements_file': 'desi_gaussian_bao_Lya_GCcomb_mean.txt',
         'cov_file': 'desi_gaussian_bao_Lya_GCcomb_cov.txt',
@@ -273,15 +273,22 @@ BAO_LIKELIHOODS = {
     for name, metadata in BAO_DR2_DATASETS.items()
 }
 
+from cosmo.desilike.mapping_likelihoods import _FS_TRACERS as _desilike_FS_TRACERS
+FS_LIKELIHOODS = {
+    fs_name: {'family': 'fs', 'parameterization': 'lss'}
+    for fs_name in _desilike_FS_TRACERS
+}
+
 LIKELIHOOD_REGISTRY = {
     **BAO_LIKELIHOODS,
     **SN_LIKELIHOODS,
     **BBN_LIKELIHOODS,
     **CMB_LIKELIHOODS,
+    **FS_LIKELIHOODS,
 }
 
 
-def normalize_likelihoods(likelihoods=None, dataset=None, default='desi-bao-all', registry=LIKELIHOOD_REGISTRY):
+def normalize_likelihoods(likelihoods=None, dataset=None, default='desi-dr2-bao-all', registry=LIKELIHOOD_REGISTRY):
     """Normalize one or more likelihood names to a list of strings."""
     if likelihoods is None:
         likelihoods = dataset
@@ -310,17 +317,20 @@ def get_likelihood_families(likelihoods=None, dataset=None, registry=LIKELIHOOD_
                                                                              registry=registry)})
 
 
+_PARAMETERIZATION_PRIORITY = {'background': 0, 'lss': 1, 'cmb': 2}
+
+
 def get_parameterization(likelihoods=None, dataset=None, registry=LIKELIHOOD_REGISTRY):
-    """Return the cosmological parameterization required by likelihoods."""
+    """Return the cosmological parameterization required by likelihoods.
+
+    Priority order: ``'cmb'`` > ``'lss'`` > ``'background'``.  The highest-priority
+    parameterization across all listed likelihoods is returned.
+    """
     parameterizations = {metadata.get('parameterization', 'background')
                          for metadata in get_likelihood_metadata(likelihoods=likelihoods,
                                                                  dataset=dataset,
                                                                  registry=registry)}
-    if parameterizations == {'background'}:
-        return 'background'
-    if len(parameterizations) == 1:
-        return parameterizations.pop()
-    return 'general'
+    return max(parameterizations, key=lambda p: _PARAMETERIZATION_PRIORITY.get(p, -1))
 
 
 # -----------------------------------------------------------------------------
@@ -328,34 +338,34 @@ def get_parameterization(likelihoods=None, dataset=None, registry=LIKELIHOOD_REG
 # -----------------------------------------------------------------------------
 
 LIKELIHOOD_COMBINATIONS = {
-    'bao': ['desi-bao-all'],
-    'bao-sn-pantheonplus': ['desi-bao-all', 'pantheonplus'],
-    'bao-sn-union3': ['desi-bao-all', 'union3'],
-    'bao-sn-desy5': ['desi-bao-all', 'desy5sn'],
-    'bao-sn-desdovekie': ['desi-bao-all', 'desdovekie'],
-    'bao-sn-pantheonplus-zmin0.1': ['desi-bao-all', 'pantheonplus-zmin0.1'],
-    'bao-sn-union3-zmin0.1': ['desi-bao-all', 'union3-zmin0.1'],
-    'bao-sn-desy5-zmin0.1': ['desi-bao-all', 'desy5sn-zmin0.1'],
-    'bao-bbn': ['desi-bao-all', 'schoneberg2024-bbn'],
-    'bao-bbn-fixed-nnu': ['desi-bao-all', 'schoneberg2024-bbn-fixed-nnu'],
-    'bao-thetastar-fixed-nnu': ['desi-bao-all', 'planck2018-thetastar-fixed-nnu'],
-    'bao-thetastar-varied-nnu': ['desi-bao-all', 'planck2018-thetastar-varied-nnu'],
-    'bao-rdrag-fixed-nnu': ['desi-bao-all', 'planck2018-rdrag-fixed-nnu'],
-    'bao-cmb-compressed-theta': ['desi-bao-all', 'CMB-compressed-theta'],
-    'bao-cmb-compressed-r-la': ['desi-bao-all', 'CMB-compressed-R-lA'],
-    'bao-cmb-compressed-theta-ombh2': ['desi-bao-all', 'CMB-compressed-theta-ombh2'],
-    'bao-cmb-compressed-theta-ombh2-ombch2': ['desi-bao-all', 'CMB-compressed-theta-ombh2-ombch2'],
-    'bao-sn-cmb-compressed-theta': ['desi-bao-all', 'pantheonplus', 'CMB-compressed-theta'],
-    'bao-sn-cmb-compressed-r-la': ['desi-bao-all', 'pantheonplus', 'CMB-compressed-R-lA'],
+    'bao': ['desi-dr2-bao-all'],
+    'bao-sn-pantheonplus': ['desi-dr2-bao-all', 'pantheonplus'],
+    'bao-sn-union3': ['desi-dr2-bao-all', 'union3'],
+    'bao-sn-desy5': ['desi-dr2-bao-all', 'desy5sn'],
+    'bao-sn-desdovekie': ['desi-dr2-bao-all', 'desdovekie'],
+    'bao-sn-pantheonplus-zmin0.1': ['desi-dr2-bao-all', 'pantheonplus-zmin0.1'],
+    'bao-sn-union3-zmin0.1': ['desi-dr2-bao-all', 'union3-zmin0.1'],
+    'bao-sn-desy5-zmin0.1': ['desi-dr2-bao-all', 'desy5sn-zmin0.1'],
+    'bao-bbn': ['desi-dr2-bao-all', 'schoneberg2024-bbn'],
+    'bao-bbn-fixed-nnu': ['desi-dr2-bao-all', 'schoneberg2024-bbn-fixed-nnu'],
+    'bao-thetastar-fixed-nnu': ['desi-dr2-bao-all', 'planck2018-thetastar-fixed-nnu'],
+    'bao-thetastar-varied-nnu': ['desi-dr2-bao-all', 'planck2018-thetastar-varied-nnu'],
+    'bao-rdrag-fixed-nnu': ['desi-dr2-bao-all', 'planck2018-rdrag-fixed-nnu'],
+    'bao-cmb-compressed-theta': ['desi-dr2-bao-all', 'CMB-compressed-theta'],
+    'bao-cmb-compressed-r-la': ['desi-dr2-bao-all', 'CMB-compressed-R-lA'],
+    'bao-cmb-compressed-theta-ombh2': ['desi-dr2-bao-all', 'CMB-compressed-theta-ombh2'],
+    'bao-cmb-compressed-theta-ombh2-ombch2': ['desi-dr2-bao-all', 'CMB-compressed-theta-ombh2-ombch2'],
+    'bao-sn-cmb-compressed-theta': ['desi-dr2-bao-all', 'pantheonplus', 'CMB-compressed-theta'],
+    'bao-sn-cmb-compressed-r-la': ['desi-dr2-bao-all', 'pantheonplus', 'CMB-compressed-R-lA'],
     'cmb-spa': ['CMB-SPA'],
     'cmb-spa-tauprior': ['CMB-SPA-tauprior'],
-    'bao-cmb-spa': ['desi-bao-all', 'CMB-SPA'],
-    'bao-sn-desdovekie-cmb-spa': ['desi-bao-all', 'desdovekie', 'CMB-SPA'],
-    'bao-planck-npipe': ['desi-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE'],
-    'bao-planck-npipe-lensing': ['desi-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE', 'planckpr4lensing'],
-    'bao-planck-npipe-ell-max-600': ['desi-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE-ell-max-600'],
-    'bao-planck-npipe-cuts-for-act': ['desi-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE-cuts-for-act'],
-    'bao-planck-npipe-sroll2-momento': ['desi-bao-all', 'planck2018-lowl-TTTEEE-sroll2-momento'],
+    'bao-cmb-spa': ['desi-dr2-bao-all', 'CMB-SPA'],
+    'bao-sn-desdovekie-cmb-spa': ['desi-dr2-bao-all', 'desdovekie', 'CMB-SPA'],
+    'bao-planck-npipe': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE'],
+    'bao-planck-npipe-lensing': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE', 'planckpr4lensing'],
+    'bao-planck-npipe-ell-max-600': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE-ell-max-600'],
+    'bao-planck-npipe-cuts-for-act': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE-cuts-for-act'],
+    'bao-planck-npipe-sroll2-momento': ['desi-dr2-bao-all', 'planck2018-lowl-TTTEEE-sroll2-momento'],
 }
 
 
@@ -457,8 +467,8 @@ def get_cobaya_likelihoods(likelihoods=None, dataset=None, likelihood_package=No
     Parameters
     ----------
     likelihoods : str, list, optional
-        Likelihood names, e.g. ``'desi-bao-all'`` or a list such as
-        ``['desi-bao-all', 'pantheonplus']``.
+        Likelihood names, e.g. ``'desi-dr2-bao-all'`` or a list such as
+        ``['desi-dr2-bao-all', 'pantheonplus']``.
     dataset : str, list, optional
         Convenience alias for BAO-only calls.
     likelihood_package : str, optional
