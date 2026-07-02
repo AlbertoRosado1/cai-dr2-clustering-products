@@ -25,7 +25,6 @@ COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed']
 PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'zeus', 'mhmcmc', 'nuts', 'pocomc', 'nautilus', 'numpyro_nuts', 'numpyro_barker']
 DEFAULT_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics')
-DEFAULT_PROJECT = 'full_shape/base'
 #DEFAULT_CACHE_DIR = Path(__file__).resolve().parent / '_cache'
 DEFAULT_CACHE_DIR = Path(os.environ['SCRATCH']) / 'desi-clustering/full_shape/job_scripts/_cache'
 

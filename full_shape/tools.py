@@ -1136,7 +1136,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             _hash = _hash_options({name: observable_options[name] for name in ['theory', 'catalog']})
             _str_cosmology = str_from_cosmology_options(observable_options['theory']['cosmology'], level=100)
             _str_cosmology += '_' + observable_options['emulator']['name']
-            _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'catalog': 2})
+            _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'window': 0, 'catalog': 2})
             cache_fn = cache_dir / f'emulator_{_str_cosmology}' / f'emulator_{_str_theory}_{_hash}.h5'
             from desilike.base import compile
             from desilike.emulators import TaylorEmulator
