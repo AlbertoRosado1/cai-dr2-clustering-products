@@ -1,10 +1,6 @@
 """
 Script to run full-shape fits with cubic box mocks.
 
-By default this runs the current abacus-hf-v2 QSO_lorentzian case with
-lsstypes EZmock covariance measurements. Other tracers/versions can be selected
-from the command line.
-
 Examples
 --------
 python validation_box_mocks.py
