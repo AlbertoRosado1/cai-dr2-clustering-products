@@ -1017,14 +1017,25 @@ def rebin_spectrum3_window(window, data=None):
         data = window.observable
     # Simplify window matrix
     ostep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in data)
-    tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window.theory)
+    with_templates = hasattr(window.theory, 'types')
+    window_theory = window.at.theory.get(types='theory') if with_templates else window
+
+    tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window_theory.theory)
     rebin = int(ostep / tstep)
     assert rebin >= 1
-    window = window.at.theory.select(k=slice(0, None, rebin))
+    window_theory = window_theory.at.theory.select(k=slice(0, None, rebin))
     # Compact non-diagonal term
-    rebin = rebinning_matrix(window.theory, new_coords=window.theory.select(k=slice(0, None, 2)),
+    rebin = rebinning_matrix(window_theory.theory, new_coords=window_theory.theory.select(k=slice(0, None, 2)),
                              interp_order=3, diag='separate')
-    window = window.clone(value=window.value() @ rebin.value(), theory=rebin.theory)
+    window_theory = window_theory.clone(value=window_theory.value() @ rebin.value(), theory=rebin.theory)
+
+    if with_templates:
+        # Re-assemble the window matrix
+        window_templates = window.at.theory.get(types=[t for t in window.theory.types if t != 'theory'])
+        window = window.clone(value=np.concatenate([window_theory.value(), window_templates.value()], axis=-1),
+                              theory=window.theory.at(types='theory').replace(window_theory.theory))
+    else:
+        window = window_theory
     return window
 
 
@@ -1148,7 +1159,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
                 pt_graph = compile(observable.theory if is_compressed else theory.pt)
                 emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
-                if write_cache:
+                if write_cache and mpicomm.rank == 0:
                     mkdir(cache_fn.parent)
                     emulator.write(str(cache_fn))
             emulated_pt = emulator.to_calculator()
@@ -1407,11 +1418,11 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     for tracer, stat in itertools.product(tracers, stats):
         tracer, zrange = get_full_tracer_zrange(tracer, zrange)
         catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir, 'imock': imock}
-        if project:
-            catalog['project'] = project
         if 'data' not in version and imock is None:
             catalog['imock'] = '*'  # read all available mocks
         observable_options = {'stat': {'kind': stat}, 'catalog': catalog}
+        if project:
+            observable_options['stat']['project'] = project
         if emulator is False: emulator_options = {'name': ''}
         elif emulator is True: emulator_options = {}
         else: emulator_options = dict(emulator)
