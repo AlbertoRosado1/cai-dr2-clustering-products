@@ -44,7 +44,7 @@ DEFAULT_BROAD_SELECTS = {
 }
 DEFAULT_STATS_DIR = Path("/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics/box")
 DEFAULT_COVARIANCE_STATS_DIR = Path(
-    "/global/cfs/cdirs/desi/science/gqc/y3_fits/mockchallenge_abacus/measurements/EZmocks_lsstypes"
+    "/dvs_ro/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/mock_challenge/ezmock"
 )
 
 
