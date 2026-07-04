@@ -5,7 +5,10 @@ Main functions
 --------------
 * `compute_mesh3_spectrum`: Main bispectrum measurement backend.
 * `compute_window_mesh3_spectrum`: Compute bispectrum window.
+* `run_preliminary_fit_mesh3_spectrum`: Fit bias parameters used in the covariance theory.
+* `compute_covariance_mesh3_spectrum`: Estimate the joint P + B Fourier-space covariance.
 * `compute_box_mesh3_spectrum`: Measure the bispectrum in periodic boxes.
+* `compute_covariance_box_mesh3_spectrum`: Estimate the joint P + B covariance for periodic boxes.
 """
 
 import time
@@ -710,6 +713,273 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
 
 
 
+def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, mattrs=None, z=None, f=None, bias=None,
+                                       free=('b1', 'b2'), shotnoise=0., select2=None, select3=None):
+    r"""
+    Fit bias parameters on the joint (P, B) data vector to build the theory assumed in the covariance.
+
+    Following ``jax-power/scripts/example_fit_bias_covariance.py``: the tree-level
+    :mod:`jaxpower.pt` theory (P / B / T kernels) is evaluated at the measured binning and the
+    free bias parameters are fitted using the periodic-box P + B covariance,
+    ``compute_spectrum3_covariance(mattrs, mattrs, ...)`` (analytic Sugiyama et al. formulas).
+
+    Parameters
+    ----------
+    spectrum2 : Mesh2SpectrumPoles
+        Measured 2-point spectrum multipoles.
+    spectrum3 : Mesh3SpectrumPoles
+        Measured 3-point spectrum multipoles (Sugiyama basis).
+    mattrs : MeshAttrs, optional
+        Mesh attributes setting the volume of the periodic covariance used in the fit.
+        If ``None``, taken from ``spectrum2.attrs`` --- that is the embedding box, which
+        overestimates the survey volume; pass e.g. ``mattrs.clone(boxsize=...)`` for a more
+        realistic effective volume (this only reweights the preliminary fit).
+    z : float, optional
+        Effective redshift where the fiducial (DESI) linear power spectrum is evaluated.
+        If ``None``, read from ``spectrum2.attrs['zeff']`` (only set if ``spectrum2`` is a window
+        matrix's observable, or the caller attached it, e.g. from a box catalog's ``zsnap``);
+        otherwise a ``ValueError`` is raised.
+    f : float, optional
+        Growth rate. If ``None``, computed from the fiducial cosmology at ``z``.
+    bias : dict, optional
+        Fiducial bias parameters, updating the defaults
+        ``{'b1': 2., 'b2': 0.5, 'bs': -0.3, 'b3nl': 0.1, 'c1': 0.1, 'c2': 0.2, 'X_FoG': 2., 'Bshot': 0.1, 'Pshot': 0.1}``.
+    free : tuple, optional
+        Names of the bias parameters to fit. Default is ``('b1', 'b2')``.
+    shotnoise : float, optional
+        Shot noise :math:`(1 + \alpha) / \bar{n}` passed to the periodic covariance.
+    select2, select3 : dict, optional
+        If provided, selections applied to ``spectrum2`` / ``spectrum3`` prior to fitting
+        (e.g. ``{'k': (0.02, 0.15)}`` to restrict to scales where the tree-level theory holds).
+
+    Returns
+    -------
+    theory : callable
+        ``theory(fields)`` returning the 3D P / B / T callables consumed by
+        :func:`compute_covariance_mesh3_spectrum`, evaluated at the best-fit bias.
+        Best-fit values are stored as ``theory.bias`` (also ``theory.z``, ``theory.f``, ``theory.chi2``).
+    """
+    from jaxpower import MeshAttrs
+    from jaxpower.cov3 import compute_spectrum3_covariance
+    from jaxpower.pt import (prepare_spectrum2_redshift_tracer, spectrum2_redshift_tracer,
+                             spectrum3_redshift_tracer, spectrum4_redshift_tracer,
+                             ProjectToPoles, ProjectToSell)
+
+    # Restrict data to the fitting range if requested
+    if select2 is not None: spectrum2 = spectrum2.select(**select2)
+    if select3 is not None: spectrum3 = spectrum3.select(**select3)
+
+    # Volume assumed for the periodic covariance used in the fit
+    if mattrs is None:
+        mattrs = MeshAttrs(**{name: spectrum2.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']})
+
+    # Fiducial linear power spectrum at the effective redshift
+    from cosmoprimo.fiducial import DESI
+    cosmo = DESI(engine='eisenstein_hu')
+    if z is None:
+        # Measured Mesh2SpectrumPoles do not carry 'zeff' (only window matrices do, from
+        # compute_fkp_effective_redshift); z must be supplied explicitly unless the caller
+        # already attached it (e.g. from a box catalog's zsnap, or a window's zeff).
+        if 'zeff' not in spectrum2.attrs:
+            raise ValueError("z is required: spectrum2.attrs has no 'zeff' (only window matrices carry it)")
+        z = np.asarray(spectrum2.attrs['zeff']).flat[0]
+    if f is None:
+        f = float(cosmo.growth_rate(z))
+    kt = np.logspace(-4, 1, 512)
+    pkt = cosmo.get_fourier().pk_interpolator().to_1d(z=z)(kt)
+
+    def pk_callable(q):
+        return jnp.interp(q, kt, pkt)
+
+    pknow_callable = pk_callable  # no-wiggle spectrum; plug a BAO-filtered one if desired
+
+    # Tabulate the 1-loop P(k) integrals once
+    k_table = jnp.logspace(-3, np.log10(mattrs.knyq.max()), 80)
+    table, table_now = prepare_spectrum2_redshift_tracer(k_table, pk_callable, pknow_callable)
+
+    fid_bias = {'b1': 2.0, 'b2': 0.5, 'bs': -0.3, 'b3nl': 0.1,
+                'c1': 0.1, 'c2': 0.2, 'X_FoG': 2., 'Bshot': 0.1, 'Pshot': 0.1}
+    fid_bias.update(bias or {})
+
+    def make_theory(bias):
+        # 3D P / B / T callables consumed by compute_spectrum3_covariance;
+        # the key of bias_params must match the observable / window field label (0)
+        bias_params = {0: dict(bias)}
+
+        def P(kvec):
+            return spectrum2_redshift_tracer(kvec, table, table_now, f, bias_params)
+
+        def B(k1vec, k2vec, k3vec):
+            return spectrum3_redshift_tracer(k1vec, k2vec, pk_callable, pknow_callable, f=f, bias_params=bias_params)
+
+        def T(k1vec, k2vec, k3vec, k4vec):
+            return spectrum4_redshift_tracer(k1vec, k2vec, k3vec, pk_callable, pknow_callable, f=f, bias_params=bias_params)
+
+        def theory(fields):
+            return {2: P, 3: B, 4: T}.get(len(fields), None)
+
+        theory.bias, theory.z, theory.f = dict(bias), z, f
+        return theory
+
+    # Joint (P, B) data vector
+    observable = types.ObservableTree([spectrum2, spectrum3], fields=[(0, 0), (0, 0, 0)])
+    data = np.concatenate([np.asarray(obs.value()).ravel() for _, obs in observable.items(level=None)])
+
+    # Periodic-box covariance evaluated at the fiducial bias
+    covariance = compute_spectrum3_covariance(mattrs, mattrs, observable, theory=make_theory(fid_bias),
+                                              shotnoise=shotnoise, cache={})
+    Cinv = jnp.asarray(np.linalg.inv(np.asarray(covariance.value())))
+
+    # Binned model multipoles, evaluated at the measured k coordinates
+    to_poles = ProjectToPoles(ells=spectrum2.ells, mu=10)
+    k2d = np.asarray(next(iter(spectrum2)).coords('k'))  # (nk,)
+    mu = np.asarray(to_poles.mu)
+    kvec_P = k2d[:, None, None] * np.stack([np.sqrt(1. - mu**2), np.zeros_like(mu), mu], axis=-1)  # (nk, nmu, 3)
+
+    to_Sell = ProjectToSell(ells=spectrum3.ells, size=6)
+    k3d = np.asarray(next(iter(spectrum3)).coords('k'))  # (nbins, 2) paired (k1, k2)
+    k1vec_B = k3d[:, 0, None, None] * np.asarray(to_Sell.k1hat)[None, ...]  # (nbins, nnodes, 3)
+    k2vec_B = k3d[:, 1, None, None] * np.asarray(to_Sell.k2hat)[None, ...]
+
+    names = list(free)
+
+    def model_vector(x):
+        bias_params = {0: fid_bias | dict(zip(names, x))}
+        P3d = spectrum2_redshift_tracer(jnp.asarray(kvec_P), table, table_now, f, bias_params)  # (nk, nmu)
+        p_poles = to_poles(P3d)  # (nells2, nk)
+        B3d = spectrum3_redshift_tracer(jnp.asarray(k1vec_B), jnp.asarray(k2vec_B),
+                                        pk_callable, pknow_callable, f=f, bias_params=bias_params)
+        # ProjectToSell weights are raw (triangle measure sums to 8 pi)
+        b_poles = to_Sell(B3d) / (8. * np.pi)  # (nells3, nbins)
+        return jnp.concatenate([p_poles.ravel(), b_poles.ravel()])
+
+    @jax.jit
+    def chi2(x):
+        r = jnp.asarray(data) - model_vector(x)
+        return r @ Cinv @ r
+
+    from scipy import optimize
+    res = optimize.minimize(jax.value_and_grad(chi2), x0=np.array([fid_bias[name] for name in names]),
+                            jac=True, method='L-BFGS-B')
+    best = dict(zip(names, np.asarray(res.x)))
+    if jax.process_index() == 0:
+        logger.info(f'Preliminary fit: {best}, chi2 = {res.fun:.1f} ({data.size} data points)')
+
+    theory = make_theory(fid_bias | best)
+    theory.chi2 = float(res.fun)
+    return theory
+
+
+def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectrum3=None, theory=None, shotnoise=0.,
+                                      fields=None, mattrs=None, edges=None, ells2=(0, 2, 4), ells3=((0, 0, 0),),
+                                      buffer_size=50, batch_size=16):
+    r"""
+    Compute the joint 2-point + 3-point spectrum covariance with :mod:`jaxpower`.
+
+    The two-anchor and three-anchor covariance window multipoles are estimated from the randoms,
+    then assembled into the (P, B) covariance following the Sugiyama et al. formulas
+    (PP / PB / PPP + BB + PT terms), cf. ``jax-power/scripts/example_fit_bias_covariance.py``.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions that return dict of 'data' and 'randoms' catalogs.
+        See :func:`prepare_jaxpower_particles` for details.
+    spectrum2 : Mesh2SpectrumPoles
+        Measured 2-point spectrum multipoles, defining the covariance binning.
+    spectrum3 : Mesh3SpectrumPoles
+        Measured 3-point spectrum multipoles (Sugiyama basis), defining the covariance binning.
+    theory : callable
+        ``theory(fields)`` returning the 3D P / B / T callables, with bias parameters keyed by
+        the field labels (0-based); see :func:`run_preliminary_fit_mesh3_spectrum`.
+    shotnoise : float, optional
+        Shot noise :math:`(1 + \alpha) / \bar{n}`.
+    fields : tuple, list, optional
+        Field names. Default is ``(0, 1, ...)``, matching the bias parameter keys of
+        :func:`run_preliminary_fit_mesh3_spectrum`.
+    mattrs : dict, optional
+        Mesh attributes to define the :class:`jaxpower.ParticleField` objects,
+        'boxsize', 'meshsize' or 'cellsize', 'boxcenter'. If ``None``, default attributes are used.
+    edges : dict, optional
+        Separation binning for the covariance windows. Default is ``{'step': cellsize.min()}``;
+        coarsen (e.g. ``{'step': 40.}``) to speed up the 3-point window computation.
+    ells2 : tuple, optional
+        Multipoles of the two-anchor covariance window. Default is ``(0, 2, 4)``.
+    ells3 : list of tuples, optional
+        Sugiyama multipoles of the three-anchor covariance window. Default is ``[(0, 0, 0)]``.
+    buffer_size : int, optional
+        Buffer size for the 3-point window binning; increase for faster computation at the cost of memory.
+    batch_size : int, optional
+        Batch size for the covariance assembly.
+
+    Returns
+    -------
+    results : dict
+        Dictionary containing the covariance matrix ('raw') and the interpolated covariance window
+        correlations ('window_covariance_mesh2_correlation', 'window_covariance_mesh3_correlation').
+    """
+    # Import covariance window computation and assembly tools from jaxpower
+    # NOTE: compute_fkp2_covariance_window must come from cov3 (grouped field labels),
+    # not the flat-label cov2 variant used by compute_covariance_mesh2_spectrum
+    from jaxpower import create_sharding_mesh, interpolate_window_function, FKPField
+    from jaxpower.cov3 import (compute_fkp2_covariance_window, compute_fkp3_covariance_window,
+                               compute_spectrum3_covariance)
+
+    # Use default fields (0, 1, ...) if not provided
+    if fields is None:
+        fields = list(range(len(get_data_randoms)))
+
+    # The measured observables define the covariance binning; field labels must match the windows
+    observable = types.ObservableTree([spectrum2, spectrum3], fields=[(fields[0],) * 2, (fields[0],) * 3])
+
+    results = {}
+    mattrs = mattrs or {}
+    # Set up distributed computation mesh
+    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
+        # Load and prepare particles
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
+        # Create FKP fields for covariance window computation
+        all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
+        mattrs = all_fkp[0].attrs
+        # Set correlation binning parameters
+        if edges is None:
+            edges = {'step': mattrs.cellsize.min()}
+        # Split randoms (process-invariant, based on object IDs) to avoid common noise between window factors
+        split = [(42, fkp.randoms.extra['IDS']) for fkp in all_fkp]
+        # Mesh painting parameters: TSC with interlacing
+        kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+
+        # Two-anchor window Q_W^{(A)(B)}(s), with grouped field labels of sizes (2, 3, 4):
+        # required by the mixed PB / BB / PT covariance terms
+        window2 = compute_fkp2_covariance_window(all_fkp, edges=edges, los='local', fields=fields, split=split,
+                                                 group_sizes=(2, 3, 4), max_total_size=6, ells=list(ells2), **kw_paint)
+        jax.block_until_ready(window2)
+        if jax.process_index() == 0:
+            logger.info('2-point covariance window computed')
+
+        # Three-anchor window Q_W^{ABC}(s1, s2) in the Sugiyama basis (WWW piece)
+        window3 = compute_fkp3_covariance_window(all_fkp, edges=edges, los='local', fields=fields, split=split,
+                                                 ells=[tuple(ell) for ell in ells3], buffer_size=buffer_size, **kw_paint)
+        jax.block_until_ready(window3)
+        if jax.process_index() == 0:
+            logger.info('3-point covariance window computed')
+
+        # Interpolate the windows on a log-spaced grid for the Hankel transforms in the assembly
+        coords = jnp.logspace(-3, 4, 1024)
+        window2 = interpolate_window_function(window2, coords=coords, order=3)
+        window3 = window3.map(lambda pole: pole.unravel())
+        window3 = interpolate_window_function(window3, coords=coords, order=3)
+        # Store interpolated correlation windows for diagnostics / reuse
+        results['window_covariance_mesh2_correlation'] = window2
+        results['window_covariance_mesh3_correlation'] = window3
+
+    # Assemble the windowed (P, B) covariance at the input theory
+    covariance = compute_spectrum3_covariance(window2, window3, observable, theory=theory,
+                                              shotnoise=shotnoise, cache={}, batch_size=batch_size)
+    results['raw'] = covariance
+    return results
+
+
 def compute_box_mesh3_spectrum(*get_data, mattrs=None,
                                 basis='sugiyama-diagonal', ells=[(0, 0, 0), (2, 0, 2)], edges=None, los='z',
                                 buffer_size=0, mask_edges=None, cache=None):
@@ -807,3 +1077,53 @@ def compute_box_mesh3_spectrum(*get_data, mattrs=None,
         if jax.process_index() == 0:
             logger.info('Mesh-based computation finished')
     return spectrum
+
+
+def compute_covariance_box_mesh3_spectrum(spectrum2: types.Mesh2SpectrumPoles, spectrum3: types.Mesh3SpectrumPoles,
+                                          theory, shotnoise: float=0., mattrs=None):
+    r"""
+    Compute the joint 2-point + 3-point spectrum covariance for a box with :mod:`jaxpower`.
+
+    Periodic-box analog of :func:`compute_covariance_mesh3_spectrum`: the covariance windows are
+    replaced by the box volume, i.e. ``compute_spectrum3_covariance(mattrs, mattrs, ...)`` (analytic
+    Sugiyama et al. formulas: Gaussian PPP, single-delta BB and PT terms), cf.
+    ``jax-power/scripts/example_fit_bias_covariance.py``.
+
+    Parameters
+    ----------
+    spectrum2 : Mesh2SpectrumPoles
+        Measured (or smooth theory) 2-point spectrum multipoles, defining the covariance binning.
+    spectrum3 : Mesh3SpectrumPoles
+        Measured (or smooth theory) 3-point spectrum multipoles (Sugiyama basis), defining the
+        covariance binning.
+    theory : callable
+        ``theory(fields)`` returning the 3D P / B / T callables, with bias parameters keyed by
+        the field labels (0-based); see :func:`run_preliminary_fit_mesh3_spectrum`.
+    shotnoise : float, optional
+        Shot noise :math:`(1 + \alpha) / \bar{n}`.
+    mattrs : dict, optional
+        Mesh attributes setting the box volume, 'boxsize', 'meshsize' or 'cellsize', 'boxcenter'.
+        If ``None``, taken from ``spectrum2.attrs`` (the embedding box).
+
+    Returns
+    -------
+    covariance : CovarianceMatrix
+        The computed joint (P, B) periodic-box covariance.
+    """
+    # Compute the analytic (Gaussian PPP + single-delta BB/PT) covariance for a periodic box
+    from jaxpower import create_sharding_mesh, MeshAttrs
+    from jaxpower.cov3 import compute_spectrum3_covariance
+
+    # Use the embedding box of the measurement if no mesh attributes are provided
+    if mattrs is None:
+        mattrs = {name: spectrum2.attrs[name] for name in ['boxsize', 'boxcenter', 'meshsize']}
+
+    # The measured observables only set the covariance binning; theory (not their values) is used
+    observable = types.ObservableTree([spectrum2, spectrum3], fields=[(0, 0), (0, 0, 0)])
+
+    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
+        mattrs = MeshAttrs(**mattrs)
+        # Passing mattrs in place of (window2, window3) selects the periodic (no-window) branch
+        covariance = compute_spectrum3_covariance(mattrs, mattrs, observable, theory=theory,
+                                                  shotnoise=shotnoise, cache={})
+    return covariance

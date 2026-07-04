@@ -37,7 +37,8 @@ from .correlation2_tools import compute_particle2_angular_upweights, compute_par
 from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
 
 from .correlation3_tools import compute_particle3_angular_upweights, compute_particle3_correlation, compute_particle3_correlation_close_pair_correction
-from .spectrum3_tools import compute_mesh3_spectrum, compute_window_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction
+from .spectrum3_tools import (compute_mesh3_spectrum, compute_window_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction,
+                              compute_covariance_mesh3_spectrum, run_preliminary_fit_mesh3_spectrum)
 
 from .recon_tools import compute_reconstruction
 from .systematic_templates import include_systematic_templates
@@ -684,6 +685,78 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                         if 'correlation' in key:  # window functions
                             fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)))
                             tools.write_stats(fn, covariance[key])
+
+        # Joint 2-point + 3-point covariance. Unlike covariance_mesh2_spectrum, this only
+        # supports a single tracer: compute_covariance_mesh3_spectrum does not implement
+        # multi-tracer cross-covariance (it always labels both P and B with the same field).
+        stat = 'covariance_mesh3_spectrum'
+        if stat in stats:
+            assert len(tracers) == 1, f'{stat} only supports a single tracer, got {tracers}'
+            tracer = tracers[0]
+            simple_tracer = tools.get_simple_tracer(tracer)
+            covariance_options = dict(options[stat])
+            # theory is a python callable (P/B/T kernels at best-fit bias), not an lsstypes
+            # object: unlike covariance_mesh2_spectrum's theory, it is not written to disk.
+            theory = covariance_options.pop('theory', None)
+            shotnoise = covariance_options.pop('shotnoise', None)
+            # Optional override of the box volume assumed in the preliminary bias fit
+            # (defaults to the measurement's embedding box, which overestimates the survey
+            # volume); see run_preliminary_fit_mesh3_spectrum.
+            prelim_mattrs = covariance_options.pop('prelim_mattrs', None)
+
+            def get_data(tracer):
+                czrandoms = Catalog.concatenate(zrandoms[tracer])
+                return {'data': zdata[tracer], 'randoms': czrandoms}
+
+            # Auto-detect the raw (no cut/auw) measured P(k), B(k1, k2): they set the covariance
+            # binning and, if theory is not provided, are fit to get the bias parameters.
+            spectrum2_fn = covariance_options.pop('spectrum2', None)
+            if spectrum2_fn is None:
+                kw = options['mesh2_spectrum'] | dict(auw=False, cut=False)
+                spectrum2_fn = get_stats_fn(kind='mesh2_spectrum', catalog=fn_catalog_options[tracer], **kw)
+            spectrum3_fn = covariance_options.pop('spectrum3', None)
+            if spectrum3_fn is None:
+                kw = options['mesh3_spectrum'] | dict(auw=False, cut=False)
+                spectrum3_fn = get_stats_fn(kind='mesh3_spectrum', catalog=fn_catalog_options[tracer], **kw)
+            spectrum2, spectrum3 = types.read(spectrum2_fn), types.read(spectrum3_fn)
+
+            if shotnoise is None:
+                # (1 + alpha) / nbar, read off the FKP monopole shot noise level
+                shotnoise = float(np.mean(spectrum2.get(spectrum2.ells[0]).values('shotnoise')))
+
+            if theory is None:
+                # Effective redshift: measured spectra carry no 'zeff' (only window matrices
+                # do), so read it off the already-computed window instead.
+                window_fn = get_stats_fn(kind='window_mesh2_spectrum', catalog=fn_catalog_options[tracer],
+                                         **(options['window_mesh2_spectrum'] | dict(auw=False)))
+                window = types.read(window_fn)
+                z = window.observable.get(ells=0).attrs['zeff']
+                if prelim_mattrs is not None:
+                    from jaxpower import MeshAttrs
+                    prelim_mattrs = MeshAttrs(**prelim_mattrs)
+                # Fit bias parameters on the joint (P, B) data vector
+                theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, mattrs=prelim_mattrs, z=z, shotnoise=shotnoise)
+
+            results = compute_covariance_mesh3_spectrum(functools.partial(get_data, tracer), spectrum2=spectrum2, spectrum3=spectrum3,
+                                                        theory=theory, shotnoise=shotnoise, fields=[simple_tracer], **covariance_options)
+
+            def add_label(covariance):
+                # Label the two stacked (P, B) blocks with their observable kind and tracer(s)
+                observable = types.ObservableTree(list(covariance.observable), observables=['mesh2_spectrum', 'mesh3_spectrum'],
+                                                  tracers=covariance.observable.fields)
+                return covariance.clone(observable=observable)
+
+            # Write covariance matrix to disk
+            for key, kw in _expand_cut_auw_options(stat, covariance_options).items():
+                fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
+                if key in results:
+                    tools.write_stats(fn, add_label(results[key]))
+
+            # Write intermediate covariance-window correlation functions to disk
+            for key in results:
+                if 'correlation' in key:
+                    fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)))
+                    tools.write_stats(fn, results[key])
 
 
 def list_stats(stats, get_stats_fn=tools.get_stats_fn, **kwargs):

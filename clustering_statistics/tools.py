@@ -531,6 +531,8 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10.}
     propose_fiducial['covariance_particle2_correlation'] = propose_fiducial['covariance_mesh2_spectrum']
+    # Joint P + B covariance window: reuse the same mesh resolution as the power spectrum covariance
+    propose_fiducial['covariance_mesh3_spectrum'] = dict(propose_fiducial['covariance_mesh2_spectrum'])
     for name in ['covariance_mesh2_spectrum', 'covariance_particle2_correlation']:
         propose_fiducial[name.replace('covariance_', 'covariance_recon_')] = propose_fiducial[name]
 
@@ -778,6 +780,11 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
             spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             # spectrum_options | fiducial_options because we override mattrs if given
+            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+        for stat in ['covariance_mesh3_spectrum']:
+            spectrum_options = options['mesh3_spectrum']
+            spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
+            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
             options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
         for stat in ['covariance_particle2_correlation']:
             fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
