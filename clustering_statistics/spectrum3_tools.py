@@ -870,6 +870,175 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, mattrs=None, z=None
     return theory
 
 
+def get_post_recon_spectrum_kernels(cosmo, z, f, b1, smoothing_radius, shotnoise=0.):
+    r"""
+    Analytic reconstruction-damped post-recon auto and pre-recon x post-recon cross power
+    spectrum kernels, following the Zel'dovich-reconstruction formalism (e.g. Padmanabhan,
+    White & Seo), ported from ``cai-mock-benchmark/dr2/data_pip.py::get_post_recon_spectrum``.
+
+    Unlike that reference (which projects to multipoles via a fixed mu quadrature), this
+    returns raw ``P(kvec)`` callables (``kvec``: ``(..., 3)`` array, with :math:`\mu` extracted
+    as ``kvec[..., 2] / |kvec|``), matching the calling convention of :mod:`jaxpower.pt`'s
+    tree-level kernels, so they can be used directly as part of the ``theory(fields)`` callable
+    consumed by :func:`jaxpower.cov3.compute_spectrum3_covariance`.
+
+    Shot noise convention: :func:`jaxpower.cov3.compute_spectrum3_covariance` automatically adds
+    its scalar ``shotnoise`` argument to any AUTO field pair (fields[0] == fields[1]); the
+    returned ``'post_post'`` kernel therefore does NOT bake in shot noise (mirroring how the
+    pre-recon ``P`` kernel from :func:`run_preliminary_fit_mesh3_spectrum` doesn't either). The
+    ``'pre_post'`` cross kernel DOES bake in a damped shot-noise term, because pre- and
+    post-recon are the same particles (just displaced), so their shot noise is correlated --
+    unlike the covariance assembly's default assumption of zero cross-field shot noise.
+
+    Parameters
+    ----------
+    cosmo : Cosmology
+        Fiducial cosmology (linear power spectrum, drag scale, growth rate).
+    z : float
+        Effective redshift.
+    f : float
+        Growth rate at ``z`` (e.g. already computed by :func:`run_preliminary_fit_mesh3_spectrum`).
+    b1 : float
+        Linear bias, shared between the pre- and post-recon fields (same tracer).
+    smoothing_radius : float
+        Reconstruction Gaussian smoothing radius.
+    shotnoise : float, optional
+        Shot noise :math:`(1 + \alpha) / \bar{n}`, entering only the pre-post cross kernel.
+
+    Returns
+    -------
+    kernels : dict
+        ``{'post_post': callable(kvec), 'pre_post': callable(kvec)}``.
+    """
+    from scipy import special, integrate
+    from cosmoprimo import PowerSpectrumBAOFilter
+
+    klin = np.logspace(-3., 2., 1000)
+    pklin_interp = cosmo.get_fourier().pk_interpolator(of='delta_cb').to_1d(z=z)
+    pknow_interp = PowerSpectrumBAOFilter(pklin_interp, engine='wallish2018').smooth_pk_interpolator()
+    pklin_klin, pknow_klin = pklin_interp(klin), pknow_interp(klin)
+    q = cosmo.rs_drag
+
+    def pklin(k):
+        return jnp.interp(k, klin, pklin_klin)
+
+    def pknow(k):
+        return jnp.interp(k, klin, pknow_klin)
+
+    sk_klin = np.exp(-0.5 * (klin * smoothing_radius)**2)
+    j0_klin = special.jn(0, q * klin)
+    # Post x post damping: only the BAO wiggles are resummed/damped, broadband is untouched.
+    sigma_pp = 1. / (3. * np.pi**2) * integrate.simpson((1. - j0_klin) * (1. - sk_klin)**2 * pklin_klin, klin)
+    # Pre x post damping: the whole (wiggly) signal is damped as one piece.
+    sigma_pp_cross = 1. / (6. * np.pi**2) * integrate.simpson(sk_klin * pklin_klin, klin)
+
+    def _k_mu(kvec):
+        kvec = jnp.asarray(kvec)
+        k = jnp.sqrt(jnp.sum(kvec**2, axis=-1))
+        # Same los-z convention as jaxpower.pt.spectrum2_redshift_tracer.
+        mu = jnp.where(k > 0., kvec[..., 2] / k, 0.)
+        return k, mu
+
+    def post_post(kvec):
+        k, mu = _k_mu(kvec)
+        ksq = (1. + f * (f + 2.) * mu**2) * k**2
+        wiggles = pklin(k) - pknow(k)
+        return (b1 + f * mu**2)**2 * (pknow(k) + jnp.exp(-0.5 * ksq * sigma_pp) * wiggles)
+
+    def pre_post(kvec):
+        k, mu = _k_mu(kvec)
+        ksq = (1. + (1. + f)**2 * mu**2) * k**2
+        return jnp.exp(-0.5 * ksq * sigma_pp_cross) * ((b1 + f * mu**2)**2 * pklin(k) + shotnoise)
+
+    return {'post_post': post_post, 'pre_post': pre_post}
+
+
+class _AliasFieldWindow:
+    """
+    Thin wrapper around a cov3-style window2/window3 :class:`~lsstypes.ObservableTree`
+    (or a symmetrization pair thereof) that collapses a virtual field value to a real one for
+    any ``fields``/``fields1``/``fields2``/``fields3`` lookup, before delegating to the
+    underlying window's own ``.get(...)``.
+
+    Used by :func:`compute_covariance` to alias the post-recon field's covariance window to the
+    pre-recon one: reconstruction does not change the survey selection function, so the *same*
+    randoms-only window applies regardless of which (real or virtual) field combination
+    :func:`jaxpower.cov3.compute_spectrum3_covariance` queries it with -- including
+    cross/shot-noise-driven field-group combinations (e.g. ``(pre, pre, post)``) that are not
+    obvious from the top-level observable blocks alone.
+    """
+
+    def __init__(self, window, virtual, real):
+        self._window = window
+        self._virtual, self._real = virtual, real
+
+    def _dealias(self, value):
+        if isinstance(value, tuple):
+            return tuple(self._real if v == self._virtual else v for v in value)
+        return self._real if value == self._virtual else value
+
+    def get(self, **labels):
+        labels = {key: (self._dealias(value) if key.startswith('fields') else value) for key, value in labels.items()}
+        return self._window.get(**labels)
+
+    def __getattr__(self, name):
+        return getattr(self._window, name)
+
+
+def _compute_cov3_windows(get_data_randoms, fields=None, mattrs=None, edges=None, ells2=(0, 2, 4),
+                          ells3=((0, 0, 0),), buffer_size=50):
+    """
+    Compute the cov3-style (grouped-field-label) two-anchor and three-anchor covariance windows
+    from randoms. Shared by :func:`compute_covariance_mesh3_spectrum` and :func:`compute_covariance`.
+    """
+    # NOTE: compute_fkp2_covariance_window must come from cov3 (grouped field labels),
+    # not the flat-label cov2 variant used by compute_covariance_mesh2_spectrum
+    from jaxpower import create_sharding_mesh, interpolate_window_function, FKPField
+    from jaxpower.cov3 import compute_fkp2_covariance_window, compute_fkp3_covariance_window
+
+    if fields is None:
+        fields = list(range(len(get_data_randoms)))
+
+    mattrs = mattrs or {}
+    # Set up distributed computation mesh
+    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
+        # Load and prepare particles
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
+        # Create FKP fields for covariance window computation
+        all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
+        mattrs = all_fkp[0].attrs
+        # Set correlation binning parameters
+        if edges is None:
+            edges = {'step': mattrs.cellsize.min()}
+        # Split randoms (process-invariant, based on object IDs) to avoid common noise between window factors
+        split = [(42, fkp.randoms.extra['IDS']) for fkp in all_fkp]
+        # Mesh painting parameters: TSC with interlacing
+        kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+
+        # Two-anchor window Q_W^{(A)(B)}(s), with grouped field labels of sizes (2, 3, 4):
+        # required by the mixed PB / BB / PT covariance terms
+        window2 = compute_fkp2_covariance_window(all_fkp, edges=edges, los='local', fields=fields, split=split,
+                                                 group_sizes=(2, 3, 4), max_total_size=6, ells=list(ells2), **kw_paint)
+        jax.block_until_ready(window2)
+        if jax.process_index() == 0:
+            logger.info('2-point covariance window computed')
+
+        # Three-anchor window Q_W^{ABC}(s1, s2) in the Sugiyama basis (WWW piece)
+        window3 = compute_fkp3_covariance_window(all_fkp, edges=edges, los='local', fields=fields, split=split,
+                                                 ells=[tuple(ell) for ell in ells3], buffer_size=buffer_size, **kw_paint)
+        jax.block_until_ready(window3)
+        if jax.process_index() == 0:
+            logger.info('3-point covariance window computed')
+
+        # Interpolate the windows on a log-spaced grid for the Hankel transforms in the assembly
+        coords = jnp.logspace(-3, 4, 1024)
+        window2 = interpolate_window_function(window2, coords=coords, order=3)
+        window3 = window3.map(lambda pole: pole.unravel())
+        window3 = interpolate_window_function(window3, coords=coords, order=3)
+
+    return window2, window3
+
+
 def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectrum3=None, theory=None, shotnoise=0.,
                                       fields=None, mattrs=None, edges=None, ells2=(0, 2, 4), ells3=((0, 0, 0),),
                                       buffer_size=50, batch_size=16):
@@ -918,12 +1087,7 @@ def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectru
         Dictionary containing the covariance matrix ('raw') and the interpolated covariance window
         correlations ('window_covariance_mesh2_correlation', 'window_covariance_mesh3_correlation').
     """
-    # Import covariance window computation and assembly tools from jaxpower
-    # NOTE: compute_fkp2_covariance_window must come from cov3 (grouped field labels),
-    # not the flat-label cov2 variant used by compute_covariance_mesh2_spectrum
-    from jaxpower import create_sharding_mesh, interpolate_window_function, FKPField
-    from jaxpower.cov3 import (compute_fkp2_covariance_window, compute_fkp3_covariance_window,
-                               compute_spectrum3_covariance)
+    from jaxpower.cov3 import compute_spectrum3_covariance
 
     # Use default fields (0, 1, ...) if not provided
     if fields is None:
@@ -932,50 +1096,182 @@ def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectru
     # The measured observables define the covariance binning; field labels must match the windows
     observable = types.ObservableTree([spectrum2, spectrum3], fields=[(fields[0],) * 2, (fields[0],) * 3])
 
-    results = {}
-    mattrs = mattrs or {}
-    # Set up distributed computation mesh
-    with create_sharding_mesh(meshsize=mattrs.get('meshsize', None)):
-        # Load and prepare particles
-        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs, add_randoms=['IDS'])
-        # Create FKP fields for covariance window computation
-        all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
-        mattrs = all_fkp[0].attrs
-        # Set correlation binning parameters
-        if edges is None:
-            edges = {'step': mattrs.cellsize.min()}
-        # Split randoms (process-invariant, based on object IDs) to avoid common noise between window factors
-        split = [(42, fkp.randoms.extra['IDS']) for fkp in all_fkp]
-        # Mesh painting parameters: TSC with interlacing
-        kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
-
-        # Two-anchor window Q_W^{(A)(B)}(s), with grouped field labels of sizes (2, 3, 4):
-        # required by the mixed PB / BB / PT covariance terms
-        window2 = compute_fkp2_covariance_window(all_fkp, edges=edges, los='local', fields=fields, split=split,
-                                                 group_sizes=(2, 3, 4), max_total_size=6, ells=list(ells2), **kw_paint)
-        jax.block_until_ready(window2)
-        if jax.process_index() == 0:
-            logger.info('2-point covariance window computed')
-
-        # Three-anchor window Q_W^{ABC}(s1, s2) in the Sugiyama basis (WWW piece)
-        window3 = compute_fkp3_covariance_window(all_fkp, edges=edges, los='local', fields=fields, split=split,
-                                                 ells=[tuple(ell) for ell in ells3], buffer_size=buffer_size, **kw_paint)
-        jax.block_until_ready(window3)
-        if jax.process_index() == 0:
-            logger.info('3-point covariance window computed')
-
-        # Interpolate the windows on a log-spaced grid for the Hankel transforms in the assembly
-        coords = jnp.logspace(-3, 4, 1024)
-        window2 = interpolate_window_function(window2, coords=coords, order=3)
-        window3 = window3.map(lambda pole: pole.unravel())
-        window3 = interpolate_window_function(window3, coords=coords, order=3)
-        # Store interpolated correlation windows for diagnostics / reuse
-        results['window_covariance_mesh2_correlation'] = window2
-        results['window_covariance_mesh3_correlation'] = window3
+    window2, window3 = _compute_cov3_windows(get_data_randoms, fields=fields, mattrs=mattrs, edges=edges,
+                                             ells2=ells2, ells3=ells3, buffer_size=buffer_size)
+    # Store interpolated correlation windows for diagnostics / reuse
+    results = {'window_covariance_mesh2_correlation': window2, 'window_covariance_mesh3_correlation': window3}
 
     # Assemble the windowed (P, B) covariance at the input theory
     covariance = compute_spectrum3_covariance(window2, window3, observable, theory=theory,
                                               shotnoise=shotnoise, cache={}, batch_size=batch_size)
+    results['raw'] = covariance
+    return results
+
+
+def compute_covariance(*get_data_randoms, spectrum2=None, spectrum3=None, recon_spectrum2=None, theory=None,
+                       RR=None, shotnoise=0., fields=None, mattrs=None, edges=None, ells2=(0, 2, 4),
+                       ells3=((0, 0, 0),), buffer_size=50, batch_size=16, smoothing_radius=None,
+                       prelim_mattrs=None, split_SS=True):
+    r"""
+    Compute the joint covariance of the pre-recon 2-point + 3-point spectra and the
+    post-reconstruction 2-point correlation function, i.e. of
+    (``mesh2_spectrum``, ``mesh3_spectrum``, ``recon_particle2_correlation``).
+
+    The (P_pre, B_pre, P_post) block is first assembled with :mod:`jaxpower.cov3` (see
+    :func:`compute_covariance_mesh3_spectrum`), *aliasing* the post-recon field's covariance
+    window from the pre-recon one: reconstruction displaces particles but does not change the
+    survey selection function, so the same randoms-only window applies to both. The post-recon
+    power spectrum block is then projected to configuration space with
+    :func:`.correlation2_tools.project_spectrum2_covariance_to_correlation`, reusing the exact
+    rotation / RR-window deconvolution / shot-noise machinery used by
+    :func:`.correlation2_tools.compute_covariance_particle2_correlation`; the pre-recon P and B
+    blocks (and their cross-covariance with the post-recon block) pass through unprojected.
+
+    Parameters
+    ----------
+    get_data_randoms : callables
+        Functions that return dict of 'data' and 'randoms' catalogs for the (single) tracer,
+        used to build the covariance windows. See :func:`prepare_jaxpower_particles` for details.
+        Note the post-recon field's window is *aliased* from this one (same survey randoms);
+        no separate post-recon particle input is required.
+    spectrum2 : Mesh2SpectrumPoles
+        Measured pre-recon 2-point spectrum multipoles, defining the covariance binning.
+    spectrum3 : Mesh3SpectrumPoles
+        Measured pre-recon 3-point spectrum multipoles (Sugiyama basis), defining the covariance binning.
+    recon_spectrum2 : Mesh2SpectrumPoles
+        Measured post-recon 2-point spectrum multipoles, defining the covariance binning of the
+        (post, post) block prior to projection. Its ``attrs['recon_smoothing_radius']`` is used
+        as the default reconstruction smoothing radius.
+    theory : callable, optional
+        ``theory(fields)`` returning the 3D P / B / T callables. If ``None``, fit automatically:
+        pre-recon P/B via :func:`run_preliminary_fit_mesh3_spectrum`, and post-recon / cross
+        kernels via :func:`get_post_recon_spectrum_kernels` (reusing the fitted ``b1``, ``z``, ``f``).
+    RR : Count2 or ObservableTree
+        Post-recon RR pair counts (e.g. the 'RR' branch of a ``recon_particle2_correlation``
+        measurement), consumed by the correlation-space projection.
+    shotnoise : float, optional
+        Shot noise :math:`(1 + \alpha) / \bar{n}` (shared between pre- and post-recon fields;
+        reconstruction only displaces particles, it does not change their discreteness noise).
+    fields : tuple, list, optional
+        Field name for the pre-recon tracer. Default is ``(0,)``; the post-recon field is
+        always labeled ``1`` internally (used only to distinguish theory/window aliasing, not
+        exposed as an actual second tracer -- this function is single-tracer only).
+    mattrs : dict, optional
+        Mesh attributes to define the :class:`jaxpower.ParticleField` objects,
+        'boxsize', 'meshsize' or 'cellsize', 'boxcenter'. If ``None``, default attributes are used.
+    edges : dict, optional
+        Separation binning for the covariance windows. Default is ``{'step': cellsize.min()}``.
+    ells2 : tuple, optional
+        Multipoles of the two-anchor covariance window. Default is ``(0, 2, 4)``.
+    ells3 : list of tuples, optional
+        Sugiyama multipoles of the three-anchor covariance window. Default is ``[(0, 0, 0)]``.
+    buffer_size : int, optional
+        Buffer size for the 3-point window binning; increase for faster computation at the cost of memory.
+    batch_size : int, optional
+        Batch size for the covariance assembly.
+    smoothing_radius : float, optional
+        Reconstruction Gaussian smoothing radius. If ``None``, read from
+        ``recon_spectrum2.attrs['recon_smoothing_radius']``.
+    prelim_mattrs : MeshAttrs, optional
+        Box volume assumed in the pre-recon bias preliminary fit; see
+        :func:`run_preliminary_fit_mesh3_spectrum`. If ``None``, the measurement's embedding box is used.
+    split_SS : bool, optional
+        If ``True``, split the calculation of the post-recon shot-noise-shot-noise term;
+        ensures much better convergence for low-density samples such as QSO.
+
+    Returns
+    -------
+    results : dict
+        Dictionary containing the final covariance ('raw', with blocks (``mesh2_spectrum``,
+        ``mesh3_spectrum``, ``recon_particle2_correlation``)) and the interpolated covariance
+        window correlations used to build the (P_pre, B_pre, P_post) block
+        ('window_covariance_mesh2_correlation', 'window_covariance_mesh3_correlation').
+    """
+    from jaxpower import create_sharding_mesh, interpolate_window_function, compute_fkp2_covariance_window, compute_fkp2_normalization, FKPField
+    from jaxpower.cov3 import compute_spectrum3_covariance
+    from .correlation2_tools import project_spectrum2_covariance_to_correlation
+
+    if fields is None:
+        fields = [0]
+    pre, post = fields[0], 1
+
+    if smoothing_radius is None:
+        smoothing_radius = float(np.asarray(recon_spectrum2.attrs['recon_smoothing_radius']).flat[0])
+
+    if theory is None:
+        theory_pre = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, mattrs=prelim_mattrs, shotnoise=shotnoise)
+        from cosmoprimo.fiducial import DESI
+        kernels = get_post_recon_spectrum_kernels(DESI(), z=theory_pre.z, f=theory_pre.f, b1=theory_pre.bias['b1'],
+                                                  smoothing_radius=smoothing_radius, shotnoise=shotnoise)
+
+        def theory(flds):
+            flds = tuple(flds)
+            # Any all-pre combination (P, B, and the PP block's T) is handled exactly as in the
+            # pre-recon-only covariance; field identity doesn't matter to theory_pre itself.
+            if all(fl == pre for fl in flds):
+                return theory_pre(flds)
+            if len(flds) == 2 and set(flds) == {pre, post}:
+                return kernels['pre_post']
+            if flds == (post, post):
+                return kernels['post_post']
+            # No bispectrum/trispectrum theory involving the post-recon field.
+            return None
+
+    # (P_pre, B_pre, P_post) covariance windows: the post-recon field's window is aliased from
+    # the pre-recon one (reconstruction does not change the survey selection function, only the
+    # theory). compute_spectrum3_covariance queries window2/window3 with many different
+    # field-group combinations of {pre, post} -- not just the (pre,pre)/(pre,post)/(post,post)
+    # pairs of the top-level blocks, but also e.g. mixed-size groups pulled in by cov3's
+    # shot-noise-driven reducible bispectrum/trispectrum terms (fields (pre,pre,post) etc, since
+    # pre/post share correlated shot noise). Rather than enumerate every such combination,
+    # collapse any field-group touching 'post' to the identical 'pre' one at lookup time.
+    window2, window3 = _compute_cov3_windows(get_data_randoms, fields=[pre], mattrs=mattrs, edges=edges,
+                                             ells2=ells2, ells3=ells3, buffer_size=buffer_size)
+    # Store the real (unwrapped, serializable) windows for diagnostics / reuse
+    results = {'window_covariance_mesh2_correlation': window2, 'window_covariance_mesh3_correlation': window3}
+
+    observable = types.ObservableTree([spectrum2, spectrum3, recon_spectrum2],
+                                      fields=[(pre, pre), (pre, pre, pre), (post, post)])
+
+    covariance = compute_spectrum3_covariance(_AliasFieldWindow(window2, post, pre), _AliasFieldWindow(window3, post, pre),
+                                              observable, theory=theory, shotnoise=shotnoise, cache={}, batch_size=batch_size)
+
+    # Build the cov2-style (flat-label) WW/WS/SW/SS window + fkp_norm needed by the
+    # correlation-space projection of the post-recon block, again aliased from the pre-recon
+    # field (same survey randoms).
+    mattrs_ = mattrs or {}
+    with create_sharding_mesh(meshsize=mattrs_.get('meshsize', None)):
+        all_particles = prepare_jaxpower_particles(*get_data_randoms, mattrs=mattrs_, add_randoms=['IDS'])
+        all_fkp = [FKPField(particles['data'], particles['randoms']) for particles in all_particles]
+        mattrs_ = all_fkp[0].attrs
+        edges_ = edges if edges is not None else {'step': mattrs_.cellsize.min()}
+        split = [(42, fkp.randoms.extra['IDS']) for fkp in all_fkp]
+        kw_paint = dict(resampler='tsc', interlacing=3, compensate=True)
+        cov2_windows = compute_fkp2_covariance_window(all_fkp, edges=edges_, basis='bessel', los='local',
+                                                      fields=[pre], split=split, **kw_paint)
+        coords = np.logspace(-2, 8, 8 * 1024)
+        cov2_windows = cov2_windows.map(lambda window: interpolate_window_function(window, coords=coords), level=1)
+
+        # Alias the post-recon field's WW/WS/SW/SS windows from the pre-recon one.
+        aliased = []
+        for label, branch in cov2_windows.items(level=1):
+            base_branch = branch.get(fields=(pre,) * 4)
+            branch = branch.insert([base_branch], fields=[(post,) * 4])
+            aliased.append(branch)
+        cov2_windows = types.ObservableTree(aliased, types=cov2_windows.types)
+
+        def get_fkp_norm(*all_randoms):
+            fkp_norm = compute_fkp2_normalization(*all_randoms, cellsize=None, split=(42, 'index'))
+            for randoms in all_randoms + (all_randoms[-1],) * (2 - len(all_randoms)):
+                fkp_norm /= randoms.sum()
+            return fkp_norm
+
+        fkp_norm_pre = get_fkp_norm(*[particles['randoms'] for particles in all_particles])
+
+    fkp_norm = {(pre, pre): fkp_norm_pre, (post, post): fkp_norm_pre}
+
+    covariance = project_spectrum2_covariance_to_correlation(covariance, RR, fkp_norm, windows=cov2_windows,
+                                                              fields=[(post, post)], split_SS=split_SS)
     results['raw'] = covariance
     return results
 
