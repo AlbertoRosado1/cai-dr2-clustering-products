@@ -35,11 +35,16 @@ from clustering_statistics.tools import (write_stats, float2str, get_full_tracer
                                          get_simple_stats, _unzip_catalog_options, default_mpicomm,
                                          rebinning_matrix, setup_logging)
 from clustering_statistics import tools as clustering_tools
+from full_shape import box_tools
 
 
 logger = logging.getLogger('tools')
 base_fits_dir = Path('/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/fits/')
 base_stats_dir = Path('/dvs_ro') / clustering_tools.base_stats_dir.relative_to('/global')
+
+
+def _json_attr(value):
+    return json.dumps(value, sort_keys=True)
 
 
 _fiducial = None
@@ -435,7 +440,9 @@ def unpack_stats(stats):
         return windows
     elif isinstance(stats, types.GaussianLikelihood):
         likelihood = stats
-        return (unpack_stats(likelihood.observable), unpack_stats(likelihood.window), likelihood.covariance)
+        observables = unpack_stats(likelihood.observable)
+        windows = [None] * len(observables) if likelihood.window is None else unpack_stats(likelihood.window)
+        return (observables, windows, likelihood.covariance)
 
 
 def combine_covariances(covariances, observable):
@@ -518,7 +525,11 @@ def _get_covariance_correction_factor(covariance: types.CovarianceMatrix,
 
 
 def _get_prepared_cache_options(observables_options: list[dict], covariance_options: dict=None, kind: str=None):
-    options = {'observables': [{name: dict(observable_options[name]) for name in ['stat', 'catalog', 'window']} for observable_options in observables_options]}
+    options = {'observables': [
+        {name: dict(observable_options[name]) for name in ['stat', 'catalog']}
+        | ({'window': dict(observable_options['window'])} if 'window' in observable_options else {})
+        for observable_options in observables_options
+    ]}
     if kind == 'covariance':
         options['covariance'] = covariance_options or {}
     return options
@@ -783,6 +794,19 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         alt_fn = get_stats_fn(kind=stat, stats_dir=stats_dir, **file_kw)
         return alt_fn
 
+    def _window_mode(observable_options):
+        return str(observable_options.get('window', {}).get('mode', 'file')).lower()
+
+    interpolation_options = covariance_options.get('interpolation', {})
+    if isinstance(interpolation_options, bool):
+        interpolation_options = {'enabled': interpolation_options}
+    interpolate_covariance = bool(
+        interpolation_options.get('enabled', False)
+        or covariance_options.get('interpolate_to_data', False)
+    )
+    covariance_stat_options = covariance_options.get('stat_options', {})
+    covariance_file_options = {key: value for key, value in covariance_options.items() if key != 'stat_options'}
+
     def _format_log_fns(fns):
         if not isinstance(fns, list):
             return str(fns)
@@ -819,23 +843,27 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
 
     # Loading data, window
     all_data_fns, all_imocks, joint_labels, selects = [], [], {'observables': [], 'tracers': []}, []
+    window_modes = []
     for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options, with_stat_kw=True):
         file_kw = {'imock': None} | file_kw
         all_imocks.append(file_kw['imock'])
-        #fn = _get_mock_stats_fn(stat, file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=stat, **file_kw)
         fn = get_stats_fn(kind=stat, **file_kw)
         if not isinstance(fn, list): fn = [fn]
         all_data_fns.append(fn)
         for name in joint_labels:
             joint_labels[name].append(labels[name])
         selects.append(kw['stat'].get('select', None))
+        window_modes.append(_window_mode(kw))
+    no_window = all(mode == 'none' for mode in window_modes)
+    if any(mode == 'none' for mode in window_modes) and not no_window:
+        raise ValueError("window mode 'none' must be used for all observables in a likelihood")
     cache_data_fn = get_cache_fn('data', dict(imocks=all_imocks))
-    cache_window_fn = get_cache_fn('window', dict(imocks=all_imocks))
+    cache_window_fn = None if no_window else get_cache_fn('window', dict(imocks=all_imocks))
     data = get_from_cache(cache_data_fn)
-    window = get_from_cache(cache_window_fn)
+    window = None if no_window else get_from_cache(cache_window_fn)
     data_cache_hit = data is not None
-    window_cache_hit = window is not None
-    if data is None or window is None:
+    window_cache_hit = no_window or window is not None
+    if data is None or (not no_window and window is None):
         for iobs, (stat, labels, file_kw, kw) in enumerate(iter_stat_tracer_combinations(observables_options, with_stat_kw=True)):
             if not all_data_fns[iobs]:
                 raise FileNotFoundError(_format_missing_data_context(stat, file_kw, all_data_fns[iobs]))
@@ -859,6 +887,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     windows.append(types.WindowMatrix(value=np.eye(data[-1].size),
                                                       observable=data.clone(value=np.zeros_like(data.value())),
                                                       theory=data.clone(value=np.zeros_like(data.value()))))
+                elif no_window:
+                    continue
                 elif _windows:
                     windows.append(_windows[0])
                 else:
@@ -867,17 +897,20 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     if imock is not None:  # FIXME
                         file_kw['imock'] = 0
                     file_kw.pop('auw', None)  # auw stat has the same window as non-auw stat
-                    file_kw = file_kw | observables_options[iobs]['window']
+                    window_options = {
+                        key: value for key, value in observables_options[iobs].get('window', {}).items()
+                        if key != 'mode'
+                    }
+                    file_kw = file_kw | window_options
                     fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
-                    fn = get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
             # Join mesh2_spectrum, mesh3_spectrum, etc.
             data = pack_stats(data, **joint_labels)
-            window = pack_stats(windows, **joint_labels)
+            window = None if no_window else pack_stats(windows, **joint_labels)
         data, window = mpicomm.bcast((data, window), root=0)
         data_cache_hit = False
-        window_cache_hit = False
+        window_cache_hit = no_window
     if write_cache and not data_cache_hit:
         write_stats(cache_data_fn, data)
     if write_cache and not window_cache_hit:
@@ -885,7 +918,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
         leaf = _apply_select(data.get(**labels), select=kw['stat'].get('select', None))
         data = data.at(**labels).replace(leaf)
-        window = window.at.observable.at(**labels).match(data.get(**labels))
+        if window is not None:
+            window = window.at.observable.at(**labels).match(data.get(**labels))
     # Analytic covariances
     if covariance_options.get('source') in ['jaxpower', 'rascalc']:
         # WARNING: not tested yet!
@@ -931,9 +965,9 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             all_fns = []
             covariance_log_patterns = []
             all_imocks = None
+            covariance_labels = []
             for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
-                file_kw = file_kw | {'imock': '*'} | covariance_options
-                file_kw['tracer'] = get_full_tracer(get_simple_tracer(file_kw['tracer']), version=file_kw['version'])
+                file_kw = file_kw | {'imock': '*'} | covariance_file_options | covariance_stat_options.get(stat, {})
                 imocks = file_kw.pop('imock')
                 if imocks == '*':
                     imocks = list(range(2001))
@@ -941,8 +975,9 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     all_imocks = list(imocks)
                 else:
                     all_imocks = [imock for imock in all_imocks if imock in imocks]
-                stat_fns = [_get_mock_stats_fn(stat, file_kw | {'imock': imock}) for imock in imocks]
+                stat_fns = [get_stats_fn(kind=stat, **(file_kw | {'imock': imock})) for imock in imocks]
                 all_fns.append(stat_fns)
+                covariance_labels.append(labels)
                 covariance_log_patterns.append((stat, _format_log_fns(stat_fns)))
             all_fns = list(zip(*all_fns, strict=True))  # get a list of list of file names
             ifns_exists = []
@@ -962,7 +997,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             covariance = get_from_cache(cache_fn)
             covariance_cache_hit = covariance is not None
         if covariance is None:
-            mocks = []
+            mocks, mock_vectors = [], []
             if mpicomm.rank == 0:
                 covariance_read_fns = [all_fns[ifn] for ifn in ifns_exists]
                 logger.info(f"Reading covariance for {len(covariance_read_fns)} mock realizations from "
@@ -972,10 +1007,26 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     observables = [types.read(fn) for fn in all_fns[ifn]]
                     observables = [_apply_project(observable, select)[0] if _with_project(observable) else _apply_select(observable, select)
                                    for observable, select in zip(observables, selects)]
-                    mock = types.ObservableTree(observables, **joint_labels)
-                    mocks.append(mock)
-                covariance = types.cov(mocks)
-                covariance.attrs['nobs'] = len(mocks)
+                    if interpolate_covariance:
+                        mock_vectors.append(np.concatenate([
+                            box_tools.interpolate_observable_to_template(observable, data.get(**labels))
+                            for observable, labels in zip(observables, covariance_labels, strict=True)
+                        ]))
+                    else:
+                        mock = types.ObservableTree(observables, **joint_labels)
+                        mocks.append(mock)
+                if interpolate_covariance:
+                    if len(mock_vectors) < 2:
+                        raise ValueError('at least two covariance mock realizations are required')
+                    covariance = types.CovarianceMatrix(
+                        value=np.cov(np.asarray(mock_vectors), rowvar=False, ddof=1),
+                        observable=data,
+                        attrs={'nobs': len(mock_vectors),
+                               'covariance_interpolation': _json_attr(dict(interpolation_options))},
+                    )
+                else:
+                    covariance = types.cov(mocks)
+                    covariance.attrs['nobs'] = len(mocks)
             covariance = mpicomm.bcast(covariance, root=0)
             covariance_cache_hit = False
         if write_cache and cache_fn is not None and not covariance_cache_hit:
@@ -1000,6 +1051,12 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         if mpicomm.rank == 0:
             logger.info(info)
 
+    volume_scale = box_tools.get_covariance_volume_scale_factor(covariance_options.get('volume_rescaling', None))
+    if volume_scale != 1.:
+        covariance = covariance.clone(value=covariance.value() * volume_scale)
+    covariance.attrs['volume_rescaling'] = _json_attr(dict(covariance_options.get('volume_rescaling', {}) or {}))
+    covariance.attrs['volume_scale_factor'] = float(volume_scale)
+
     likelihood = types.GaussianLikelihood(
         observable=data,
         window=window,
@@ -1017,14 +1074,25 @@ def rebin_spectrum3_window(window, data=None):
         data = window.observable
     # Simplify window matrix
     ostep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in data)
-    tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window.theory)
+    with_templates = hasattr(window.theory, 'types')
+    window_theory = window.at.theory.get(types='theory') if with_templates else window
+
+    tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window_theory.theory)
     rebin = int(ostep / tstep)
     assert rebin >= 1
-    window = window.at.theory.select(k=slice(0, None, rebin))
+    window_theory = window_theory.at.theory.select(k=slice(0, None, rebin))
     # Compact non-diagonal term
-    rebin = rebinning_matrix(window.theory, new_coords=window.theory.select(k=slice(0, None, 2)),
+    rebin = rebinning_matrix(window_theory.theory, new_coords=window_theory.theory.select(k=slice(0, None, 2)),
                              interp_order=3, diag='separate')
-    window = window.clone(value=window.value() @ rebin.value(), theory=rebin.theory)
+    window_theory = window_theory.clone(value=window_theory.value() @ rebin.value(), theory=rebin.theory)
+
+    if with_templates:
+        # Re-assemble the window matrix
+        window_templates = window.at.theory.get(types=[t for t in window.theory.types if t != 'theory'])
+        window = window.clone(value=np.concatenate([window_theory.value(), window_templates.value()], axis=-1),
+                              theory=window.theory.at(types='theory').replace(window_theory.theory))
+    else:
+        window = window_theory
     return window
 
 
@@ -1081,6 +1149,13 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
     for observable_options, data, window, label in zip(observables_options, data, windows, labels, strict=True):
         stat = observable_options['stat']['kind']
         data_attrs = dict(data.attrs) | label
+        z_source = window.observable if window is not None else data
+        for _, pole in z_source.items(level=None):
+            if 'zeff' in pole.attrs:
+                data_attrs['z'] = pole.attrs['zeff']
+            elif 'zsnap' in pole.attrs:
+                data_attrs['z'] = pole.attrs['zsnap']
+        data_attrs.setdefault('z', observable_options['catalog'].get('zsnap', None))
         namespace = _str_from_observable_options(observable_options, level={'catalog': 1, 'stat': 0, 'window': 0, 'theory': 0, 'covariance': 0})
         data_attrs['tracers'] = namespace.split('x')
         if namespace not in nbar and 'spectrum2' in stats.observable.observables:
@@ -1102,19 +1177,24 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             raise NotImplementedError(stat)
         is_compressed = _stat_is_compressed(stat)
         if is_compressed:  # e.g. BAO
-            observable = cls(data=data.value(), z=data.attrs['zeff'], parameters=list(data.params))
+            observable = cls(data=data.value(), z=data_attrs.get('z', data.attrs.get('zeff', None)), parameters=list(data.params))
         else:
-            for _, pole in window.observable.items(level=None):
-                data_attrs['z'] = pole.attrs['zeff']
-            if mpicomm.rank == 0:
+            if window is not None:
+                for _, pole in window.observable.items(level=None):
+                    if 'zeff' in pole.attrs:
+                        data_attrs['z'] = pole.attrs['zeff']
+                    elif 'zsnap' in pole.attrs:
+                        data_attrs['z'] = pole.attrs['zsnap']
+            if mpicomm.rank == 0 and data_attrs.get('z', None) is not None:
                 logger.info(f'{label}: data effective redshift = {data_attrs["z"]:.3f}')
             theory = get_theory(stat, theory_options=observable_options['theory'], cosmology=cosmology, data_attrs=data_attrs, data=data)
-            if cls == Spectrum3PolesObservable:
+            if window is not None and cls == Spectrum3PolesObservable:
                 # Compactify window theory
                 window = rebin_spectrum3_window(window, data=data)
-            window = select_window_theory(window, data)
+            if window is not None:
+                window = select_window_theory(window, data)
             templates = None
-            if hasattr(window.theory, 'types'):  # with systematic templates
+            if window is not None and hasattr(window.theory, 'types'):  # with systematic templates
                 templates = []
                 for label, wtheory in window.theory.items():
                     if label['types'] != 'theory':
@@ -1148,7 +1228,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
                 pt_graph = compile(observable.theory if is_compressed else theory.pt)
                 emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
-                if write_cache:
+                if write_cache and mpicomm.rank == 0:
                     mkdir(cache_fn.parent)
                     emulator.write(str(cache_fn))
             emulated_pt = emulator.to_calculator()
@@ -1407,90 +1487,17 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     for tracer, stat in itertools.product(tracers, stats):
         tracer, zrange = get_full_tracer_zrange(tracer, zrange)
         catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir, 'imock': imock}
-        if project:
-            catalog['project'] = project
         if 'data' not in version and imock is None:
             catalog['imock'] = '*'  # read all available mocks
         observable_options = {'stat': {'kind': stat}, 'catalog': catalog}
+        if project:
+            observable_options['stat']['project'] = project
         if emulator is False: emulator_options = {'name': ''}
         elif emulator is True: emulator_options = {}
         else: emulator_options = dict(emulator)
         observable_options['emulator'] = emulator_options
         observables.append(observable_options)
     covariance = {'version': covariance, 'stats_dir': stats_dir}
-    return fill_fiducial_likelihood_options({'observables': observables, 'covariance': covariance})
-
-
-def generate_box_likelihood_options_helper(
-        stats=('mesh2_spectrum',),
-        tracer='LRG',
-        zsnap=0.800,
-        cosmo='000',
-        hod='',
-        los='z',
-        version='abacus-2ndgen',
-        covariance_version='ezmock-dr1',
-        stats_dir=Path('/dvs_ro/cfs/cdirs/desicollab/mocks/cai/LSS/DA2/mocks/desipipe/box'),
-        covariance_stats_dir=None,
-        emulator=True):
-    """
-    Convenience helper that builds a dictionary of likelihood options for cubic box mocks.
-
-    Parameters
-    ----------
-    stats : list
-        Statistics to fit, e.g. ['mesh2_spectrum', 'mesh3_spectrum'].
-    tracer : str
-        Simple tracer name ('LRG', 'ELG', 'QSO').
-    zsnap : float
-        Box snapshot redshift (e.g. 0.800 for LRG mid-z bin).
-    cosmo : str
-        Cosmology label (e.g. '000').
-    hod : str
-        HOD flavor string (empty string for abacus-2ndgen baseline).
-    los : str
-        Line-of-sight direction ('x', 'y', or 'z').
-    version : str
-        Version subdirectory under stats_dir for the data vector (e.g. 'abacus-2ndgen').
-    covariance_version : str
-        Version subdirectory for the covariance mocks (e.g. 'ezmock-dr1').
-    stats_dir : Path
-        Base directory containing version-named subdirectories of box measurements.
-    covariance_stats_dir : Path, optional
-        Base directory containing version-named covariance mock measurements.
-    emulator : bool or dict
-        Emulator configuration.
-
-    Returns
-    -------
-    likelihood_options : dict
-        Dictionary with keys ['observables', 'covariance'].
-    """
-    if isinstance(stats, str):
-        stats = [stats]
-    simple_tracer = get_simple_tracer(_make_tuple(tracer))
-    observables = []
-    for stat in stats:
-        catalog = {
-            'tracer': simple_tracer,
-            'zsnap': zsnap,
-            'cosmo': cosmo,
-            'hod': hod,
-            'los': los,
-            'version': version,
-            'imock': '*',
-            'stats_dir': stats_dir,
-        }
-        observable_options = {'stat': {'kind': stat}, 'catalog': catalog}
-        if emulator is False: emulator_options = {'name': ''}
-        elif emulator is True: emulator_options = {}
-        else: emulator_options = dict(emulator)
-        observable_options['emulator'] = emulator_options
-        observables.append(observable_options)
-    if covariance_stats_dir is None:
-        covariance_stats_dir = stats_dir
-    covariance = {'source': 'mock', 'version': covariance_version, 'stats_dir': covariance_stats_dir,
-                  'corrections': ['hartlap', 'percival']}
     return fill_fiducial_likelihood_options({'observables': observables, 'covariance': covariance})
 
 
@@ -1698,8 +1705,9 @@ def str_from_likelihood_options(likelihood_options, level: int | dict=None):
     if level['covariance'] > 0:
         covariance = likelihood_options.get('covariance', {}) or {}
         covariance_str = []
-        covariance_str.append(covariance.get('source', 'none'))
-        covariance_str.append(covariance.get('version', 'none'))
+        for name in ['source', 'version']:
+            value = covariance.get(name, 'none')
+            covariance_str.append('none' if value is None else str(value))
         covariance_str = ['cov-' + '-'.join(covariance_str)]
         if level['covariance'] >= 3:
             corrections = covariance.get('corrections', None)
@@ -1795,8 +1803,9 @@ def get_fits_fn(fits_dir=Path(os.getenv('SCRATCH', '.')) / 'fits',  project='', 
     _str_from_options = str_from_options(options, level=level)
     _hash = _hash_options(options)
     extra = f'_{extra}' if extra else ''
-    dirname = fits_dir / f'{_str_from_options}-{_hash}{extra}'
-    ichain = f'_{ichain}' if ichain is not None else ''
+    ichain = f'_{ichain:d}' if ichain is not None else ''
+    dirname_label = f'{_str_from_options}-{_hash}{extra}'.replace('.', 'p')
+    dirname = fits_dir / dirname_label
     basename = f'{kind}{ichain}.{ext}'
     if ichain == '_*':
         return dirname.glob(basename)
