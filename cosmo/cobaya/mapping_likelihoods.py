@@ -18,72 +18,39 @@ from pathlib import Path
 DEFAULT_BAO_DATA_PATH = Path('/global/cfs/cdirs/desicollab/science/cpe/y3_bao_cosmo/bao_v1p2/bao/cobaya_data')
 DEFAULT_BAO_LYA_FS_DATA_PATH = Path('/global/cfs/cdirs/desicollab/science/cpe/dr2_fs/lya_fs/likelihood/cobaya/measurements')
 
-BAO_DR2_DATASETS = {
-    'desi-dr2-bao-all': {
-        'likelihood': 'desi_dr2_bao_all',
-        'measurements_file': 'desi_gaussian_bao_ALL_GCcomb_mean.txt',
-        'cov_file': 'desi_gaussian_bao_ALL_GCcomb_cov.txt',
-    },
-    'desi-dr2-bao-gqc': {
-        'likelihood': 'desi_dr2_bao_gqc',
-        'measurements_file': 'desi_gaussian_bao_noLya_GCcomb_mean.txt',
-        'cov_file': 'desi_gaussian_bao_noLya_GCcomb_cov.txt',
-    },
-    'desi-dr2-bao-lya-fs': {
-        'likelihood': 'desi_dr2_bao_lya_fs',
+_BAO_DR2_DATASET_SPECS = (
+    ('desi-dr2-bao-all', 'desi_dr2_bao_all', 'desi_gaussian_bao_ALL_GCcomb', {}),
+    ('desi-dr2-bao-gqc', 'desi_dr2_bao_gqc', 'desi_gaussian_bao_noLya_GCcomb', {}),
+    ('desi-dr2-bao-lya-fs', 'desi_dr2_bao_lya_fs', 'desi_gaussian_bao_Lya_GCcomb_with_new_lyman_alpha_fs', {
         'path': DEFAULT_BAO_LYA_FS_DATA_PATH,
-        'measurements_file': 'desi_gaussian_bao_Lya_GCcomb_with_new_lyman_alpha_fs_mean.txt',
-        'cov_file': 'desi_gaussian_bao_Lya_GCcomb_with_new_lyman_alpha_fs_cov.txt',
         'rs_fid': 1,
         'aliases': ['BAO'],
         'speed': 2000,
-    },
-    'desi-dr2-bao-gqc-lya-fs': {
-        'likelihood': 'desi_dr2_bao_gqc_lya_fs',
+    }),
+    ('desi-dr2-bao-gqc-lya-fs', 'desi_dr2_bao_gqc_lya_fs', 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs', {
         'path': DEFAULT_BAO_LYA_FS_DATA_PATH,
-        'measurements_file': 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_mean.txt',
-        'cov_file': 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_cov.txt',
         'rs_fid': 1,
         'aliases': ['BAO'],
         'speed': 2000,
-    },
-    'desi-dr2-bao-bgs': {
-        'likelihood': 'desi_dr2_bao_bgs_z1',
-        'measurements_file': 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4_mean.txt',
-        'cov_file': 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4_cov.txt',
-    },
-    'desi-dr2-bao-lrg-z1': {
-        'likelihood': 'desi_dr2_bao_lrg_z1',
-        'measurements_file': 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6_mean.txt',
-        'cov_file': 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6_cov.txt',
-    },
-    'desi-dr2-bao-lrg-z2': {
-        'likelihood': 'desi_dr2_bao_lrg_z2',
-        'measurements_file': 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8_mean.txt',
-        'cov_file': 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8_cov.txt',
-    },
-    'desi-dr2-bao-lrgpluselg': {
-        'likelihood': 'desi_dr2_bao_lrgpluselg_z1',
-        'measurements_file': 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1_mean.txt',
-        'cov_file': 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1_cov.txt',
-    },
-    'desi-dr2-bao-elg': {
-        'likelihood': 'desi_dr2_bao_elg_z2',
-        'measurements_file': 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6_mean.txt',
-        'cov_file': 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6_cov.txt',
-    },
-    'desi-dr2-bao-qso': {
-        'likelihood': 'desi_dr2_bao_qso_z1',
-        'measurements_file': 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1_mean.txt',
-        'cov_file': 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1_cov.txt',
-    },
-    'desi-dr2-bao-lya': {
-        'likelihood': 'desi_dr2_bao_lya',
-        'measurements_file': 'desi_gaussian_bao_Lya_GCcomb_mean.txt',
-        'cov_file': 'desi_gaussian_bao_Lya_GCcomb_cov.txt',
-    },
-}
+    }),
+    ('desi-dr2-bao-bgs', 'desi_dr2_bao_bgs_z1', 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4', {}),
+    ('desi-dr2-bao-lrg-z1', 'desi_dr2_bao_lrg_z1', 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6', {}),
+    ('desi-dr2-bao-lrg-z2', 'desi_dr2_bao_lrg_z2', 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8', {}),
+    ('desi-dr2-bao-lrgpluselg', 'desi_dr2_bao_lrgpluselg_z1', 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1', {}),
+    ('desi-dr2-bao-elg', 'desi_dr2_bao_elg_z2', 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6', {}),
+    ('desi-dr2-bao-qso', 'desi_dr2_bao_qso_z1', 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1', {}),
+    ('desi-dr2-bao-lya', 'desi_dr2_bao_lya', 'desi_gaussian_bao_Lya_GCcomb', {}),
+)
 
+BAO_DR2_DATASETS = {}
+for _name, _likelihood, _file_root, _extra in _BAO_DR2_DATASET_SPECS:
+    _metadata = {'likelihood': _likelihood}
+    if 'path' in _extra:
+        _metadata['path'] = _extra['path']
+    _metadata['measurements_file'] = f'{_file_root}_mean.txt'
+    _metadata['cov_file'] = f'{_file_root}_cov.txt'
+    _metadata.update({key: value for key, value in _extra.items() if key != 'path'})
+    BAO_DR2_DATASETS[_name] = _metadata
 
 def make_list(value):
     """Return ``value`` as a list, treating strings as scalars."""
