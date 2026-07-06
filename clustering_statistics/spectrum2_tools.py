@@ -1268,7 +1268,7 @@ def compute_window_mesh2_spectrum_fm(
     all_regression_maps = None
     if regression_maps is not None:
         if not is_sequence(regression_maps):
-            regresion_maps = [regression_maps]
+            regression_maps = [regression_maps]
         if isinstance(regression_maps[0], str):
             regression_maps = (regression_maps,) * ntracers
         all_regression_maps = {}
@@ -1504,8 +1504,7 @@ def compute_window_mesh2_spectrum_fm(
                 if jax.process_index() == 0: logger.info("Computing geometry window with desiwinds...")
                 _, windows["geometry"] = get_window_spikes(
                     **window_fm_kw,
-                    mock_survey_kwargs=mock_survey_kwargs
-                    | {"ric_args": None, "amr_args": None},
+                    mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None, "data_regions": None, "randoms_regions": None},
                 )
 
             if ric:
@@ -1658,7 +1657,7 @@ def compute_window_mesh2_spectrum_fm(
                     if geo:
                         if jax.process_index() == 0:
                             logger.info("Computing geometry window for ell=%i, optimal weights combination %i with desiwinds...", ell, iopt)
-                        _, _windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None})
+                        _, _windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None, "data_regions": None, "randoms_regions": None})
                         windows["geometry"][ell].append(_windows_fm_geo)
 
                     if ric:
