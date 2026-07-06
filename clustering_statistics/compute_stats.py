@@ -31,7 +31,8 @@ import lsstypes as types
 
 from . import tools
 from .tools import fill_fiducial_options, _merge_options, Catalog, _compute_binned_weight, setup_logging
-from . import catalog_blinding
+from .catalog_blinding import bao as catalog_bao_blinding
+from .catalog_blinding import lss_catalogs as catalog_lss
 
 from .correlation2_tools import compute_particle2_angular_upweights, compute_particle2_correlation, compute_particle2_correlation_close_pair_correction, compute_covariance_particle2_correlation
 from .spectrum2_tools import (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction, compute_window_mesh2_spectrum, compute_covariance_mesh2_spectrum, run_preliminary_fit_mesh2_spectrum, compute_rotation_mesh2_spectrum, compute_window_mesh2_spectrum_fm)
@@ -44,6 +45,67 @@ from .systematic_templates import include_systematic_templates
 
 
 logger = logging.getLogger('summary-statistics')
+
+
+def _format_zrange_for_filename(zrange):
+    if zrange is None:
+        return 'zall'
+    try:
+        z0, z1 = zrange
+    except Exception:
+        return 'zall'
+    return f'z{float(z0):.1f}-{float(z1):.1f}'
+
+
+def _save_catalog_bao_blinded_catalogs(raw_data, raw_randoms, *, tracer, catalog_options,
+                                       blinding_options):
+    """Optionally save the LSS-like catalog-BAO state used by measurements."""
+    save_dir = blinding_options.get('save_catalog_dir') if blinding_options is not None else None
+    if save_dir is None:
+        return None
+    save_dir = Path(save_dir).expanduser().resolve(strict=False)
+    region = catalog_options.get('region', 'ALL')
+    zlabel = _format_zrange_for_filename(catalog_options.get('zrange', None))
+    prefix = blinding_options.get('save_catalog_prefix')
+    if prefix is None:
+        suffix = blinding_options.get('output_version_suffix', 'desiblind-bao-blinded')
+        prefix = f'{tracer}_{region}_{zlabel}_{suffix}'
+
+    mpicomm = getattr(raw_data, 'mpicomm', None)
+    rank = getattr(mpicomm, 'rank', 0)
+    if rank == 0:
+        save_dir.mkdir(parents=True, exist_ok=True)
+    if mpicomm is not None:
+        mpicomm.Barrier()
+
+    data_fn = save_dir / f'{prefix}_clustering.dat.fits'
+    raw_data.write(str(data_fn))
+
+    random_paths = []
+    save_randoms = str(blinding_options.get('save_randoms', 'diagnostic')).lower()
+    save_random_index = int(blinding_options.get('save_random_index', 0))
+    random_list = list(raw_randoms) if isinstance(raw_randoms, (list, tuple)) else [raw_randoms]
+    if save_randoms not in {'none', 'diagnostic', 'all'}:
+        raise ValueError("catalog_bao_blinding save_randoms must be one of: 'none', 'diagnostic', 'all'")
+    if save_randoms == 'all':
+        selected = list(enumerate(random_list))
+    elif save_randoms == 'diagnostic':
+        if not (0 <= save_random_index < len(random_list)):
+            raise ValueError(f'save_random_index={save_random_index} outside available random range [0, {len(random_list) - 1}]')
+        selected = [(save_random_index, random_list[save_random_index])]
+    else:
+        selected = []
+
+    for iran, random in selected:
+        random_fn = save_dir / f'{prefix}_{iran}_clustering.ran.fits'
+        random.write(str(random_fn))
+        random_paths.append(random_fn)
+
+    if rank == 0:
+        logger.info('Saved catalog-level BAO/AP blinded data catalog to %s', data_fn)
+        for random_fn in random_paths:
+            logger.info('Saved catalog-level BAO/AP blinded random catalog to %s', random_fn)
+    return {'data': data_fn, 'randoms': random_paths}
 
 
 def _expand_cut_auw_options(stat, options):
@@ -122,24 +184,60 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     # tracers is a list of tracer1, tracer2, ... for cross-correlations
     tracers = list(catalog_options.keys())
 
+    # Minimal catalog-level BAO/AP on-the-fly path to desiblind. This is deliberately
+    # separate from statistic/data-vector blinding in tools.apply_blinding.
+    # The old generic catalog['blinding'] workflow has been removed; use this
+    # explicit option only when desiblind.CatalogBAOBlinder should be applied
+    # in memory before prepare_catalog.
+    catalog_bao_blinding_options = {}
+    for tracer in tracers:
+        if 'blinding' in catalog_options[tracer]:
+            raise ValueError(
+                "catalog['blinding'] was the removed desi-clustering-native catalog-blinding workflow. "
+                "Use catalog['catalog_bao_blinding'] for the desiblind BAO/AP on-the-fly path, "
+                "or pre-generate catalogs with desiblind and pass them as a normal cat_dir."
+            )
+        catalog_bao_blinding_options[tracer] = catalog_bao_blinding.resolve_options(
+            catalog_options[tracer].pop('catalog_bao_blinding', None),
+            tracer=tracer,
+            zrange=catalog_options[tracer].get('zrange', None),
+        )
+    catalog_bao_blinded_tracers = [tracer for tracer, options in catalog_bao_blinding_options.items() if options is not None]
+    with_catalog_bao_blinding = bool(catalog_bao_blinded_tracers)
+    if with_catalog_bao_blinding and len(catalog_bao_blinded_tracers) != len(tracers):
+        raise ValueError(
+            'catalog_bao_blinding must be configured for every tracer in this measurement, or for none. '
+            f'Got catalog BAO blinding for {catalog_bao_blinded_tracers}, but measurement tracers are {tracers}. '
+            'Partial catalog-level blinding would make it ambiguous whether statistic/data-vector blinding should be suppressed.'
+        )
+
     # Create redshift range lists for each tracer (support multiple z-bins)
     zranges = {tracer: _make_list_zrange(catalog_options[tracer].pop('zrange')) for tracer in tracers}
     region = {tracer: catalog_options[tracer].get('region') for tracer in tracers}
-    catalog_blinding_options = {tracer: catalog_options[tracer].pop('blinding', None) for tracer in tracers}
-    with_catalog_blinding = any(catalog_blinding.get_blinding_modes(catalog_blinding_options[tracer]) for tracer in tracers)
-    catalog_blinding_params = {
-        tracer: catalog_blinding.get_blinding_parameters(catalog_blinding_options[tracer], tracer=tracer)
-        for tracer in tracers if catalog_blinding_options[tracer]
-    }
-    output_catalog_options = copy.deepcopy(catalog_options)
-    for tracer, params in catalog_blinding_params.items():
-        output_catalog_options[tracer]['version'] = catalog_blinding.output_version(output_catalog_options[tracer].get('version', None), params)
-    catalog_blinding_attrs = catalog_blinding.blinding_attrs(catalog_blinding_params)
 
-    def write_stats(filename, stats):
-        if catalog_blinding_attrs:
-            getattr(stats, 'attrs', {}).update(catalog_blinding_attrs)
-        tools.write_stats(filename, stats)
+    # Measurement filenames should not collide with unblinded products. Keep
+    # input catalog options untouched, but add an output-only version suffix for
+    # desiblind catalog-BAO measurements unless the user disables it.
+    output_catalog_options = copy.deepcopy(catalog_options)
+    for tracer, blinding_options in catalog_bao_blinding_options.items():
+        if blinding_options is not None:
+            output_catalog_options[tracer]['version'] = catalog_bao_blinding.output_version(
+                output_catalog_options[tracer].get('version', None), blinding_options)
+
+    catalog_bao_blinding_attrs = {}
+    for tracer, blinding_options in catalog_bao_blinding_options.items():
+        if blinding_options is not None:
+            for key, value in catalog_bao_blinding.attrs(blinding_options).items():
+                name = key if len(tracers) == 1 else f'{key}_{tracer}'
+                catalog_bao_blinding_attrs[name] = value
+
+    def update_catalog_bao_blinding_attrs(statistic):
+        if catalog_bao_blinding_attrs and hasattr(statistic, 'attrs'):
+            statistic.attrs.update(catalog_bao_blinding_attrs)
+        return statistic
+
+    def write_stats(filename, statistic):
+        return tools.write_stats(filename, update_catalog_bao_blinding_attrs(statistic))
 
     # Wrap catalog readers with catalog filename lookup function
     if get_catalog_fn is not None:
@@ -153,19 +251,41 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
     # Initialize catalogs and randoms dictionaries
     data, randoms, raw_randoms, raw_full_data = {}, {}, {}, {}
     with_stats_blinding = False
+    suppressed_stats_blinding_tracers = []
     if with_catalogs:
         # Load data and random catalogs for each tracer
         for tracer in tracers:
             _catalog_options = dict(catalog_options[tracer])
-            _catalog_options['region'] = 'ALL'
-            # Expand redshift range to cover all requested z-bins
+            requested_region = _catalog_options.get('region')
+            # Historical compute_stats loads all regions up front, then masks to
+            # the requested region for each statistic. For catalog-level BAO/AP
+            # blinding, LSS random resampling is region-local (e.g. NGC uses a
+            # DEC=32.375 split), so keep a single requested region instead of
+            # mixing NGC/SGC before resampling. Leave unblinded and ALL-region
+            # measurements on the historical path.
+            if catalog_bao_blinding_options[tracer] is None or requested_region in [None, 'ALL']:
+                _catalog_options['region'] = 'ALL'
+            # Expand redshift range for the catalog read. For catalog-level BAO/AP,
+            # match LSS catalog production: build the blinded clustering catalog and
+            # nbar/FKP columns over the full tracer nbar range, then mask to the
+            # requested measurement bin(s) later.
+            if catalog_bao_blinding_options[tracer] is not None:
+                nbar_zrange = catalog_lss.fiducial_nbar_zrange(tracer, zrange=None)
+                if nbar_zrange is not None:
+                    _catalog_options['zrange'] = nbar_zrange
+            else:
+                _catalog_options['zrange'] = (
+                    min(zrange[0] for zrange in zranges[tracer]),
+                    max(zrange[1] for zrange in zranges[tracer]),
+                )
 
             # Add bitwise weight information (PIP, completeness) if needed
             binned_weight = {}
             if any(name in _catalog_options.get('weight', '') for name in ['bitwise', 'compntile']):
                 # sets NTILE-MISSING-POWER (missing_power) and per-tile completeness (completeness)
                 raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options)
-                raw_full_data[tracer] = catalog_blinding.apply_bao_blinding_to_catalogs(raw_full_data[tracer], catalog_blinding_params.get(tracer, None))
+                raw_full_data[tracer] = catalog_bao_blinding.apply_to_catalogs(
+                    raw_full_data[tracer], catalog_bao_blinding_options[tracer])
                 binned_weight.update(raw_full_data[tracer].attrs)
             _catalog_options['binned_weight'] = binned_weight
 
@@ -175,20 +295,81 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 # pop as we don't need it anymore
                 _catalog_options |= {key: recon_options.pop(key) for key in list(recon_options) if key in ['nran']}
 
-            # Check if analysis requires blinding (e.g., protected samples)
-            if not with_catalog_blinding:
-                with_stats_blinding |= tools.check_if_stats_requires_blinding(analysis=analysis, **_catalog_options)
+            # Check if analysis requires statistic/data-vector blinding (e.g.,
+            # protected samples). Do not stack it on top of catalog-level
+            # desiblind BAO/AP blinding.
+            stats_blinding_required = tools.check_if_stats_requires_blinding(analysis=analysis, **_catalog_options)
+            if stats_blinding_required and catalog_bao_blinding_options[tracer] is not None:
+                suppressed_stats_blinding_tracers.append(tracer)
+            else:
+                with_stats_blinding |= stats_blinding_required
             # Prepare incomplete catalog handling if completeness weights provided
             if isinstance(_catalog_options.get('complete', None), dict):
                 _catalog_options.setdefault('reshuffle', {})  # to pass on complete data
 
-            # Read data and random catalogs
-            data[tracer] = prepare_catalog(read_catalog(kind='data', **_catalog_options, concatenate=True), kind='data', **(_catalog_options | dict(keep_columns=True)))
+            # Read data and random catalogs. If requested, BAO/AP catalog
+            # blinding happens before prepare_catalog so POSITION is built from
+            # the desiblind-shifted redshift. Following the LSS catalog workflow,
+            # random redshift-dependent columns are then resampled from the
+            # shifted data rather than directly BAO-shifting the randoms.
+            raw_data_unblinded = read_catalog(kind='data', **_catalog_options, concatenate=True)
+            raw_data = catalog_bao_blinding.apply_to_catalogs(raw_data_unblinded, catalog_bao_blinding_options[tracer])
+            bao_nz_reweight = None
+            if catalog_bao_blinding_options[tracer] is not None and catalog_bao_blinding_options[tracer].get('apply_nz_reweight', True):
+                raw_data, bao_nz_reweight = catalog_lss.apply_bao_nz_reweight(
+                    raw_data_unblinded, raw_data,
+                    zcol_before=catalog_bao_blinding_options[tracer]['input_zcol'],
+                    zcol_after=catalog_bao_blinding_options[tracer]['output_zcol'],
+                    zmin=catalog_bao_blinding_options[tracer].get('nz_zmin', None),
+                    zmax=catalog_bao_blinding_options[tracer].get('nz_zmax', None),
+                    dz=catalog_bao_blinding_options[tracer].get('nz_dz', 0.01),
+                    copy=False,
+                )
+            bao_nz_extra_weight = None if bao_nz_reweight is None else bao_nz_reweight.get('correction')
+            if catalog_bao_blinding_options[tracer] is not None:
+                raw_data = catalog_lss.set_lss_pre_addnbar_weight(raw_data, extra_weight=bao_nz_extra_weight, copy=False)
+            data[tracer] = prepare_catalog(raw_data, kind='data', **(_catalog_options | dict(keep_columns=True)))
             binned_weight.update(data[tracer].attrs)  # update with any additional info from prepared data catalog
             #_catalog_options.pop('complete', None)
             #_catalog_options.pop('reshuffle', None)
-            raw_randoms[tracer] = read_catalog(kind='randoms', **_catalog_options, concatenate=False)
-            raw_randoms[tracer] = catalog_blinding.apply_bao_blinding_to_catalogs(raw_randoms[tracer], catalog_blinding_params.get(tracer, None))
+            raw_randoms_unmatched = read_catalog(kind='randoms', **_catalog_options, concatenate=False)
+            if catalog_bao_blinding_options[tracer] is not None:
+                split_columns = catalog_lss.split_columns_for_region(
+                    _catalog_options.get('region'), tracer=tracer,
+                    split_columns=catalog_bao_blinding_options[tracer].get('random_split_columns'),
+                )
+                raw_randoms[tracer] = catalog_lss.resample_randoms_from_data(
+                    raw_randoms_unmatched, raw_data,
+                    columns=catalog_bao_blinding_options[tracer].get('random_resample_columns'),
+                    split_columns=split_columns,
+                    seed=catalog_bao_blinding_options[tracer].get('random_seed', 0),
+                    compmd=catalog_bao_blinding_options[tracer].get('random_compmd', 'ran'),
+                    copy=True,
+                )
+                nbar_zrange = catalog_lss.fiducial_nbar_zrange(tracer, zrange=_catalog_options.get('zrange'))
+                raw_data, raw_randoms[tracer], _ = catalog_lss.add_nbar_fkp(
+                    raw_data, raw_randoms[tracer],
+                    zcol=catalog_bao_blinding_options[tracer]['output_zcol'],
+                    zmin=nbar_zrange[0] if nbar_zrange is not None else None,
+                    zmax=nbar_zrange[1] if nbar_zrange is not None else None,
+                    dz=catalog_bao_blinding_options[tracer].get('nbar_dz', catalog_bao_blinding_options[tracer].get('nz_dz', 0.01)),
+                    p0=_catalog_options.get('FKP_P0', catalog_lss.fiducial_fkp_p0(tracer)),
+                    compmd=catalog_bao_blinding_options[tracer].get('random_compmd', 'ran'),
+                    randens=catalog_bao_blinding_options[tracer].get('randens', 2500.),
+                    data_extra_weight=bao_nz_extra_weight,
+                    copy=False,
+                )
+                # prepare_catalog may copy data columns, so refresh prepared data
+                # after add_nbar_fkp mutates raw_data in-place.
+                data[tracer] = prepare_catalog(raw_data, kind='data', **(_catalog_options | dict(keep_columns=True)))
+                binned_weight.update(data[tracer].attrs)
+                _save_catalog_bao_blinded_catalogs(
+                    raw_data, raw_randoms[tracer], tracer=tracer,
+                    catalog_options=_catalog_options,
+                    blinding_options=catalog_bao_blinding_options[tracer],
+                )
+            else:
+                raw_randoms[tracer] = raw_randoms_unmatched
             randoms[tracer] = prepare_catalog(raw_randoms[tracer], kind='randoms', **_catalog_options)
             if tools.check_if_requires_renormalization(**_catalog_options):
                 for random in randoms[tracer]:
@@ -196,9 +377,24 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             catalog_options[tracer]['binned_weight'] = binned_weight  # store binned weight info in catalog options for later use in stats computation
             output_catalog_options[tracer]['binned_weight'] = binned_weight
 
+    if with_catalog_bao_blinding and with_stats_blinding:
+        raise ValueError(
+            'Refusing to combine catalog-level BAO/AP blinding with statistic/data-vector blinding. '
+            'Use catalog_bao_blinding for all tracers to suppress statistic/data-vector blinding, '
+            'or disable catalog_bao_blinding and use the statistic/data-vector blinding path alone.'
+        )
+
     # Warn user if blinding will be applied
     if with_stats_blinding:
         warnings.warn('Output clustering statistics will be blinded on-the-fly.\nIf you do not want blinding, pass "protected" in the "analysis" argument.')
+    if suppressed_stats_blinding_tracers:
+        warnings.warn(
+            'Statistic/data-vector blinding would normally be applied for tracer(s) '
+            f'{suppressed_stats_blinding_tracers}, but catalog_bao_blinding is active; '
+            'not stacking both blinding layers.'
+        )
+    if with_catalog_bao_blinding:
+        warnings.warn('Input catalogs will be BAO/AP blinded with desiblind.CatalogBAOBlinder before measuring clustering statistics.')
 
     # Initialize reconstruction attributes storage
     stat_recon_attrs = {}
@@ -350,7 +546,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             # Store reconstruction metadata
                             if recon:
                                 correlation[key].attrs.update(stat_recon_attrs)
-                            tools.write_stats(fn, correlation[key])
+                            write_stats(fn, correlation[key])
 
             # Map of spectrum statistics to computation functions
             funcs = {f'{recon}mesh2_spectrum': (compute_mesh2_spectrum, compute_mesh2_spectrum_close_pair_correction), f'{recon}mesh3_spectrum': (compute_mesh3_spectrum, compute_mesh3_spectrum_close_pair_correction)}
@@ -404,7 +600,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                             # Store reconstruction metadata
                             if recon:
                                 spectrum[key].attrs.update(stat_recon_attrs)
-                            tools.write_stats(fn, spectrum[key])
+                            write_stats(fn, spectrum[key])
 
         # Synchronize across all processes before proceeding to windows
         jax.experimental.multihost_utils.sync_global_devices('spectrum')  # wait for the writer
@@ -711,10 +907,16 @@ def list_stats(stats, get_stats_fn=tools.get_stats_fn, **kwargs):
     kwargs = fill_fiducial_options(kwargs)
     catalog_options = kwargs['catalog']
     tracers = list(catalog_options.keys())
-    catalog_blinding_options = {tracer: catalog_options[tracer].pop('blinding', None) for tracer in tracers}
-    for tracer, blinding_options in catalog_blinding_options.items():
+    for tracer in tracers:
+        if 'blinding' in catalog_options[tracer]:
+            raise ValueError("catalog['blinding'] was removed; use catalog['catalog_bao_blinding'] or pre-generated blinded catalogs")
+        blinding_options = catalog_bao_blinding.resolve_options(
+            catalog_options[tracer].pop('catalog_bao_blinding', None),
+            tracer=tracer,
+            zrange=catalog_options[tracer].get('zrange', None),
+        )
         if blinding_options:
-            catalog_options[tracer]['version'] = catalog_blinding.output_version_from_options(catalog_options[tracer].get('version', None), blinding_options)
+            catalog_options[tracer]['version'] = catalog_bao_blinding.output_version(catalog_options[tracer].get('version', None), blinding_options)
     # Build list of redshift ranges for each tracer
     zranges = {tracer: _make_list_zrange(catalog_options[tracer]['zrange']) for tracer in tracers}
 
@@ -759,10 +961,16 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
     options = fill_fiducial_options(kwargs, analysis=analysis)
     catalog_options = options['catalog']
     tracers = list(catalog_options.keys())
-    catalog_blinding_options = {tracer: catalog_options[tracer].pop('blinding', None) for tracer in tracers}
-    for tracer, blinding_options in catalog_blinding_options.items():
+    for tracer in tracers:
+        if 'blinding' in catalog_options[tracer]:
+            raise ValueError("catalog['blinding'] was removed; use catalog['catalog_bao_blinding'] or pre-generated blinded catalogs")
+        blinding_options = catalog_bao_blinding.resolve_options(
+            catalog_options[tracer].pop('catalog_bao_blinding', None),
+            tracer=tracer,
+            zrange=catalog_options[tracer].get('zrange', None),
+        )
         if blinding_options:
-            catalog_options[tracer]['version'] = catalog_blinding.output_version_from_options(catalog_options[tracer].get('version', None), blinding_options)
+            catalog_options[tracer]['version'] = catalog_bao_blinding.output_version(catalog_options[tracer].get('version', None), blinding_options)
     # Set default region to combined
     for tracer in tracers:
         catalog_options[tracer].setdefault('region', 'GCcomb')  # default, for rotation, rotate
