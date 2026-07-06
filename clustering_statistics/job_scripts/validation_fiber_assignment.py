@@ -145,9 +145,9 @@ if __name__ == '__main__':
     check_for_existing_measurements = False
     stats, postprocess = [], []
     #version = 'abacus-hf-dr2-v2-altmtl'
-    #version = 'glam-uchuu-v2-altmtl'
-    version = 'abacus-hf-dr2-v2-altmtl'
-    #version = 'glam-uchuu-v2-altmtl'
+    version = 'glam-uchuu-v2-altmtl'
+    #version = 'glam-uchuu-v2-altmtl-maskedfraczpNN'
+    #version = ('glam-uchuu-v2-altmtl', 'glam-uchuu-v2-altmtl-maskedfraczpNN')
     #version = 'abacus-2ndgen-dr2-complete'
     #version = 'abacus-2ndgen-dr2-altmtl'
     #version = 'data-dr2-v2'
@@ -163,7 +163,8 @@ if __name__ == '__main__':
     project = f'{analysis}/fiber_assignment_systematics'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
-    imocks = np.arange(10)
+    #imocks = np.arange(25)
+    imocks = np.arange(9)
     #imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
@@ -172,16 +173,17 @@ if __name__ == '__main__':
     if 'data' in version:
         imocks = [None]
 
-    if version == 'glam-uchuu-v2-altmtl':
+    if 'glam-uchuu-v2-altmtl' in version:
         check_for_existing_measurements = False
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
-        #imocks = [150]
+        imocks = [150]
 
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][1:]
-    #tracers = ['ELG', 'LRG']
+    #tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:]
+    tracers = [('LRG', 'ELG')]
+    #tracers = ['ELG', 'LRG'][:1]
     #tracers = ['LRG']
     #tracers = ['ELG', 'QSO'][:1]
     #tracers = ['LRG', 'QSO']
@@ -200,16 +202,16 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:0]
+    stats = ['mesh2_spectrum', 'close_pair_correction']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
-    #postprocess = ['combine_regions']
-    postprocess = ['systematic_templates']
+    postprocess = ['combine_regions'][:0]
+    #postprocess = ['systematic_templates']
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'
     #weight = 'default-FKP-noimsys'
     #weight = 'default'
-    regions = ['NGC', 'SGC'][:1]
+    regions = ['NGC', 'SGC']
     #regions = ['SGCnoDES', 'DES']
     max_mocks_per_batch = 5
 

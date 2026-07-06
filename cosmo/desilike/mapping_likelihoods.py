@@ -15,6 +15,8 @@ Skipped families / individual names:
 """
 
 import functools
+from pathlib import Path
+from cosmo.cobaya.mapping_likelihoods import LIKELIHOOD_COMBINATIONS, normalize_likelihood_combination
 
 
 # ---------------------------------------------------------------------------
@@ -35,12 +37,12 @@ _BAO_ZBINS = {
 
 
 # Likelihoods backed by external measurement files (mean + covariance txt).
-# Built on-the-fly via bao_likelihood_from_files; not downloaded by install().
-_BAO_MEASUREMENT_FILES_DIR = '/global/cfs/cdirs/desicollab/science/cpe/dr2_fs/lya_fs/likelihood/cobaya/measurements'
+# Built on-the-fly via bao_likelihood_from_files; not downloaded by install_likelihoods().
+_BAO_MEASUREMENT_FILES_DIR = Path('/dvs_ro/cfs/cdirs/desicollab/science/cpe/dr2_fs/lya_fs/likelihood/cobaya/measurements')
 _BAO_MEASUREMENT_FILES = {
     'desi-dr2-bao-gqc-lya-fs': (
-        'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_mean.txt',
-        'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_cov.txt',
+        _BAO_MEASUREMENT_FILES_DIR / 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_mean.txt',
+        _BAO_MEASUREMENT_FILES_DIR / 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_cov.txt',
     ),
 }
 
@@ -227,7 +229,7 @@ def _likelihood_map():
     return m
 
 
-def install(names, **installer_kwargs):
+def install_likelihoods(names, **installer_kwargs):
     """Download and install data files required by the named likelihood(s).
 
     Parameters
@@ -342,14 +344,8 @@ def get_likelihood(name, cosmo=None, **kwargs):
     # File-backed BAO likelihoods (external measurement files, no install)
     # ------------------------------------------------------------------
     if name in _BAO_MEASUREMENT_FILES:
-        import os
         mean_fn, cov_fn = _BAO_MEASUREMENT_FILES[name]
-        data_dir = kwargs.get('data_dir', _BAO_MEASUREMENT_FILES_DIR)
-        return bao_likelihood_from_files(
-            os.path.join(data_dir, mean_fn),
-            os.path.join(data_dir, cov_fn),
-            cosmo=cosmo, name=name,
-        )
+        return bao_likelihood_from_files(mean_fn, cov_fn, cosmo=cosmo, name=name)
 
     # ------------------------------------------------------------------
     # Full-shape (FS) — uses full_shape.tools API, not a simple cls(**kwargs)

@@ -93,14 +93,16 @@ def get_simple_tracer(tracer):
             raise NotImplementedError(f'tracer {tracer} is unknown')
     if isinstance(tracer, str):
         return _get_simple_tracer(tracer)
-    else:  # tuple/list of tracers
+    elif isinstance(tracer, (tuple, list)):  # tuple/list of tracers
         return type(tracer)(map(_get_simple_tracer, tracer))
+    else:
+        raise NotImplementedError(tracer)
 
 
 def get_full_tracer(tracer, version=None):
     """Given input tracer, return full tracer name; e.g. 'ELG' would result in 'ELG_LOPnotqso'."""
 
-    def _get_full_tracer(tracer):
+    def _get_full_tracer(tracer, version):
         if 'x' in tracer:
             return 'x'.join(_get_full_tracer(t) for t in tracer.split('x'))
         if '+' in tracer:
@@ -123,9 +125,13 @@ def get_full_tracer(tracer, version=None):
         raise NotImplementedError(f'tracer {tracer} is unknown')
 
     if isinstance(tracer, str):
-        return _get_full_tracer(tracer)
-    else:  # tuple/list of tracers
-        return type(tracer)(map(_get_full_tracer, tracer))
+        return _get_full_tracer(tracer, version)
+    elif isinstance(tracer, (tuple, list)):  # tuple/list of tracers
+        if not isinstance(version, (tuple, list)):
+            version = [version] * len(tracer)
+        return type(tracer)([_get_full_tracer(*t) for t in zip(tracer, version)])
+    else:
+        raise NotImplementedError(tracer)
 
 
 def get_simple_stats(stats):
@@ -977,6 +983,13 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
         elif version == 'glam-uchuu-v2-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/GLAM-Uchuu_v2'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
+
+        elif version == 'glam-uchuu-v2-altmtl-maskedfraczpNN':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/GLAM-Uchuu_v2'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats/NN'
             ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'

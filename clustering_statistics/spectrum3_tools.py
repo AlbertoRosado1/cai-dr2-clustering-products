@@ -775,7 +775,7 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, mattrs=None, z=None
 
     # Fiducial linear power spectrum at the effective redshift
     from cosmoprimo.fiducial import DESI
-    cosmo = DESI(engine='eisenstein_hu')
+    cosmo = DESI(engine='camb')
     if z is None:
         # Measured Mesh2SpectrumPoles do not carry 'zeff' (only window matrices do, from
         # compute_fkp_effective_redshift); z must be supplied explicitly unless the caller

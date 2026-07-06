@@ -139,9 +139,10 @@ if __name__ == '__main__':
     #stats = ['recon_mesh2_spectrum', 'covariance_recon_mesh2_spectrum'][1:]
     #stats = ['recon_particle2_correlation', 'covariance_recon_particle2_correlation']
     #stats = ['covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
+    stats = ['mesh3_spectrum', 'covariance_mesh3_spectrum'][1:]
     #stats = ['particle3_correlation']
-    stats = []
-    postprocess = ['combine_regions']
+    #stats = []
+    postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     project = f'{analysis}/analytic_covariance_validation'
     weight = 'default-FKP'

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Launch DESI cosmology inference with desilike."""
 
-from cosmo.cobaya.mapping_likelihoods import LIKELIHOOD_COMBINATIONS, normalize_likelihood_combination
+from cosmo.desilike.mapping_likelihoods import LIKELIHOOD_COMBINATIONS, normalize_likelihood_combination, install_likelihoods
 from cosmo.desilike.run import (get_likelihood_label, get_desilike_output,
                                 propose_fiducial_profiler_options, propose_fiducial_sampler_options)
 
@@ -9,7 +9,9 @@ from cosmo.desilike.run import (get_likelihood_label, get_desilike_output,
 def profile(likelihoods, model='base', engine='class',
             run='run1', output_dir=None, output_label=None, profiler='minuit', **kwargs):
     """Build posterior and run profiling for one configuration."""
+    from desilike import setup_logging
     from cosmo.desilike.run import get_posterior, profile_desilike as _profile
+    setup_logging()
     posterior = get_posterior(likelihoods, model=model, engine=engine)
     output_fn = get_desilike_output(model=model, engine=engine, likelihoods=likelihoods,
                                     kind='profiles', output_dir=output_dir, run=run, output_label=output_label)
@@ -20,7 +22,9 @@ def profile(likelihoods, model='base', engine='class',
 def sample(likelihoods, model='base', engine='class',
            run='run1', output_dir=None, output_label=None, sampler='pocomc', resume=False, **kwargs):
     """Build posterior and run sampling for one configuration."""
+    from desilike import setup_logging
     from cosmo.desilike.run import get_posterior, sample_desilike as _sample
+    setup_logging()
     posterior = get_posterior(likelihoods, model=model, engine=engine)
     output_dir_path = get_desilike_output(model=model, engine=engine, likelihoods=likelihoods,
                                           kind='samples', output_dir=output_dir, run=run, output_label=output_label)
@@ -55,14 +59,18 @@ def _setup_task_manager():
 
 
 if __name__ == '__main__':
-    todo = ['profile']
-    models = None
-    likelihoods = ['bao']
+    todo = ['profile', 'sample'][:1]
+    models = ['base']
+    likelihoods = ['desi-dr2-bao-all', 'desdovekie', 'CMB-SP4A'][2:]
     engine = 'camb'
     run = 'run1'
     output_dir = None
     resume = False
-    interactive = False
+    interactive = True
+
+    if True:  # install
+        for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
+            install_likelihoods(config['likelihoods'])
 
     if interactive:
         for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):

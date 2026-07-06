@@ -256,19 +256,19 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 del _zdata
                 toret = {}
                 for kind in ['fibered_data', 'parent_data'] + (['fibered_randoms', 'parent_randoms'] if npt > 2 else []):
-                    if kind not in _cache_auw:
+                    if (kind, tracer) not in _cache_auw:
                         if tracer not in raw_full_data:
                             raw_full_data[tracer] = read_catalog(kind='full_data', **_catalog_options, concatenate=True)
                             #_catalog_options['binned_weight'].update(raw_full_data[tracer].attrs)  # update binned weight info for AUW computation
                         if 'randoms' in kind:
-                            _cache_auw[kind] = prepare_catalog(raw_randoms[tracer], kind=kind, **_catalog_options)
+                            _cache_auw[kind, tracer] = prepare_catalog(raw_randoms[tracer], kind=kind, **_catalog_options)
                             if tools.check_if_requires_renormalization(**_catalog_options):
-                                for random in _cache_auw[kind]:
-                                    tools.renormalize_randoms_over_data(random, _cache_auw[kind.replace('randoms', 'data')], tracer=tracer)
+                                for random in _cache_auw[kind, tracer]:
+                                    tools.renormalize_randoms_over_data(random, _cache_auw[kind.replace('randoms', 'data'), tracer], tracer=tracer)
                         else:
-                            _cache_auw[kind] = prepare_catalog(raw_full_data[tracer], kind=kind, **_catalog_options)
+                            _cache_auw[kind, tracer] = prepare_catalog(raw_full_data[tracer], kind=kind, **_catalog_options)
 
-                    toret[kind] = _cache_auw[kind]
+                    toret[kind] = _cache_auw[kind, tracer]
                 return toret
 
             stats_npt = [stat for stat in stats if any(name in stat for name in [f'mesh{npt:d}', f'particle{npt:d}']) and options[stat].get('auw', False)]
@@ -699,10 +699,6 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             # object: unlike covariance_mesh2_spectrum's theory, it is not written to disk.
             theory = covariance_options.pop('theory', None)
             shotnoise = covariance_options.pop('shotnoise', None)
-            # Optional override of the box volume assumed in the preliminary bias fit
-            # (defaults to the measurement's embedding box, which overestimates the survey
-            # volume); see run_preliminary_fit_mesh3_spectrum.
-            prelim_mattrs = covariance_options.pop('prelim_mattrs', None)
 
             def get_data(tracer):
                 czrandoms = Catalog.concatenate(zrandoms[tracer])
@@ -731,11 +727,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                                          **(options['window_mesh2_spectrum'] | dict(auw=False)))
                 window = types.read(window_fn)
                 z = window.observable.get(ells=0).attrs['zeff']
-                if prelim_mattrs is not None:
-                    from jaxpower import MeshAttrs
-                    prelim_mattrs = MeshAttrs(**prelim_mattrs)
                 # Fit bias parameters on the joint (P, B) data vector
-                theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, mattrs=prelim_mattrs, z=z, shotnoise=shotnoise)
+                theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, z=z, shotnoise=shotnoise)
 
             results = compute_covariance_mesh3_spectrum(functools.partial(get_data, tracer), spectrum2=spectrum2, spectrum3=spectrum3,
                                                         theory=theory, shotnoise=shotnoise, fields=[simple_tracer], **covariance_options)
