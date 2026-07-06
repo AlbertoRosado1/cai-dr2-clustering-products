@@ -57,7 +57,7 @@ def _setup_task_manager():
 if __name__ == '__main__':
     todo = ['profile']
     models = None
-    likelihoods = ['bao']
+    likelihoods = ['desi-dr2-bao-all']
     engine = 'camb'
     run = 'run1'
     output_dir = None
