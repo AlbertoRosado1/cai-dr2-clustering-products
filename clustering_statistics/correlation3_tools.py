@@ -92,20 +92,18 @@ def compute_particle3_angular_upweights(*get_data_randoms):
             all_particles_fibered.append({'data': particles['fibered_data'], 'randoms': particles['fibered_randoms']})
             all_particles_parent.append({'data': particles['parent_data'], 'randoms': particles['parent_randoms']})
 
-        # Resolution follows the measured structure of the upweights:
-        # theta < 0.003 deg: flat kernel (w - 1 ~ +1); 0.003 - 0.1 deg: steep collision
-        # kernel and double-close transition at ~0.05 deg (exact counting there, so fine
-        # bins are cheap); 0.1 - 1 deg: flat plateau; > 1 deg: smooth ~1-dex-wide structure.
-        # Wide bins at wide angles let compute_particle3_resol digitize coarsely (cheap)
-        # while keeping the healpix pixel below ~1/4 of the bin width.
+        # 0.5-dex bins everywhere (the upweights are flat below 0.003 deg and vary on
+        # >~ 1-dex scales beyond 0.1 deg), refined to 0.1 dex across the collision kernel
+        # (0.003 - 0.1 deg, steep + double-close transition at ~0.05 deg; exact counting
+        # there, so fine bins are cheap). Wide bins at wide angles let
+        # compute_particle3_resol digitize coarsely while keeping the healpix pixel
+        # below ~1/4 of the bin width.
         theta = np.concatenate([
             10**np.arange(-4., -2.5, 0.5),
             10**np.arange(-2.5, -1., 0.1),
-            10**np.arange(-1., 0., 0.5),
-            10**np.arange(0., np.log10(180.), 0.4),
+            10**np.arange(-1., np.log10(180.), 0.5),
             [180.],
         ])
-        #theta = 10**np.arange(-4, np.log10(180.), 0.2)
         battrs = BinAttrs(theta=theta)
 
         counts_fibered = _compute_particle3_correlation_close_pair_correction(all_particles_fibered, [battrs] * 3, auw=None, cut=None, veto23=None, normalize_randoms=False)
