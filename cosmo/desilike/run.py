@@ -72,8 +72,7 @@ def get_posterior(likelihoods, model=None, engine='class', **kwargs):
     """
     from desilike.base import SumLikelihood, Posterior, compile
     from cosmo.desilike.parameters import get_cosmology, get_prior
-    from cosmo.desilike.mapping_likelihoods import get_likelihood
-    from cosmo.cobaya.mapping_likelihoods import get_parameterization
+    from cosmo.desilike.mapping_likelihoods import get_likelihood, get_parameterization
 
     if isinstance(likelihoods, str):
         likelihoods = [likelihoods]

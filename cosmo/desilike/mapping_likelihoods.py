@@ -227,13 +227,22 @@ _PR3_SHIFT_MAP = {
 }
 
 
-@functools.lru_cache(maxsize=1)
-def _likelihood_map():
-    """Return the name → [(cls, init_kwargs)] mapping for all non-FS likelihoods.
+@functools.lru_cache(maxsize=2)
+def _likelihood_map(return_parameterization=False):
+    """Return the class-backed likelihood mapping.
 
-    Values are lists of (class, kwargs) pairs; ``cosmo`` is always added by the
-    caller at instantiation time.  The result is cached after the first call so
-    the imports run only once.
+    This is the single place where class-backed likelihood names are declared:
+    for each name it records both how to build the desilike likelihood
+    instance(s) (``cosmo`` is added by the caller at instantiation time) and the
+    cosmological parameterization it requires — see :func:`get_parameterization`.
+    Full-shape, file-backed-BAO, and not-yet-implemented CMB names are declared
+    separately (``_FS_TRACERS``, ``_BAO_MEASUREMENT_FILES``, ``_CMB_NOT_IMPLEMENTED``)
+    since they aren't built through this ``(cls, kwargs)`` path.
+
+    If *return_parameterization* is ``False`` (default), return the name →
+    ``[(cls, init_kwargs), ...]`` mapping used to build desilike likelihood
+    instances. If ``True``, return the name → parameterization mapping instead
+    (see :func:`get_parameterization`).
     """
     from desilike.likelihoods.bao import DESIDR2BAOLikelihood
     from desilike.likelihoods.bbn import Schoneberg2024BBNLikelihood, BaseBBNLikelihood
@@ -258,27 +267,27 @@ def _likelihood_map():
     m = {}
 
     for bao_name, zbins in _BAO_ZBINS.items():
-        m[bao_name] = [(DESIDR2BAOLikelihood, {'zbins': zbins})]
+        m[bao_name] = ('background', [(DESIDR2BAOLikelihood, {'zbins': zbins})])
 
-    m['schoneberg2024-bbn'] = [(Schoneberg2024BBNLikelihood, {})]
+    m['schoneberg2024-bbn'] = ('background', [(Schoneberg2024BBNLikelihood, {})])
 
     for sn_name, (cls_name, zrange) in _SN_MAP.items():
-        m[sn_name] = [(getattr(_sn_mod, cls_name), {'zrange': zrange})]
+        m[sn_name] = ('background', [(getattr(_sn_mod, cls_name), {'zrange': zrange})])
 
     for alias in ('planck2018-lowl-TT', 'planck2018-lowl-TT-clik', 'planck2018-lowl-TT-11-29-clik'):
-        m[alias] = [(PlanckPR3LowlTTLikelihood, {})]
+        m[alias] = ('cmb', [(PlanckPR3LowlTTLikelihood, {})])
     for alias in ('planck2018-lowl-EE', 'planck2018-lowl-EE-clik'):
-        m[alias] = [(PlanckPR3LowlEELikelihood, {})]
-    m['planck2018-lowl-EE-sroll2'] = [(PlanckPR3LowlEESroll2Likelihood, {})]
+        m[alias] = ('cmb', [(PlanckPR3LowlEELikelihood, {})])
+    m['planck2018-lowl-EE-sroll2'] = ('cmb', [(PlanckPR3LowlEESroll2Likelihood, {})])
 
-    m['planck2018-highl-plik-TT'] = [(PlanckPR3TTLikelihood, {})]
-    m['planck2018-highl-plik-TTTEEE'] = [(PlanckPR3TTTEEELikelihood, {})]
-    m['planck2018-highl-plik-TTTEEE-lite'] = [(PlanckPR3TTTEEELiteLikelihood, {})]
+    m['planck2018-highl-plik-TT'] = ('cmb', [(PlanckPR3TTLikelihood, {})])
+    m['planck2018-highl-plik-TTTEEE'] = ('cmb', [(PlanckPR3TTTEEELikelihood, {})])
+    m['planck2018-highl-plik-TTTEEE-lite'] = ('cmb', [(PlanckPR3TTTEEELiteLikelihood, {})])
 
-    m['planck-NPIPE-highl-CamSpec-TT'] = [(TTHighlPlanckNPIPECamspecLikelihood, {})]
-    m['planck-NPIPE-highl-CamSpec-TTTEEE'] = [(TTTEEEHighlPlanckNPIPECamspecLikelihood, {})]
-    m['planck-NPIPE-highl-CamSpec-TTTEEE-ell-max-600'] = [(TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood, {})]
-    m['planck-NPIPE-highl-CamSpec-TTTEEE-cuts-for-act'] = [(TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood, {})]
+    m['planck-NPIPE-highl-CamSpec-TT'] = ('cmb', [(TTHighlPlanckNPIPECamspecLikelihood, {})])
+    m['planck-NPIPE-highl-CamSpec-TTTEEE'] = ('cmb', [(TTTEEEHighlPlanckNPIPECamspecLikelihood, {})])
+    m['planck-NPIPE-highl-CamSpec-TTTEEE-ell-max-600'] = ('cmb', [(TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood, {})])
+    m['planck-NPIPE-highl-CamSpec-TTTEEE-cuts-for-act'] = ('cmb', [(TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood, {})])
 
     # Planck plik-lite/ACT/SPT-3G ell ranges chosen to avoid overlap between datasets
     _cmb_spa_entries = [
@@ -289,31 +298,69 @@ def _likelihood_map():
         (SPT3GD1TnELikelihood, {'variant': 'lite'}),
         (ACTDR6SPTLensingLikelihood, {'variant': 'actplanckspt3g_baseline'}),
     ]
-    m['CMB-SPA'] = _cmb_spa_entries
-    m['CMB-SPA-tauprior'] = _cmb_spa_entries + [
+    m['CMB-SPA'] = ('cmb', _cmb_spa_entries)
+    m['CMB-SPA-tauprior'] = ('cmb', _cmb_spa_entries + [
         (BaseBBNLikelihood, {'mean': [0.051], 'covariance': [[0.006 ** 2]], 'quantities': ['tau_reio']}),
-    ]
+    ])
 
-    m['planck2018-thetastar-fixed-nnu'] = [(PlanckPR3ThetaStarFixedNnuLikelihood, {})]
-    m['planck2018-thetastar-varied-nnu'] = [(PlanckPR3ThetaStarVariedNnuLikelihood, {})]
-    m['planck2018-thetastar-fixed-marg-nnu'] = [(PlanckPR3ThetaStarMargNnuLikelihood, {})]
-    m['planck2018-rdrag-fixed-nnu'] = [(PlanckPR3RdragLikelihood, {})]
+    m['planck2018-thetastar-fixed-nnu'] = ('background', [(PlanckPR3ThetaStarFixedNnuLikelihood, {})])
+    m['planck2018-thetastar-varied-nnu'] = ('background', [(PlanckPR3ThetaStarVariedNnuLikelihood, {})])
+    m['planck2018-thetastar-fixed-marg-nnu'] = ('background', [(PlanckPR3ThetaStarMargNnuLikelihood, {})])
+    m['planck2018-rdrag-fixed-nnu'] = ('background', [(PlanckPR3RdragLikelihood, {})])
 
     for cname, (observables, inflate_cov) in _PR4_STANDARD_MAP.items():
-        m[cname] = [(PlanckPR4StandardCompressionLikelihood, {'observables': observables, 'inflate_cov': inflate_cov})]
+        m[cname] = ('background', [(PlanckPR4StandardCompressionLikelihood, {'observables': observables, 'inflate_cov': inflate_cov})])
     for cname, (observables, inflate_cov) in _PR3_SHIFT_MAP.items():
-        m[cname] = [(PlanckPR3ShiftParameterCompressionLikelihood, {'observables': observables, 'inflate_cov': inflate_cov})]
+        m[cname] = ('background', [(PlanckPR3ShiftParameterCompressionLikelihood, {'observables': observables, 'inflate_cov': inflate_cov})])
 
-    m['CMB-SP4A'] = [
+    m['CMB-SP4A'] = ('cmb', [
         (CamspecNPIPELiteLikelihood, {'ell_cuts': {'TT': [30, 1500], 'TE': [30, 1000], 'EE': [30, 600]}}),
         (ACTDR6TTTEEELikelihood, {'ell_cuts': {'TT': [1500, 6500], 'TE': [1000, 6500], 'EE': [600, 6500]}}),
         (SPT3GD1TnELikelihood, {'variant': 'lite'}),
-    ]
+    ])
 
-    m['act-dr6-lensing'] = [(ACTDR6SPTLensingLikelihood, {'variant': 'act_baseline'})]
-    m['planck-act-dr6-lensing'] = [(ACTDR6SPTLensingLikelihood, {'variant': 'actplanck_baseline'})]
+    m['act-dr6-lensing'] = ('cmb', [(ACTDR6SPTLensingLikelihood, {'variant': 'act_baseline'})])
+    m['planck-act-dr6-lensing'] = ('cmb', [(ACTDR6SPTLensingLikelihood, {'variant': 'actplanck_baseline'})])
 
-    return m
+    if return_parameterization:
+        return {name: parameterization for name, (parameterization, _) in m.items()}
+    return {name: entries for name, (_, entries) in m.items()}
+
+
+_PARAMETERIZATION_PRIORITY = {'background': 0, 'lss': 1, 'cmb': 2}
+
+
+def get_parameterization(likelihoods=None, dataset=None):
+    """Return the cosmological parameterization required by likelihoods.
+
+    Priority order: ``'cmb'`` > ``'lss'`` > ``'background'``. The highest-priority
+    parameterization across all listed likelihoods is returned.
+
+    Self-contained: does not depend on ``cosmo.cobaya.mapping_likelihoods``.
+    Class-backed likelihoods (BAO/SN/BBN/CMB) get their parameterization straight
+    from :func:`_likelihood_map`, the single place they are declared. Likelihoods
+    built through a different path — full-shape, file-backed BAO, not-yet-implemented
+    CMB spectra — are tagged from their own dedicated name tables instead.
+    """
+    if likelihoods is not None and dataset is not None:
+        raise ValueError('Pass either likelihoods or dataset, not both.')
+    names = likelihoods if likelihoods is not None else dataset
+    if names is None:
+        names = 'desi-dr2-bao-all'
+    names = [names] if isinstance(names, str) else list(names)
+    registry = dict(_likelihood_map(return_parameterization=True))
+    for name in _BAO_MEASUREMENT_FILES:
+        registry[name] = 'background'
+    for name in _FS_TRACERS:
+        registry[name] = 'lss'
+    for name in _CMB_NOT_IMPLEMENTED:
+        registry[name] = 'cmb'
+    unknown = [name for name in names if name not in registry]
+    if unknown:
+        raise ValueError('Unknown likelihood(s): {}. Known likelihoods are {}.'.format(
+            ', '.join(unknown), ', '.join(sorted(registry))))
+    parameterizations = {registry[name] for name in names}
+    return max(parameterizations, key=lambda p: _PARAMETERIZATION_PRIORITY.get(p, -1))
 
 
 def install_likelihoods(names, **installer_kwargs):
