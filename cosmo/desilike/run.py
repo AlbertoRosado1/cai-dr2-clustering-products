@@ -2,17 +2,10 @@
 import os
 from pathlib import Path
 
+from .mapping_likelihoods import get_likelihood_label
+
 
 DEFAULT_COSMO_OUTPUT_DIR = Path(os.getenv('SCRATCH', '.')) / 'desi-clustering' / 'cosmo'
-
-
-def get_likelihood_label(likelihoods=None):
-    """Return a filesystem-friendly label for a likelihood or list of likelihoods."""
-    if likelihoods is None:
-        return 'none'
-    if isinstance(likelihoods, str):
-        return likelihoods
-    return '_'.join(likelihoods)
 
 
 def get_desilike_output(model='base', engine='class', likelihoods=None, kind='samples',
@@ -180,6 +173,8 @@ def profile_desilike(posterior, kernel='minuit', init: dict=None, run: dict=None
     conditioner = AffineConditioner(**{name: init.pop(name, None) for name in ['rescale', 'covariance']})
     profiler = Profiler(posterior, kernel=kernel_obj, output_fn=output_fn, conditioner=conditioner, **init)
     profiler.maximize(**run)
+    if profiler.mpicomm.rank == 0:
+        print(profiler.profiles.to_stats(tablefmt='pretty'))
     return profiler.profiles
 
 

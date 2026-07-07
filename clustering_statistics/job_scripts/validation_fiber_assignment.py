@@ -162,7 +162,7 @@ if __name__ == '__main__':
     #cat_dir = tools.base_stats_dir / f'auxiliary_data/fiber_assignment_systematics_ELG_{compweight}' / version
     #cat_dir = tools.desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats/test/maskedfraczpNN'
 
-    project = f'{analysis}/fiber_assignment_systematics_ELGnran18'
+    project = f'{analysis}/fiber_assignment_systematics'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
     imocks = np.arange(25)
@@ -183,7 +183,7 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:3]
+    tracers = ['BGS', 'LRG', 'ELG', 'QSO']
     #tracers = [('LRG', 'ELG')]
     #tracers = ['ELG', 'LRG'][:1]
     #tracers = ['LRG']
@@ -204,8 +204,8 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:0]
-    stats = ['mesh3_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    #stats = ['mesh3_spectrum', 'close_pair_correction']
     #postprocess = ['combine_regions'][:1]
     #postprocess = ['systematic_templates']
     weight = 'default-FKP'
@@ -213,7 +213,7 @@ if __name__ == '__main__':
     #weight = 'default-FKP'
     #weight = 'default-FKP-noimsys'
     #weight = 'default'
-    regions = ['NGC', 'SGC'][:1]
+    regions = ['NGC', 'SGC']
     #regions = ['SGCnoDES', 'DES']
     max_mocks_per_batch = 5
 
@@ -234,7 +234,7 @@ if __name__ == '__main__':
             # do not compute measurements for overlapping redshifts
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
-            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[1:]
+            zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
 
         def get_run_stats():
             if mode == 'interactive':

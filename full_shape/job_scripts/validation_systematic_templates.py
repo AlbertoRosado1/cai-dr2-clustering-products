@@ -65,14 +65,19 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
     _validate_theory_model(stats, theory_model)
     likelihoods = []
     for tracer in tracers:
+        _version = version
+        if 'BGS' in tracer and 'abacus' in version:
+            _version = 'abacus-2ndgen-dr2-altmtl'
+            if isinstance(covariance, str) and 'holi' in covariance:
+                covariance = 'holi-bgs-altmtl'
         likelihood_options = tools.generate_likelihood_options_helper(
             stats=stats,
             tracer=tracer,
-            version=version,
+            version=_version,
             covariance=covariance,
             stats_dir=stats_dir,
             project=project,
-            emulator=emulator or theory_model != 'comet',
+            emulator=emulator and theory_model != 'comet',
         )
         for observable_options in likelihood_options['observables']:
             _apply_kranges(observable_options)

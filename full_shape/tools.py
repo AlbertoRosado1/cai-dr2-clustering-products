@@ -673,17 +673,19 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         return mpicomm.bcast(stats, root=0)
 
     # Helper: iterate over (stat, tracer) combinations
-    def iter_stat_tracer_combinations(observables_options, with_stat_kw=False):
+    def iter_stat_tracer_combinations(observables_options, with_stat_kw=False, catalog_options=None):
         """
         Yield (stat, labels, file_kwargs, observable_options) for each requested observable.
 
         Compact helper for iterating the user-provided observables and producing file kwargs
         and labeling information used when reading files.
         """
+        _catalog_options = dict(catalog_options or {})
         for observable_options in observables_options:
             stat = observable_options['stat']['kind']
-            tracers = _make_tuple(observable_options['catalog']['tracer'])
-            version = observable_options['catalog'].get('version', None)
+            catalog_options = observable_options['catalog'] | _catalog_options
+            tracers = _make_tuple(catalog_options['tracer'])
+            version = catalog_options.get('version', None)
             full_tracer = get_full_tracer(tracers, version=version)
             nfields = 3 if 'mesh3' in stat else 2
             simple_tracers = get_simple_tracer(tracers)
@@ -698,7 +700,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     kw[name] = observable_options['stat'][name]
                 elif with_stat_kw and name not in ['kind', 'select']:
                     kw[name] = observable_options['stat'][name]
-            file_kw = kw | observable_options['catalog'] | {'tracer': full_tracer}
+            file_kw = kw | catalog_options | {'tracer': full_tracer}
             yield stat, labels, file_kw, dict(observable_options)
 
     def _with_project(observable: types.ObservableTree):
@@ -967,7 +969,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             covariance_log_patterns = []
             all_imocks = None
             covariance_labels = []
-            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
+            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options, catalog_options=covariance_file_options):
                 file_kw = file_kw | {'imock': '*'} | covariance_file_options | covariance_stat_options.get(stat, {})
                 imocks = file_kw.pop('imock')
                 if imocks == '*':

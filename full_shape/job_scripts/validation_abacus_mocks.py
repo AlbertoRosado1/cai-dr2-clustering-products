@@ -73,7 +73,7 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
             covariance=covariance,
             stats_dir=stats_dir,
             project=project,
-            emulator=emulator or theory_model != 'comet',
+            emulator=emulator and theory_model != 'comet',
         )
         for observable_options in likelihood_options['observables']:
             _apply_kranges(observable_options)

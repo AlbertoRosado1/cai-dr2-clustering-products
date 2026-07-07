@@ -106,6 +106,15 @@ def normalize_likelihood_combination(value):
     return deduped
 
 
+def get_likelihood_label(likelihoods=None):
+    """Return a filesystem-friendly label for a likelihood or list of likelihoods."""
+    if likelihoods is None:
+        return 'none'
+    if isinstance(likelihoods, str):
+        return likelihoods
+    return '_'.join(likelihoods)
+
+
 # ---------------------------------------------------------------------------
 # BAO
 # ---------------------------------------------------------------------------
