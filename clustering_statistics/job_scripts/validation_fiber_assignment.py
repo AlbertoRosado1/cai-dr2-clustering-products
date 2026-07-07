@@ -96,11 +96,13 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             options = fill_fiducial_options(options, analysis=analysis)
 
             for itracer in options['catalog']:
-                #options['catalog'][itracer]['nran'] = 5
+                #options['recon'][itracer]['nran'] = 18
+                #options['catalog'][itracer]['nran'] = 18
                 #if 'BGS_BRIGHT' in itracer:
                 #    options['catalog'][itracer]['tracer'] = 'BGS_BRIGHT'
                 options['catalog'][itracer]['zranges'] = zranges # override fiducial zranges
-                options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
+                if 'data' not in version:
+                    options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
                     options['catalog'][itracer]['complete'] = {'with_completeness': 'nocomp' not in onthefly, 'with_tracer_cuts': True}
                 elif onthefly is not None and onthefly.startswith('altmtl'):
@@ -130,7 +132,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
     options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks,
-                   combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'particle2_correlation', 'particle3_correlation']},
+                   combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'particle2_correlation', 'particle3_correlation'][:4]},
                    mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True},
                    mesh3_spectrum={'auw': True}, window_mesh3_spectrum={},
                    systematic_templates={'stats': ['mesh2_spectrum', 'mesh3_spectrum'], 'effects': ['auw'],
@@ -145,12 +147,12 @@ if __name__ == '__main__':
     check_for_existing_measurements = False
     stats, postprocess = [], []
     #version = 'abacus-hf-dr2-v2-altmtl'
-    version = 'glam-uchuu-v2-altmtl'
+    #version = 'glam-uchuu-v2-altmtl'
     #version = 'glam-uchuu-v2-altmtl-maskedfraczpNN'
     #version = ('glam-uchuu-v2-altmtl', 'glam-uchuu-v2-altmtl-maskedfraczpNN')
     #version = 'abacus-2ndgen-dr2-complete'
     #version = 'abacus-2ndgen-dr2-altmtl'
-    #version = 'data-dr2-v2'
+    version = 'data-dr2-v2'
     #version = 'data-dr2-test-maskedfracz'
     #version = 'data-dr2-test-maskedfraczpNN'
     analysis = 'full_shape'
@@ -163,8 +165,8 @@ if __name__ == '__main__':
     project = f'{analysis}/fiber_assignment_systematics'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
-    #imocks = np.arange(25)
-    imocks = np.arange(9)
+    imocks = np.arange(25)
+    #imocks = np.arange(3, 9)
     #imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
     #imocks = np.arange(5, 9)
@@ -181,8 +183,8 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    #tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:]
-    tracers = [('LRG', 'ELG')]
+    tracers = ['BGS', 'LRG', 'ELG', 'QSO']
+    #tracers = [('LRG', 'ELG')]
     #tracers = ['ELG', 'LRG'][:1]
     #tracers = ['LRG']
     #tracers = ['ELG', 'QSO'][:1]
@@ -202,9 +204,9 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
-    postprocess = ['combine_regions'][:0]
+    #postprocess = ['combine_regions'][:1]
     #postprocess = ['systematic_templates']
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'

@@ -34,7 +34,6 @@ desi_dir = Path('/dvs_ro/cfs/cdirs/desi/')
 base_stats_dir = Path('/global/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/')
 # These are region splits that require loading NGC+SGC
 special_regions = ['S', 'ALL', 'SnoDES', 'noDES', 'ACT_DR6', 'PLANCK_PR4'] + [f'GAL0{i}' for i in [20, 40, 60, 70, 80, 90, 97, 99]]
-BGS_ANY_VERSIONS = {'abacus-2ndgen-dr2-altmtl', 'abacus-hf-dr2-v2-altmtl'}
 
 
 def mkdir(dirname):
@@ -110,8 +109,8 @@ def get_full_tracer(tracer, version=None):
         if any(_tracer in tracer for _tracer in ['LRG', 'LGE', 'QSO']):
             return tracer
         if tracer == 'BGS':
-            if version in BGS_ANY_VERSIONS:
-                return 'BGS_ANY-02'
+            if version in {'abacus-2ndgen-dr2-altmtl'}:
+                return 'BGS_BRIGHT-02'
             if version is not None and 'dr1' in version:
                 return 'BGS_BRIGHT-21.5'
             return 'BGS_BRIGHT-21.35'
@@ -892,6 +891,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif version in ['data-dr2-v1.1', 'data-dr2-v2', 'data-dr2-v2.1', 'data-dr2-test']:
             version = version.split('-')[-1]
+            if kind == 'full_data' and 'BGS_BRIGHT' in tracer:
+                tracer = 'BGS_BRIGHT'
             if version == 'v1.1':
                 ext = 'fits'
             cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats' / version

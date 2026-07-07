@@ -39,7 +39,7 @@ def _iter_configs(todo, models, likelihoods, **kwargs):
         for model in models:
             for value in likelihoods:
                 expanded = normalize_likelihood_combination(value)
-                label = value if ',' not in value and value not in LIKELIHOOD_COMBINATIONS else get_likelihood_label(expanded)
+                label = get_likelihood_label(expanded)
                 yield task, dict(model=model, likelihoods=expanded, output_label=label, **kwargs)
 
 
@@ -61,7 +61,7 @@ def _setup_task_manager():
 if __name__ == '__main__':
     todo = ['profile', 'sample'][:1]
     models = ['base']
-    likelihoods = ['desi-dr2-bao-all', 'desdovekie', 'CMB-SPA'][2:]
+    likelihoods = [['desi-dr2-bao-all', 'desdovekie'], 'CMB-SP4A'][:1]
     engine = 'camb'
     run = 'run1'
     output_dir = None
