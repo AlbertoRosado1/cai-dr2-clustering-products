@@ -183,12 +183,15 @@ def profile_desilike(posterior, kernel='minuit', init: dict=None, run: dict=None
     return profiler.profiles
 
 
-def sample_desilike(posterior, kernel='pocomc', init: dict=None, run: dict=None, output_dir=None, resume=False):
+def sample_desilike(posterior, kernel='pocomc', init: dict=None, run: dict=None, output_dir=None, resume=False, profiles_fn=None):
+    import logging
     import shutil
     from pathlib import Path
+    from desilike.samples import Profiles
     from desilike.samplers import Sampler
     from desilike.conditioning import AffineConditioner
     from desilike.distributed import get_mpicomm
+    logger = logging.getLogger('sample_desilike')
     init = dict(init or {})
     run = dict(run or {})
     if output_dir is not None:
@@ -201,6 +204,24 @@ def sample_desilike(posterior, kernel='pocomc', init: dict=None, run: dict=None,
                         path.unlink() if path.is_file() else shutil.rmtree(path)
         mpicomm.Barrier()
         output_dir.mkdir(parents=True, exist_ok=True)
+    if profiles_fn is None and output_dir is not None:
+        profiles_fn = output_dir / 'profiles.h5'
+
+    if init.get('rescale', False) and init.get('covariance', None) is None:
+        profiles = None
+        if profiles_fn is not None and Path(profiles_fn).exists():
+            profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
+        if profiles is None:
+            logger.warning(f'No profiles found at {profiles_fn}; conditioning will fall back to ref.std().')
+        elif profiles.covariance is None:
+            logger.warning(f'Covariance is not provided in {profiles_fn}; conditioning will fall back to ref.std().')
+        else:
+            init['covariance'] = profiles.covariance
+            best, error = profiles.best, profiles.error
+            if best is not None and error is not None:
+                for param in posterior.params.select(varied=True, derived=False):
+                    if param.name in error:
+                        param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
     cls = get_sampler_cls(kernel)
     _non_kernel = ['rng', 'rescale', 'covariance', 'nparallel', 'prior', 'batch_size']
     kernel_obj = cls(**{name: init.pop(name) for name in list(init) if name not in _non_kernel})
