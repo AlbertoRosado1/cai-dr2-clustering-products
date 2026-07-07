@@ -23,18 +23,31 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
     engine : str, optional
         Boltzmann solver: ``'class'`` (default) or ``'camb'``.
     parameterization : str, optional
-        ``'background'`` (default) samples ``h``, ``omega_b``, ``omega_cdm``
-        only; ``logA``, ``n_s`` and ``tau_reio`` are fixed and ``sigma8`` is not
-        tracked.  ``'lss'`` frees ``logA`` and ``n_s`` (tau fixed) and adds
-        ``sigma8_m`` / ``sigma8_cb`` as derived outputs.  ``'cmb'`` additionally
-        frees ``tau_reio``.
+        ``'background'`` (default) samples ``h``, ``omega_b``, ``Omega_m``
+        (``omega_cdm`` is derived by cosmoprimo from these); ``logA``, ``n_s``
+        and ``tau_reio`` are fixed and ``sigma8`` is not tracked. Mirrors
+        cobaya's ``get_background_cobaya_params``: for BAO-alone/SN-alone fits
+        (no BBN/CMB-compressed/thetastar/rdrag likelihood to separately pin down
+        ``h`` and ``omega_b``), ``h`` and ``omega_b`` are fixed to fiducial and
+        ``r_d`` is instead sampled directly (see
+        :class:`~desilike.theories.galaxy_clustering.template.BAOTheory`'s
+        notes on ``rs_drag``), since BAO alone only constrains :math:`H_0 r_d`.
+        ``'lss'`` samples ``omega_cdm`` directly, frees ``logA`` and ``n_s``
+        (tau fixed), and adds ``sigma8_m`` / ``sigma8_cb`` as derived outputs.
+        ``'cmb'`` additionally frees ``tau_reio``.
     likelihoods : list of str, optional
-        Likelihood names, reserved for future use (e.g. freeing ``N_ur`` when
-        ``'varied-nnu'`` likelihoods are present).
+        Likelihood names. Drives the background-only branching described above,
+        and frees ``N_ur`` when a ``'varied-nnu'``/``'marg-nnu'`` likelihood
+        (or ``'schoneberg2024-bbn'``) is present.
 
     Returns
     -------
     cosmo : :class:`desilike.theories.primordial_cosmology.CosmoprimoCosmology`
+        When *parameterization* triggers the background-only degeneracy-breaking
+        branch above, the shared, free ``r_d`` :class:`~desilike.parameter.Parameter`
+        is also attached as ``cosmo.rs_drag_param`` (``None`` otherwise), for
+        :func:`~cosmo.desilike.mapping_likelihoods.get_likelihood` to forward to
+        :class:`~desilike.likelihoods.bao.DESIDR2BAOLikelihood`.
     """
     from desilike import VariableCollection, Parameter
     from desilike.theories import CosmoprimoCosmology
@@ -42,6 +55,7 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
         return model
     is_cmb = parameterization == 'cmb'
     is_lss = parameterization in ('lss', 'cmb')  # lss: logA/n_s free, tau fixed; cmb: all three free
+    is_background = not is_lss
     if model is None:
         model = 'base'
     is_fixed_model = model == 'fixed'
@@ -49,19 +63,36 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
     has_w0 = not has_w0wa and '_w' in model  # base_w: only w0 free
     fiducial = get_fiducial()
 
+    likelihood_names = set(likelihoods or [])
+    labels = ' '.join(likelihood_names)
+    has_bao = 'bao' in labels
+    has_varied_nnu = ('schoneberg2024-bbn' in likelihood_names
+                       or any(token in name for name in likelihood_names for token in ('varied-nnu', 'marg-nnu')))
+    # BAO/SN alone only constrain H_0*r_d (see BAOTheory's rs_drag notes), not h and
+    # omega_b separately -- unless a BBN/CMB-compressed/thetastar/rdrag likelihood is
+    # also present to break that degeneracy (mirrors cobaya's 'constrain_rd').
+    constrain_rd = (is_background and has_bao
+                     and not any(token in labels for token in ('bbn', 'CMB-compressed', 'thetastar', 'rdrag')))
+
     params = VariableCollection()
     params.set(Parameter('h', value=fiducial['h'],
                             prior=dict(limits=[0.5, 1.0]),
                             ref=dict(dist='norm', loc=fiducial['h'], scale=0.01),
                             fd_eps=0.03, latex='h'))
     params.set(Parameter('omega_b', value=fiducial['omega_b'],
-                            prior=dict(dist='norm', loc=0.02237, scale=0.00055),
+                            prior=dict(limits=[0.005, 0.1]),
                             ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.0003),
                             fd_eps=0.0015, latex=r'\omega_b'))
-    params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
-                            prior=dict(limits=[0.01, 0.99]),
-                            ref=dict(dist='norm', loc=fiducial['omega_cdm'], scale=0.005),
-                            fd_eps=0.01, latex=r'\omega_\mathrm{cdm}'))
+    if is_background:
+        params.set(Parameter('Omega_m', value=fiducial['Omega_m'],
+                                prior=dict(limits=[0.01, 0.99]),
+                                ref=dict(dist='norm', loc=fiducial['Omega_m'], scale=0.001),
+                                fd_eps=0.002, latex=r'\Omega_\mathrm{m}'))
+    else:
+        params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
+                                prior=dict(limits=[0.01, 0.99]),
+                                ref=dict(dist='norm', loc=fiducial['omega_cdm'], scale=0.005),
+                                fd_eps=0.01, latex=r'\omega_\mathrm{cdm}'))
     params.set(Parameter('logA', value=fiducial['logA'],
                             prior=dict(limits=[1.61, 3.91]),
                             ref=dict(dist='norm', loc=fiducial['logA'], scale=0.1),
@@ -91,26 +122,44 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
                             prior=dict(limits=[-3., 2.]),
                             ref=dict(dist='norm', loc=0., scale=0.3),
                             fd_eps=0.3, latex=r'w_a'))
+
+    rs_drag_param = None
+    if constrain_rd:
+        params['h'].update(fixed=True)
+        params['omega_b'].update(fixed=True)
+        from desilike.theories.galaxy_clustering.template import BAOTheory
+        rs_drag_param = BAOTheory.propose_params(rs_drag=True, fiducial=fiducial)['rs_drag']
+
     if is_fixed_model:
         for name in params:
             params[name].update(fixed=True)
     params['logA'].update(fixed=is_fixed_model or not is_lss)
     params['n_s'].update(fixed=is_fixed_model or not is_lss)
+    if has_varied_nnu:
+        params['N_ur'].update(fixed=is_fixed_model)
     if has_w0wa:
         params['w0_fld'].update(fixed=is_fixed_model)
         params['wa_fld'].update(fixed=is_fixed_model)
     elif has_w0:
         params['w0_fld'].update(fixed=is_fixed_model)
     params.set(Parameter('H0', derived=True, latex='H_0'))
-    params.set(Parameter('Omega_m', derived=True, latex=r'\Omega_\mathrm{m}'))
+    if is_background:
+        params.set(Parameter('omega_cdm', derived=True, latex=r'\omega_\mathrm{cdm}'))
+    else:
+        params.set(Parameter('Omega_m', derived=True, latex=r'\Omega_\mathrm{m}'))
     params.set(Parameter('Omega_Lambda', derived=True, latex=r'\Omega_\Lambda'))
     params.set(Parameter('Omega_k', derived=True, latex=r'\Omega_k'))
-    params.set(Parameter('rs_drag', derived=True, latex=r'r_s'))
+    if not constrain_rd:
+        # When constrain_rd, 'rs_drag' is instead the free, directly-sampled rs_drag_param
+        # (see below); defining both here too would register two distinct Parameter
+        # objects under the same name.
+        params.set(Parameter('rs_drag', derived=True, latex=r'r_s'))
     params.set(Parameter('age', derived=True, latex=r't_0'))
     if is_lss:
         params.set(Parameter('sigma8_m', derived=True, latex=r'\sigma_{8,\mathrm{m}}'))
         params.set(Parameter('sigma8_cb', derived=True, latex=r'\sigma_{8,\mathrm{cb}}'))
     cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial, params=params)
+    cosmo.rs_drag_param = rs_drag_param
     return cosmo
 
 

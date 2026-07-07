@@ -236,10 +236,12 @@ def compute_box_stats_from_options(stats, cache=None,
 
         if theory is None:
             from jaxpower import MeshAttrs
-            # Fit bias parameters on the joint (P, B) data vector, using the box volume for
-            # both the mesh attrs and the effective redshift (snapshot redshift, not 'zeff').
-            theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, mattrs=MeshAttrs(**covariance_options['mattrs']),
-                                                        z=zsnap, shotnoise=shotnoise)
+            # Fit bias parameters on the joint (P, B) data vector, using the box volume for the
+            # mesh attrs. No window2 is available for a periodic box, so
+            # run_preliminary_fit_mesh3_spectrum falls back to reading z from spectrum2.attrs
+            # ['zeff'] -- attach the snapshot redshift there under that name for this call only.
+            spectrum2_z = spectrum2.clone(attrs=dict(spectrum2.attrs) | dict(zeff=zsnap))
+            theory = run_preliminary_fit_mesh3_spectrum(spectrum2_z, spectrum3, mattrs=MeshAttrs(**covariance_options['mattrs']))
 
         covariance = compute_covariance_box_mesh3_spectrum(spectrum2, spectrum3, theory, shotnoise=shotnoise, **covariance_options)
 

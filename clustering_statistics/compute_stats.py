@@ -722,13 +722,12 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
             if theory is None:
                 # Effective redshift: measured spectra carry no 'zeff' (only window matrices
-                # do), so read it off the already-computed window instead.
+                # do); run_preliminary_fit_mesh3_spectrum reads it directly from window2.
                 window_fn = get_stats_fn(kind='window_mesh2_spectrum', catalog=fn_catalog_options[tracer],
                                          **(options['window_mesh2_spectrum'] | dict(auw=False)))
-                window = types.read(window_fn)
-                z = window.observable.get(ells=0).attrs['zeff']
+                window2 = types.read(window_fn)
                 # Fit bias parameters on the joint (P, B) data vector
-                theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, z=z, shotnoise=shotnoise)
+                theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=window2)
 
             results = compute_covariance_mesh3_spectrum(functools.partial(get_data, tracer), spectrum2=spectrum2, spectrum3=spectrum3,
                                                         theory=theory, shotnoise=shotnoise, fields=[simple_tracer], **covariance_options)
