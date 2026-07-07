@@ -716,7 +716,7 @@ def compute_smooth3_spectrum_window_correlation(*get_data_randoms, spectrum=None
 
 
 def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=None, window3=None, mattrs=None,
-                                       free=None, select2=None, select3=None):
+                                       free=None, select2={'k': slice(0, None, 10)}, select3={'k': slice(0, None, 2)}):
     r"""
     Fit bias parameters on the joint (P, B) data vector to build the theory assumed in the covariance.
 
@@ -767,6 +767,7 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=None, windo
     from jaxpower.pt import (prepare_spectrum2_redshift_tracer, spectrum2_redshift_tracer,
                              spectrum3_redshift_tracer, spectrum4_redshift_tracer,
                              ProjectToPoles, ProjectToSell)
+    from jaxpower.utils import get_legendre
 
     # window3 gates windowing altogether: with no window3, ignore window2 too and fall back to
     # comparing the raw (unwindowed) model to the data at their own measured binning.
@@ -821,8 +822,25 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=None, windo
         # the key of bias_params must match the observable / window field label (0)
         bias_params = {0: dict(bias)}
 
+        # P(kvec): precompute the P_ell(k) multipoles once, on table['matter']['k']
+        # (the same k grid spectrum2_redshift_tracer's own kvec branch already
+        # interpolates from -- see its 'is_kvec' branch in jaxpower.pt), instead of
+        # letting it redo that (nk_table, nmu) EFT/TNS/IR-resummation evaluation on
+        # every call. compute_spectrum3_covariance calls P(kvec) many times while
+        # assembling the covariance, so hoisting this out is exact (same table, same
+        # linear interpolation in k), just no longer redundantly recomputed.
+        ells_P = list(range(0, 8, 2))
+        to_poles_P = ProjectToPoles(mu=10, ells=ells_P)
+        poles_P = to_poles_P(spectrum2_redshift_tracer(to_poles_P.mu, table, table_now, f, bias_params))
+        k_table_P = table['matter']['k']
+
         def P(kvec):
-            return spectrum2_redshift_tracer(kvec, table, table_now, f, bias_params)
+            kvec = jnp.asarray(kvec)
+            knorm = jnp.sqrt(jnp.sum(kvec**2, axis=-1))
+            mu = jnp.where(knorm > 0., kvec[..., 2] / knorm, 0.)
+            pole_at_k = jax.vmap(lambda pole: jnp.interp(knorm.ravel(), k_table_P, pole))(poles_P)
+            return sum(pole_at_k[ill].reshape(knorm.shape) * get_legendre(ell)(mu)
+                      for ill, ell in enumerate(ells_P))
 
         def B(k1vec, k2vec, k3vec):
             return spectrum3_redshift_tracer(k1vec, k2vec, pk_callable, pknow_callable, f=f, bias_params=bias_params)
@@ -846,6 +864,8 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=None, windo
     def theory_cov(fields):
         return make_theory(fid_bias)(fields) if len(fields) == 2 else None
 
+    if jax.process_index() == 0:
+        logger.info('Computing preliminary P + B covariance')
     covariance = compute_spectrum3_covariance(mattrs, mattrs, observable, theory=theory_cov,
                                               shotnoise=shotnoise, cache={})
     Cinv = jnp.asarray(np.linalg.inv(np.asarray(covariance.value())))
@@ -911,6 +931,8 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=None, windo
         r = jnp.asarray(data) - model_vector(x)
         return r @ Cinv @ r
 
+    if jax.process_index() == 0:
+        logger.info(f'Starting preliminary fit')
     value_and_grad = jax.jit(jax.value_and_grad(chi2))
 
     from scipy import optimize
