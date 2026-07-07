@@ -182,6 +182,10 @@ _FS_ALL_TRACERS = ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'LRG3xELG1', 'ELG2', 'QSO1']
 
 # DR2 full-shape name → kwargs for generate_likelihood_options_helper.
 # Entries without a 'tracer' key represent the "all individual tracers" combination.
+# Beyond generate_likelihood_options_helper kwargs, entries may carry post-helper
+# tweaks applied by _fs_likelihood_options: 'select' (stat kind → k-range select list),
+# 'theory' (merged into each observable's theory options), and 'covariance_options'
+# (merged into the covariance options).
 _FS_TRACERS = {}
 for _stat_abbrev, _stats in _FS_STAT_ABBREVS.items():
     _FS_TRACERS[f'desi-dr2-fs-{_stat_abbrev}-all'] = {'stats': _stats}
@@ -189,6 +193,34 @@ for _stat_abbrev, _stats in _FS_STAT_ABBREVS.items():
                              ('lrg-z3', 'LRG3'), ('lrgxelg', 'LRG3xELG1'),
                              ('elg', 'ELG2'), ('qso', 'QSO1')]:
         _FS_TRACERS[f'desi-dr2-fs-{_stat_abbrev}-{_short}'] = {'tracer': _tracer, 'stats': _stats}
+
+# Abacus-HF DR2 v2 mock full-shape likelihoods, replicating the setup of
+# full_shape/job_scripts/validation_systematic_templates.py with dataset
+# 'abacus-hf-dr2-v2-altmtl' (mean of mocks, holi-v3-altmtl mock covariance,
+# no systematic templates). BGS is not available in the Abacus-HF mocks;
+# _fs_likelihood_options falls back to the second-generation mocks for it.
+_ABACUS_FS_TRACERS = ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1']
+_ABACUS_FS_SELECT = {
+    'mesh2_spectrum': [{'ells': 0, 'k': [0.02, 0.20, 0.01]},
+                       {'ells': 2, 'k': [0.02, 0.20, 0.01]}],
+    'mesh3_spectrum': [{'ells': (0, 0, 0), 'k': [0.02, 0.20, 0.01]},
+                       {'ells': (2, 0, 2), 'k': [0.02, 0.03, 0.01]}],
+}
+_ABACUS_FS_STATS_DIR = Path('/dvs_ro/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics')
+for _stat_abbrev in ['s2', 's2-s3']:
+    for _theory in ['folpsD', 'comet']:
+        _FS_TRACERS[f'abacus-dr2-fs-{_stat_abbrev}-all-{_theory}'] = {
+            'stats': _FS_STAT_ABBREVS[_stat_abbrev],
+            'tracer': _ABACUS_FS_TRACERS,
+            'version': 'abacus-hf-dr2-v2-altmtl',
+            'covariance': 'holi-v3-altmtl',
+            'stats_dir': _ABACUS_FS_STATS_DIR,
+            'project': 'full_shape/fiber_assignment_systematics',
+            'emulator': _theory != 'comet',
+            'select': {stat: _ABACUS_FS_SELECT[stat] for stat in _FS_STAT_ABBREVS[_stat_abbrev]},
+            'theory': {'model': _theory, 'prior_basis': 'physical_aap'},
+            'covariance_options': {'source': 'mock', 'project': 'full_shape/base'},
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +487,52 @@ def bao_likelihood_from_files(mean_fn, cov_fn, cosmo=None, name=None, rs_drag=No
     return ObservablesGaussianLikelihood(observables, covariance=covariance)
 
 
+def _fs_likelihood_options(name, cache_dir=None, **kwargs):
+    """Build the filled full-shape likelihood options for a registered FS name.
+
+    Combines the ``_FS_TRACERS`` entry with *kwargs* overrides, builds one
+    likelihood-options dictionary per tracer through
+    ``generate_likelihood_options_helper``, then applies the entry's post-helper
+    tweaks: 'select' (stat kind → k-range select list), 'theory' (merged into each
+    observable's theory options) and 'covariance_options' (merged into the
+    covariance options). For Abacus versions, BGS tracers fall back to the
+    second-generation mocks ('abacus-2ndgen-dr2-altmtl' with 'holi-bgs-altmtl'
+    covariance), as in full_shape/job_scripts/validation_systematic_templates.py.
+    """
+    from full_shape.tools import generate_likelihood_options_helper, fill_fiducial_options
+    helper_kwargs = {**_FS_TRACERS[name], **kwargs}
+    tracer = helper_kwargs.pop('tracer', None)
+    select = helper_kwargs.pop('select', {})
+    theory = helper_kwargs.pop('theory', {})
+    covariance_options = helper_kwargs.pop('covariance_options', {})
+    if tracer is None:
+        tracers = _FS_ALL_TRACERS
+    elif isinstance(tracer, str):
+        tracers = [tracer]
+    else:
+        tracers = list(tracer)
+    likelihoods_options = []
+    for tracer in tracers:
+        tracer_kwargs = dict(helper_kwargs)
+        if 'BGS' in tracer and 'abacus' in tracer_kwargs.get('version', ''):
+            tracer_kwargs['version'] = 'abacus-2ndgen-dr2-altmtl'
+            if 'holi' in str(tracer_kwargs.get('covariance', '')):
+                tracer_kwargs['covariance'] = 'holi-bgs-altmtl'
+        likelihood_options = generate_likelihood_options_helper(tracer=tracer, **tracer_kwargs)
+        for observable_options in likelihood_options['observables']:
+            kind = observable_options['stat']['kind']
+            if kind in select:
+                observable_options['stat']['select'] = [dict(item) for item in select[kind]]
+            observable_options['theory'] = {**observable_options.get('theory', {}), **theory}
+        likelihood_options['covariance'].update(covariance_options)
+        likelihoods_options.append(likelihood_options)
+    options = fill_fiducial_options({'likelihoods': likelihoods_options})
+    if cache_dir is None:
+        for likelihood_options in options['likelihoods']:
+            likelihood_options['emulator'] = {'name': ''}
+    return options
+
+
 def get_likelihood(name, cosmo=None, **kwargs):
     """Return the desilike likelihood instance(s) for a named likelihood.
 
@@ -510,16 +588,9 @@ def get_likelihood(name, cosmo=None, **kwargs):
     # Full-shape (FS) — uses full_shape.tools API, not a simple cls(**kwargs)
     # ------------------------------------------------------------------
     if name in _FS_TRACERS:
-        from full_shape.tools import generate_likelihood_options_helper, get_likelihood as _get_fs_likelihood, fill_fiducial_options
+        from full_shape.tools import get_likelihood as _get_fs_likelihood
         cache_dir = kwargs.get('cache_dir', None)
-        helper_kwargs = {**_FS_TRACERS[name], **{k: v for k, v in kwargs.items() if k != 'cache_dir'}}
-        tracer = helper_kwargs.pop('tracer', None)
-        tracers = _FS_ALL_TRACERS if tracer is None else [tracer]
-        options = {'likelihoods': [generate_likelihood_options_helper(tracer=t, **helper_kwargs) for t in tracers]}
-        options = fill_fiducial_options(options)
-        if cache_dir is None:
-            for likelihood_options in options['likelihoods']:
-                likelihood_options['emulator'] = {'name': ''}
+        options = _fs_likelihood_options(name, cache_dir=cache_dir, **{k: v for k, v in kwargs.items() if k != 'cache_dir'})
         cosmology_options = cosmo if cosmo is not None else options.get('cosmology')
         return _get_fs_likelihood(options['likelihoods'], cosmology_options=cosmology_options, cache_dir=cache_dir)
 
