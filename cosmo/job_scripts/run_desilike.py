@@ -61,7 +61,7 @@ def _setup_task_manager():
 if __name__ == '__main__':
     todo = ['profile', 'sample'][:1]
     models = ['base']
-    likelihoods = ['desi-dr2-bao-all', 'desdovekie', 'CMB-SP4A'][2:]
+    likelihoods = ['desi-dr2-bao-all', 'desdovekie', 'CMB-SPA'][2:]
     engine = 'camb'
     run = 'run1'
     output_dir = None
