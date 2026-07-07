@@ -892,6 +892,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
 
         elif version in ['data-dr2-v1.1', 'data-dr2-v2', 'data-dr2-v2.1', 'data-dr2-test']:
             version = version.split('-')[-1]
+            if kind == 'full_data' and 'BGS_BRIGHT' in tracer:
+                tracer = 'BGS_BRIGHT'
             if version == 'v1.1':
                 ext = 'fits'
             cat_dir = desi_dir / f'survey/catalogs/DA2/LSS/loa-v1/LSScats' / version

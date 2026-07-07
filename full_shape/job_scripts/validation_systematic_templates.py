@@ -105,7 +105,7 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, project, 
     )
     options['cosmology'] = {'template': template, 'model': cosmo_model, 'engine': 'eisenstein_hu' if 'comet' in theory_model else 'class'}
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler=sampler)
-    sampler_kw = {'nparallel': nchains}
+    sampler_kw = {'nparallel': nchains, 'gelman_rubin': 1.02, 'ess': 600}
     for section in ['init', 'run']:
         for name, value in options['sampler'][section].items():
             if name in sampler_kw:
@@ -188,8 +188,8 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
 
 
 def _get_parser():
-    datasets = ['abacus-2ndgen-dr2-altmtl', 'abacus-2ndgen-dr2-complete', 'abacus-hf-dr2-v2-altmtl']
     parser = argparse.ArgumentParser()
+    datasets = ['abacus-2ndgen-dr2-altmtl', 'abacus-2ndgen-dr2-complete', 'abacus-hf-dr2-v2-altmtl', 'data-dr2-v2', 'data-dr2-test-maskedfraczpNN']
     parser.add_argument('--dataset', choices=datasets, default='abacus-hf-dr2-v2-altmtl',
                         help='Dataset to fit..')
     parser.add_argument('--todo', type=str, nargs='*', default=['profile'],
