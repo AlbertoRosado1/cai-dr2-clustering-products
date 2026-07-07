@@ -23,15 +23,17 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
     engine : str, optional
         Boltzmann solver: ``'class'`` (default) or ``'camb'``.
     parameterization : str, optional
-        ``'background'`` (default) samples ``h``, ``omega_b``, ``Omega_m``
-        (``omega_cdm`` is derived by cosmoprimo from these); ``logA``, ``n_s``
-        and ``tau_reio`` are fixed and ``sigma8`` is not tracked. Mirrors
-        cobaya's ``get_background_cobaya_params``: for BAO-alone/SN-alone fits
-        (no BBN/CMB-compressed/thetastar/rdrag likelihood to separately pin down
-        ``h`` and ``omega_b``), ``h`` and ``omega_b`` are fixed to fiducial and
-        ``r_d`` is instead sampled directly (see
+        ``'background'`` (default) samples ``Omega_m`` only, plus the
+        per-family absolute-scale anchor: ``r_d`` sampled directly for BAO
+        (BAO alone only constrains :math:`H_0 r_d`; see
         :class:`~desilike.theories.galaxy_clustering.template.BAOTheory`'s
-        notes on ``rs_drag``), since BAO alone only constrains :math:`H_0 r_d`.
+        notes on ``rs_drag``), the magnitude (``Mb``/``dM``) proposed by the
+        SN likelihoods themselves. ``omega_b`` is freed (and ``r_d`` derived
+        from the cosmology instead of sampled) only when a calibrating
+        likelihood pins it: BBN (optionally with free ``N_eff``), or a
+        CMB-compressed/thetastar/rdrag prior; ``h`` additionally requires BAO
+        (without BAO nothing constrains it). ``logA``, ``n_s`` and
+        ``tau_reio`` are fixed and ``sigma8`` is not tracked.
         ``'lss'`` samples ``omega_cdm`` directly, frees ``logA`` and ``n_s``
         (tau fixed), and adds ``sigma8_m`` / ``sigma8_cb`` as derived outputs.
         ``'cmb'`` additionally frees ``tau_reio``.
@@ -68,11 +70,15 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
     has_bao = 'bao' in labels
     has_varied_nnu = ('schoneberg2024-bbn' in likelihood_names
                        or any(token in name for name in likelihood_names for token in ('varied-nnu', 'marg-nnu')))
-    # BAO/SN alone only constrain H_0*r_d (see BAOTheory's rs_drag notes), not h and
-    # omega_b separately -- unless a BBN/CMB-compressed/thetastar/rdrag likelihood is
-    # also present to break that degeneracy (mirrors cobaya's 'constrain_rd').
-    constrain_rd = (is_background and has_bao
-                     and not any(token in labels for token in ('bbn', 'CMB-compressed', 'thetastar', 'rdrag')))
+    # Likelihoods that pin h and omega_b separately: BBN (omega_b, optionally with free
+    # N_eff), and the CMB-compressed/thetastar/rdrag priors (which read theta_star/ombh2/
+    # r_d off the cosmology, so they are inert unless h and omega_b are sampled).
+    has_calibrator = any(token in labels for token in ('bbn', 'CMB-compressed', 'thetastar', 'rdrag'))
+    # Background parameterization samples Omega_m only, plus the per-family absolute-scale
+    # anchor: r_d sampled directly for BAO (BAO alone only constrains H_0*r_d; see
+    # BAOTheory's rs_drag notes), the magnitude (Mb/dM) proposed by the SN likelihoods
+    # themselves. h and omega_b are freed only when a calibrator is present.
+    constrain_rd = is_background and has_bao and not has_calibrator
 
     params = VariableCollection()
     params.set(Parameter('h', value=fiducial['h'],
@@ -124,11 +130,19 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
                             fd_eps=0.3, latex=r'w_a'))
 
     rs_drag_param = None
-    if constrain_rd:
+    if is_background and not has_calibrator:
+        # No calibrator: h and omega_b are unconstrained (the SN magnitude absorbs H0, BAO
+        # only measures H_0*r_d), so fix both to fiducial; for BAO, anchor the absolute
+        # scale by sampling r_d directly instead.
         params['h'].update(fixed=True)
         params['omega_b'].update(fixed=True)
-        from desilike.theories.galaxy_clustering.template import BAOTheory
-        rs_drag_param = BAOTheory.propose_params(rs_drag=True, fiducial=fiducial)['rs_drag']
+        if has_bao:
+            from desilike.theories.galaxy_clustering.template import BAOTheory
+            rs_drag_param = BAOTheory.propose_params(rs_drag=True, fiducial=fiducial)['rs_drag']
+    elif is_background and not has_bao:
+        # Calibrator present but no BAO (e.g. SN + BBN): omega_b is pinned (by BBN) but
+        # nothing constrains h -- keep it fixed to avoid a flat direction.
+        params['h'].update(fixed=True)
 
     if is_fixed_model:
         for name in params:
