@@ -21,7 +21,7 @@ setup_logging()
 
 
 THEORY_MODELS = ['folpsD', 'folpsEFT', 'reptvelocileptors', 'comet']
-COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed']
+COSMO_MODELS = ['base', 'base_ns-fixed', 'base_w_wa', 'base_ns-fixed_w_wa', 'fixed']
 PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'zeus', 'mhmcmc', 'nuts', 'pocomc', 'nautilus', 'numpyro_nuts', 'numpyro_barker']
 DEFAULT_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics')
@@ -213,6 +213,7 @@ def _get_parser():
                         choices=COSMO_MODELS,
                         help='Cosmology parameter setup to fit. base varies h, omega_cdm, omega_b, logA, n_s; '
                              'base_ns-fixed varies h, omega_cdm, omega_b, logA; '
+                             'the _w_wa variants additionally vary w0_fld, wa_fld; '
                              'fixed varies only nuisance parameters. Defaults to base.')
     parser.add_argument('--sampler', type=str, default='emcee',
                         choices=SAMPLERS,
