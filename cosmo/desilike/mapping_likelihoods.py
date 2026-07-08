@@ -140,6 +140,10 @@ _BAO_MEASUREMENT_FILES = {
         _BAO_MEASUREMENT_FILES_DIR / 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_mean.txt',
         _BAO_MEASUREMENT_FILES_DIR / 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs_cov.txt',
     ),
+    'desi-dr2-bao-lya-fs': (
+        _BAO_MEASUREMENT_FILES_DIR / 'desi_gaussian_bao_Lya_GCcomb_with_new_lyman_alpha_fs_mean.txt',
+        _BAO_MEASUREMENT_FILES_DIR / 'desi_gaussian_bao_Lya_GCcomb_with_new_lyman_alpha_fs_cov.txt',
+    )
 }
 
 

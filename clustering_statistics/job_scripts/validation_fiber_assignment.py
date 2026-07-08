@@ -204,10 +204,10 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
-    #postprocess = ['combine_regions'][:1]
-    #postprocess = ['systematic_templates']
+    #postprocess = ['combine_regions']
+    postprocess = ['systematic_templates']
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'

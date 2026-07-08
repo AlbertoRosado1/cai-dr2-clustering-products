@@ -66,8 +66,9 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
     likelihoods = []
     for tracer in tracers:
         _version, _covariance = version, covariance
-        if 'BGS' in tracer and 'abacus' in version:
-            _version = 'abacus-2ndgen-dr2-altmtl'
+        if 'BGS' in tracer:
+            if 'abacus' in version:
+                _version = 'abacus-2ndgen-dr2-altmtl'
             if isinstance(covariance, str) and 'holi' in covariance:
                 _covariance = 'holi-bgs-altmtl'
         likelihood_options = tools.generate_likelihood_options_helper(
