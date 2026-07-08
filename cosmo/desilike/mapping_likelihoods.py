@@ -479,6 +479,9 @@ def bao_likelihood_from_files(mean_fn, cov_fn, cosmo=None, name=None, rs_drag=No
     observables = []
     for z_eff, meas_values, param_names in z_groups:
         obs_name = f'{name}/{z_eff}' if len(z_groups) > 1 else name
+        # A quantity may be measured several times at the same redshift (e.g. F_AP from
+        # both BAO and full-shape): BAOCompressionObservable compares each measurement
+        # to the same theory prediction (repeated names must be consecutive).
         observables.append(BAOCompressionObservable(
             data=meas_values, parameters=param_names, name=obs_name,
             z=z_eff, cosmo=cosmo, rs_drag=(False if rs_drag is None else rs_drag),
