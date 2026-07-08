@@ -85,7 +85,7 @@ def prepare_cucount_particles(*get_data_randoms, positions_type='pos', subsample
         If provided, build a :class:`KMeansSubsampler`.
     split_randoms : float, tuple
         If provided, ratio of randoms / data to split the (concatenated) randoms or shifted catalogs into.
-        If a tuple, (ratio of randoms / data, number of random splits).
+        If a tuple, (ratio of randoms / data per split, number of random splits).
     concatenate : bool
         If ``True``, return concatenated randoms or shifted catalogs.
     wattrs : WeightAttrs, optional

@@ -62,8 +62,10 @@ if __name__ == '__main__':
     todo = ['profile', 'sample'][:1]
     models = ['base']
     #likelihoods = [['desi-dr2-bao-all', 'desdovekie'], 'CMB-SP4A']
-    likelihoods = ['desi-dr2-bao-lya-fs']
-    engine = 'camb'
+    #likelihoods = ['desi-dr2-bao-lya-fs']
+    likelihoods = [['abacus-dr2-fs-s2-s3-lrg1-comet', 'desdovekie']]
+    #engine = 'camb'
+    engine = 'eisenstein_hu'
     run = 'run1'
     output_dir = None
     resume = False

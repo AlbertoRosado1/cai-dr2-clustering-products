@@ -914,7 +914,9 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                 return [cat_dir / f'{tracer}_{iran:d}_full_HPmapcut.ran.{ext}' for iran in nrans]
 
         elif 'data-dr3' in version:
-            if version == 'data-dr3-matterhorn-v2-test':
+            if version == 'data-dr3-matterhorn-v2-v0-bao':
+                cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/matterhorn-v2/LSScats/v0/BAO/blinded'
+            elif version == 'data-dr3-matterhorn-v2-test':
                 cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/matterhorn-v2/LSScats/test'
             elif version == 'data-dr3-daily-test':
                 cat_dir = desi_dir / 'survey/catalogs/DA3/LSS/daily/LSScats/test'
@@ -923,9 +925,10 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'parent_randoms':
                 program = 'bright' if 'BGS' in tracer else 'dark'
                 return [cat_dir / f'{program}_{iran}_full_noveto.ran.h5' for iran in nrans]
+            data_dir = cat_dir
             if 'bitwise' in weight:
                 data_dir = cat_dir / 'PIP'
-            else:
+            elif 'blinded' not in str(cat_dir):
                 data_dir = cat_dir / 'nonKP'
             ext = 'fits'
             if kind == 'data':
