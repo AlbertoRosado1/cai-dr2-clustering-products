@@ -23,11 +23,11 @@ from clustering_statistics import tools
 setup_logging()
 
 # to run job
-mode = 'interactive'
-#mode = 'slurm'
+#mode = 'interactive'
+mode = 'slurm'
 
 if mode == 'slurm':
-    queue = Queue('abacus_mocks5')
+    queue = Queue('abacus_mocks2')
     queue.clear(kill=False)
 
     output, error = 'slurm_outputs/abacus_mocks/slurm-%j.out', 'slurm_outputs/abacus_mocks/slurm-%j.err'
@@ -36,9 +36,9 @@ if mode == 'slurm':
     tm = TaskManager(queue=queue, environ=environ)
     tm = tm.clone(scheduler=dict(max_workers=20), provider=dict(provider='nersc', time='03:00:00',
                                 mpiprocs_per_worker=4, output=output, error=error, constraint='gpu'))
-    tm80 = tm.clone(provider=dict(provider='nersc', time='03:00:00',
-                                mpiprocs_per_worker=4, output=output, error=error, stop_after=1, constraint='gpu&hbm80g'))
-    tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='00:10:00',
+    tm80 = tm.clone(provider=dict(provider='nersc', time='10:00:00',
+                                mpiprocs_per_worker=4, output=output, error=error, constraint='gpu&hbm80g'))
+    tmw = tm.clone(scheduler=dict(max_workers=1), provider=dict(provider='nersc', time='10:00:00',
                     mpiprocs_per_worker=2250, nodes_per_worker=25, output=output, error=error, stop_after=1, constraint='cpu'))
 
 
@@ -52,7 +52,6 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
-    import sys
     import functools
     from pathlib import Path
     import jax
@@ -63,7 +62,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
     try: jax.distributed.initialize()
     except RuntimeError: print('Distributed environment already initialized')
     else: print('Initializing distributed environment')
-    from clustering_statistics import tools, setup_logging, compute_stats_from_options, fill_fiducial_options, postprocess_stats_from_options
+    from clustering_statistics import tools, setup_logging, compute_stats_from_options, fill_fiducial_options
     setup_logging()
 
     cache = {}
@@ -146,13 +145,13 @@ if __name__ == '__main__':
 
     check_for_existing_measurements = False
     stats, postprocess = [], []
-    #version = 'abacus-hf-dr2-v2-altmtl'
+    version = 'abacus-hf-dr2-v2-altmtl'
     #version = 'glam-uchuu-v2-altmtl'
     #version = 'glam-uchuu-v2-altmtl-maskedfraczpNN'
     #version = ('glam-uchuu-v2-altmtl', 'glam-uchuu-v2-altmtl-maskedfraczpNN')
     #version = 'abacus-2ndgen-dr2-complete'
     #version = 'abacus-2ndgen-dr2-altmtl'
-    version = 'data-dr2-v2'
+    #version = 'data-dr2-v2'
     #version = 'data-dr2-test-maskedfracz'
     #version = 'data-dr2-test-maskedfraczpNN'
     analysis = 'full_shape'
@@ -183,7 +182,7 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['BGS', 'LRG', 'ELG', 'QSO']
+    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:] #[1:2]
     #tracers = [('LRG', 'ELG')]
     #tracers = ['ELG', 'LRG'][:1]
     #tracers = ['LRG']
@@ -204,10 +203,10 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
     #postprocess = ['combine_regions']
-    postprocess = ['systematic_templates']
+    #postprocess = ['systematic_templates']
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'
