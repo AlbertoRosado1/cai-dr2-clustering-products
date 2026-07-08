@@ -12,13 +12,13 @@ from pathlib import Path
 
 DEFAULT_Y3_REPO = Path('/global/homes/u/uendert/repos/desi/desi-y3-kp')
 DEFAULT_CASES = [
-    'desi-bao-all',
-    'desi-bao-all,pantheonplus',
-    'desi-bao-all,schoneberg2024-bbn',
-    'desi-bao-all,CMB-compressed-theta',
-    'desi-bao-all,planck-NPIPE-highl-CamSpec-TTTEEE',
-    'desi-bao-all,pantheonplus,planck-NPIPE-highl-CamSpec-TTTEEE',
-    'desi-bao-all,planck-NPIPE-highl-CamSpec-TTTEEE,planckpr4lensing',
+    'desi-dr2-bao-all',
+    'desi-dr2-bao-all,pantheonplus',
+    'desi-dr2-bao-all,schoneberg2024-bbn',
+    'desi-dr2-bao-all,CMB-compressed-theta',
+    'desi-dr2-bao-all,planck-NPIPE-highl-CamSpec-TTTEEE',
+    'desi-dr2-bao-all,pantheonplus,planck-NPIPE-highl-CamSpec-TTTEEE',
+    'desi-dr2-bao-all,planck-NPIPE-highl-CamSpec-TTTEEE,planckpr4lensing',
 ]
 
 

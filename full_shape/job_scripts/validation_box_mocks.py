@@ -20,7 +20,7 @@ COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed']
 PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'zeus', 'mhmcmc', 'nuts', 'pocomc', 'nautilus', 'numpyro_nuts', 'numpyro_barker']
 DEFAULT_BOX_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics/box')
-DEFAULT_EZMOCK_STATS_DIR = Path('/global/cfs/cdirs/desi/science/gqc/y3_fits/mockchallenge_abacus/measurements/EZmocks_lsstypes')
+DEFAULT_EZMOCK_STATS_DIR = Path('/dvs_ro/cfs/cdirs/desi/science/cai/desi-clustering/dr2/summary_statistics/mock_challenge/ezmock')
 DEFAULT_FITS_DIR = Path(os.getenv('SCRATCH', '.')) / 'fits_box_mocks'
 DEFAULT_CACHE_DIR = Path(os.getenv('SCRATCH', '.')) / 'desi-clustering/full_shape/job_scripts/_cache'
 DEFAULT_TRACER = 'QSO_lorentzian'
@@ -113,7 +113,6 @@ def _build_likelihood_options(stats=DEFAULT_STATS, tracer=DEFAULT_TRACER, versio
         covariance_zsnap=covariance_defaults['zsnap'],
         covariance_imocks=covariance_defaults['imock'],
         covariance_stat_options=covariance_defaults.get('stat_options', {}),
-        covariance_interpolation=True,
         covariance_volume_rescaling={
             'enabled': True,
             'source_boxsize_gpch': 6.0,

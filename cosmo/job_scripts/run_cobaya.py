@@ -21,7 +21,7 @@ THREAD_ENV = {name: '32' for name in ['OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
 def parse_likelihood_combinations(values):
     """Return ``(label, expanded_likelihoods)`` combinations from CLI values."""
     combinations = []
-    for value in values or ['bao']:
+    for value in values or ['desi-dr2-bao-all']:
         label = value if isinstance(value, str) and ',' not in value else get_likelihood_label(likelihoods=normalize_likelihood_combination(value))
         combinations.append((label, normalize_likelihood_combination(value)))
     return combinations
@@ -127,7 +127,7 @@ def _get_parser():
     parser.add_argument('--todo', nargs='+', default=['evaluate'], choices=['evaluate', 'sample', 'profile', 'export'],
                         help='Tasks to create/run.')
     parser.add_argument('--models', nargs='+', default=['base'], help='Cosmology models to run.')
-    parser.add_argument('--likelihoods', nargs='+', default=['bao'],
+    parser.add_argument('--likelihoods', nargs='+', default=['desi-dr2-bao-all'],
                         help='Likelihood combinations or named presets. Each explicit value is comma-separated.')
     parser.add_argument('--list-likelihood-combinations', action='store_true',
                         help='Print available named likelihood-combination presets and exit.')

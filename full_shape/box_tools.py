@@ -1,9 +1,6 @@
 """Helpers specific to full-shape fits of cubic box measurements."""
 from pathlib import Path
 
-import numpy as np
-import scipy as sp
-
 from clustering_statistics.tools import get_simple_tracer, _make_tuple
 
 
@@ -42,73 +39,6 @@ def get_covariance_volume_scale_factor(config=None):
     return (source / target)**3
 
 
-def _compress_coordinate_cloud(x_src, x_tgt, atol=1e-14):
-    x_src = np.asarray(x_src, dtype=float)
-    x_tgt = np.asarray(x_tgt, dtype=float)
-
-    if x_src.ndim == 1:
-        return x_src.reshape(-1, 1), x_tgt.reshape(-1, 1)
-
-    pts_src = x_src.reshape(-1, x_src.shape[-1])
-    pts_tgt = x_tgt.reshape(-1, x_tgt.shape[-1])
-
-    keep = np.std(pts_src, axis=0) > atol
-    if np.any(keep):
-        pts_src = pts_src[:, keep]
-        pts_tgt = pts_tgt[:, keep]
-    else:
-        pts_src = pts_src[:, :1]
-        pts_tgt = pts_tgt[:, :1]
-
-    mean = np.mean(pts_src, axis=0)
-    centered = pts_src - mean
-    if centered.ndim == 1:
-        centered = centered.reshape(-1, 1)
-    _, s, vh = np.linalg.svd(centered, full_matrices=False)
-    rank = int(np.sum(s > atol * max(1.0, s[0] if len(s) else 1.0)))
-    rank = max(rank, 1)
-
-    basis = vh[:rank].T
-    return centered @ basis, (pts_tgt - mean) @ basis
-
-
-def interpolate_piece_to_template(source_piece, target_piece):
-    """Interpolate one observable leaf onto the coordinates of a template leaf."""
-    x_tgt = np.asarray(target_piece.coords('k'))
-    y_tgt_shape = np.asarray(target_piece.values('value')).shape
-    x_src = np.asarray(source_piece.coords('k'))
-    y_src = np.asarray(source_piece.values('value'), dtype=float).reshape(-1)
-
-    if x_src.shape == x_tgt.shape and np.allclose(x_src, x_tgt, rtol=0., atol=1e-12):
-        return y_src.reshape(y_tgt_shape).reshape(-1)
-
-    red_src, red_tgt = _compress_coordinate_cloud(x_src, x_tgt)
-
-    if red_src.shape[1] == 1:
-        x_src_1d = red_src.reshape(-1)
-        x_tgt_1d = red_tgt.reshape(-1)
-        order = np.argsort(x_src_1d)
-        unique_x, unique_idx = np.unique(x_src_1d[order], return_index=True)
-        y_unique = y_src[order][unique_idx]
-        return np.interp(x_tgt_1d, unique_x, y_unique).reshape(-1)
-
-    linear = sp.interpolate.LinearNDInterpolator(red_src, y_src)
-    out = np.asarray(linear(red_tgt), dtype=float)
-    if np.any(np.isnan(out)):
-        nearest = sp.interpolate.NearestNDInterpolator(red_src, y_src)
-        mask = np.isnan(out)
-        out[mask] = np.asarray(nearest(red_tgt[mask]), dtype=float)
-    return out.reshape(-1)
-
-
-def interpolate_observable_to_template(source_observable, template_observable):
-    """Interpolate an observable onto a selected data/template observable grid."""
-    return np.concatenate([
-        interpolate_piece_to_template(source_observable.get(ells=ell), template_observable.get(ells=ell))
-        for ell in template_observable.ells
-    ])
-
-
 def generate_box_likelihood_options_helper(
         stats=('mesh2_spectrum',),
         tracer='LRG',
@@ -129,7 +59,6 @@ def generate_box_likelihood_options_helper(
         covariance_los='z',
         covariance_imocks='*',
         covariance_stat_options=None,
-        covariance_interpolation=False,
         covariance_volume_rescaling=None,
         stats_dir=Path('/dvs_ro/cfs/cdirs/desicollab/mocks/cai/LSS/DA2/mocks/desipipe/box'),
         covariance_stats_dir=None,
@@ -187,8 +116,6 @@ def generate_box_likelihood_options_helper(
                   'corrections': ['hartlap', 'percival']}
     if covariance_stat_options:
         covariance['stat_options'] = {key: dict(value) for key, value in covariance_stat_options.items()}
-    if covariance_interpolation:
-        covariance['interpolation'] = {'enabled': True, 'method': 'observable-to-data'}
     if covariance_volume_rescaling is not None:
         covariance['volume_rescaling'] = dict(covariance_volume_rescaling)
 

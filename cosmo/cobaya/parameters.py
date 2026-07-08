@@ -280,6 +280,22 @@ def get_cmb_cobaya_params(model='base', theory='camb', likelihoods=None):
             'DoLateRadTruncation': False,
             'min_l_logl_sampling': 9500,
         })
+    if 'CMB-SP4A' in labels:
+        extra_args.update({
+            'halofit_version': 'mead2020',
+            'AccuracyBoost': 1,
+            'lAccuracyBoost': 1.2,
+            'lSampleBoost': 1,
+            'nonlinear': True,
+            'kmax': 10,
+            'k_per_logint': 130,
+            'lens_margin': 2050,
+            'lens_potential_accuracy': 8,
+            'lmax': 9500,
+            'recombination_model': 'CosmoRec',
+            'DoLateRadTruncation': False,
+            'min_l_logl_sampling': 6000,
+        })
     if 'lensing' in labels:
         extra_args.update({
             'halofit_version': 'mead2016',

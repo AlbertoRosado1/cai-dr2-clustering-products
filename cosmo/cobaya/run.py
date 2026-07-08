@@ -29,12 +29,12 @@ def get_likelihood_label(likelihoods=None, dataset=None):
     return '_'.join(normalize_likelihoods(likelihoods=normalize_likelihood_combination(likelihoods), dataset=dataset))
 
 
-def get_cobaya_output(model='base', theory='camb', likelihoods=None, dataset='desi-bao-all', sampler='cobaya', output_dir=None,
+def get_cobaya_output(model='base', theory='camb', likelihoods=None, dataset='desi-dr2-bao-all', sampler='cobaya', output_dir=None,
                       run='run1', suffix=True, ext=None, output_label=None):
     """Return the Cobaya output prefix for a configuration."""
     if output_dir is None:
         output_dir = DEFAULT_COSMO_OUTPUT_DIR
-    selected_dataset = None if likelihoods is not None and dataset == 'desi-bao-all' else dataset
+    selected_dataset = None if likelihoods is not None and dataset == 'desi-dr2-bao-all' else dataset
     label = output_label or get_likelihood_label(likelihoods=likelihoods, dataset=selected_dataset)
     output = Path(output_dir) / sampler / theory / run / model / label
     output = output / ('bestfit' if sampler not in {'cobaya', 'mcmc'} else 'chain')
@@ -46,7 +46,7 @@ def get_cobaya_output(model='base', theory='camb', likelihoods=None, dataset='de
     return output
 
 
-def get_cobaya_sampler(sampler='cobaya', likelihoods=None, dataset='desi-bao-all', seed=None, test=False, temperature=1., **kwargs):
+def get_cobaya_sampler(sampler='cobaya', likelihoods=None, dataset='desi-dr2-bao-all', seed=None, test=False, temperature=1., **kwargs):
     """Return a Cobaya sampler block."""
     if sampler in {'evaluate', 'eval'}:
         return {'evaluate': None}
@@ -78,12 +78,12 @@ def get_cobaya_sampler(sampler='cobaya', likelihoods=None, dataset='desi-bao-all
     raise ValueError(f'Unknown sampler {sampler!r}.')
 
 
-def get_cobaya_info(model='base', theory='camb', likelihoods=None, dataset='desi-bao-all', sampler='cobaya', output_dir=None,
+def get_cobaya_info(model='base', theory='camb', likelihoods=None, dataset='desi-dr2-bao-all', sampler='cobaya', output_dir=None,
                     run='run1', seed=None, test=False, output=True, save_fn=None, python_path=None,
                     likelihood_package=None, likelihood_path=None, output_label=None, **sampler_options):
     """Return a Cobaya info dictionary for DESI cosmology inference."""
     selected_likelihoods = normalize_likelihood_combination(likelihoods)
-    selected_dataset = None if selected_likelihoods is not None and dataset == 'desi-bao-all' else dataset
+    selected_dataset = None if selected_likelihoods is not None and dataset == 'desi-dr2-bao-all' else dataset
     cobaya_likelihoods = get_cobaya_likelihoods(
         likelihoods=selected_likelihoods,
         dataset=selected_dataset,
@@ -188,7 +188,7 @@ def exists_cobaya_output(*args, **kwargs):
 def yield_configs(models=None, likelihoods=None, datasets=None, theory='camb', sampler='cobaya', **kwargs):
     """Yield configuration dictionaries for desipipe task creation."""
     models = make_list(models) or ['base']
-    names = make_list(likelihoods if likelihoods is not None else datasets) or ['bao']
+    names = make_list(likelihoods if likelihoods is not None else datasets) or ['desi-dr2-bao-all']
     for model in models:
         for name in names:
             yield {'model': model, 'likelihoods': normalize_likelihood_combination(name), 'dataset': None, 'theory': theory, 'sampler': sampler, **kwargs}
