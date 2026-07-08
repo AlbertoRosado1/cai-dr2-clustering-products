@@ -21,7 +21,7 @@ setup_logging()
 
 
 THEORY_MODELS = ['folpsD', 'folpsEFT', 'reptvelocileptors', 'comet']
-COSMO_MODELS = ['base', 'base_ns-fixed', 'base_w_wa', 'base_ns-fixed_w_wa', 'fixed']
+COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed', 'base_w_wa']
 PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'zeus', 'mhmcmc', 'nuts', 'pocomc', 'nautilus', 'numpyro_nuts', 'numpyro_barker']
 DEFAULT_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics')

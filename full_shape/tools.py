@@ -74,12 +74,7 @@ def get_cosmology(cosmology_options: dict=None):
     model = cosmology_options.get('model', 'base_ns-fixed')
     is_fixed_model = model == 'fixed'
     is_ns_fixed = is_fixed_model or 'ns-fixed' in model
-    has_w0wa = 'w0wa' in model or 'w_wa' in model
-    remainder = model
-    for token in ['base', 'ns-fixed', 'w0wa', 'w_wa', 'fixed']:
-        remainder = remainder.replace(token, '')
-    if remainder.strip('_-'):
-        raise ValueError(f'Unknown cosmology model {model!r}; known tokens are base, ns-fixed, w0wa (or w_wa), fixed.')
+    has_w0wa = any(w in model for w in ['w_wa', 'w0wa'])
     fiducial = get_fiducial()
 
     params = VariableCollection()
