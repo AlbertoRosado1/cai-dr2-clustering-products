@@ -64,7 +64,7 @@ def compute_mesh3_spectrum_close_pair_correction(*get_data_randoms, spectrum, au
     for name in corrections:
         if corrections[name] is not None:
             correction = _compute_mesh3_spectrum_close_pair_correction(all_particles, ells=spectrum.ells, **{name: corrections[name]})
-            types.ObservableTree(list(correction.values()), counts=list(correction.keys())).write('correction.h5') 
+            #types.ObservableTree(list(correction.values()), counts=list(correction.keys())).write('correction.h5')
             results[name] = _apply_mesh3_spectrum_close_pair_correction(spectrum, correction)
     return results
 
