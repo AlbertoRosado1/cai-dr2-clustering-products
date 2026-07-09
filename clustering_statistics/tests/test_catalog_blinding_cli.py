@@ -54,7 +54,6 @@ def base_args(input_fn, output_fn, **overrides):
         recon_cellsize=None, recon_meshsize=None, recon_boxsize=None, recon_boxcenter=None,
         recon_nthreads=64, recon_weight_col='WEIGHT', fgrowth_blind=0.88, max_df_fraction=0.1,
         fnl_smoothing_radius=30., fnl_recon='IterativeFFTReconstruction', fnl_cellsize=None,
-        fnl_meshsize=None, fnl_boxsize=None, fnl_boxcenter=None, fnl_nthreads=None,
         summary_file=None, clobber=False,
     )
     args.update(overrides)

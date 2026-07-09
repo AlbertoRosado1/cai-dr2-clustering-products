@@ -135,14 +135,6 @@ def parse_args(args=None):
                         help='pyrecon reconstruction class name passed to mockfactory for fNL.')
     parser.add_argument('--fnl-cellsize', type=float, default=None,
                         help='Optional fNL reconstruction cellsize. mockfactory defaults to 15 when omitted.')
-    parser.add_argument('--fnl-meshsize', type=int, default=None,
-                        help='Optional fNL reconstruction nmesh.')
-    parser.add_argument('--fnl-boxsize', type=float, default=None,
-                        help='Optional fNL reconstruction boxsize.')
-    parser.add_argument('--fnl-boxcenter', nargs=3, type=float, default=None,
-                        help='Optional fNL reconstruction Cartesian box center.')
-    parser.add_argument('--fnl-nthreads', type=int, default=None,
-                        help='Optional number of FFTW threads for the fNL pyrecon reconstruction.')
     parser.add_argument('--diagnostic-plot-dir', default=None,
                         help='Optional directory for real-run diagnostic plots comparing data/random redshift and weight distributions at each blinding step.')
     parser.add_argument('--diagnostic-plot-prefix', default='catalog_blinding',
@@ -401,10 +393,6 @@ def run_from_args(args):
         fnl_kwargs = {}
         for cli_name, kw_name in [
             ('fnl_cellsize', 'cellsize'),
-            ('fnl_meshsize', 'nmesh'),
-            ('fnl_boxsize', 'boxsize'),
-            ('fnl_boxcenter', 'boxcenter'),
-            ('fnl_nthreads', 'nthreads'),
         ]:
             value = getattr(args, cli_name, None)
             if value is not None:
