@@ -441,7 +441,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             selection_weights = spectrum_options.get('selection_weights', None)
             _cache_auw = {}
 
-            def get_data(tracer):
+            def get_data(tracer, _cache_auw=_cache_auw):
                 # Load full parent catalogs (before any selection) for AUW computation
                 _catalog_options = dict(fn_catalog_options[tracer])
                 _zdata = zdata[tracer]

@@ -389,7 +389,7 @@ def compute_box_particle2_correlation(*get_data, battrs: dict=None, mattrs: dict
         all_particles = prepare_cucount_particles(*get_data, split_randoms=split_randoms)
         if jax.process_index() == 0: logger.info('All particles on the device')
 
-        mattrs = MeshAttrs(*[particles['data'] for particles in all_particles], battrs=battrs, los=los, **mattrs)
+        mattrs = MeshAttrs(*[particles['data'] for particles in all_particles], battrs=battrs, **mattrs)
 
         def count2split(*particles, wattrs=None):
             kw = dict(battrs=battrs, mattrs=mattrs, wattrs=wattrs)
@@ -483,9 +483,9 @@ def compute_particle2_correlation_close_pair_correction(*get_data_randoms, corre
                 if coord_name in edges:
                     edge = edges[coord_name]
                     edge = np.append(edge[:, 0], edge[-1, 1])
-                    if name == 'mu':
+                    if coord_name == 'mu':
                         edge = (edge, los)
-                    d[name] = edge
+                    d[coord_name] = edge
             if ells:
                 d['pole'] = (ells, los)
             battrs = BinAttrs(**d)
@@ -839,16 +839,16 @@ def compute_covariance_particle2_correlation(*get_data_randoms, theory=None, RR=
 
     def interp_log(spectrum, nmu=6):
         from scipy.special import eval_legendre
-    
+
         #k_fftlog = np.logspace(-2., 2., 1024)
         k_fftlog = np.logspace(-3., 1.5, 1024)
-    
+
         k_edges = np.empty(len(k_fftlog) + 1)
         k_edges[1:-1] = np.sqrt(k_fftlog[:-1] * k_fftlog[1:])
         k_edges[0] = k_fftlog[0]**2 / k_edges[1]
         k_edges[-1] = k_fftlog[-1]**2 / k_edges[-2]
         k_edges = np.column_stack([k_edges[:-1], k_edges[1:]])
-    
+
         # collect input multipoles
         labels, ells, poles = [], [], []
         for label, pole in spectrum.items():
@@ -856,64 +856,64 @@ def compute_covariance_particle2_correlation(*get_data_randoms, theory=None, RR=
             ells.append(label['ells'])
             kin = np.asarray(pole.coords('k'))
             poles.append(np.asarray(pole.value()))
-    
+
         ells = np.asarray(ells)
         poles = np.asarray(poles)  # (nell, nk)
-    
+
         # Gauss-Legendre mu bins / quadrature nodes
         mu, wmu = np.polynomial.legendre.leggauss(nmu)
-    
+
         # Legendre matrix: L[a, imu] = L_ell_a(mu)
         leg = np.asarray([eval_legendre(ell, mu) for ell in ells])
-    
+
         # multipoles -> P(k, mu)
         # convention: P(k, mu) = sum_ell P_ell(k) L_ell(mu)
         pkmu = np.einsum('lk,lm->km', poles, leg)
-    
+
         logkin = np.log(kin)
         logkout = np.log(k_fftlog)
-    
+
         def interp_signed_loglog(y):
             """
             Log-log interpolation/extrapolation in |y| with sign preserved.
             Falls back to linear-log if sign changes.
             """
             y = np.asarray(y)
-    
+
             if np.all(y > 0.) or np.all(y < 0.):
                 sign = np.sign(y[0])
                 logy = np.log(np.abs(y))
-    
+
                 out = np.interp(logkout, logkin, logy)
-    
+
                 # left extrapolation
                 slope_low = (logy[1] - logy[0]) / (logkin[1] - logkin[0])
                 mask_low = logkout < logkin[0]
                 out[mask_low] = logy[0] + slope_low * (logkout[mask_low] - logkin[0])
-    
+
                 # right extrapolation
                 slope_high = (logy[-1] - logy[-2]) / (logkin[-1] - logkin[-2])
                 mask_high = logkout > logkin[-1]
                 out[mask_high] = logy[-1] + slope_high * (logkout[mask_high] - logkin[-1])
-    
+
                 return sign * np.exp(out)
-    
+
             # fallback if P(k, mu) changes sign
             out = np.interp(logkout, logkin, y)
-    
+
             slope_low = (y[1] - y[0]) / (logkin[1] - logkin[0])
             mask_low = logkout < logkin[0]
             out[mask_low] = y[0] + slope_low * (logkout[mask_low] - logkin[0])
-    
+
             slope_high = (y[-1] - y[-2]) / (logkin[-1] - logkin[-2])
             mask_high = logkout > logkin[-1]
             out[mask_high] = y[-1] + slope_high * (logkout[mask_high] - logkin[-1])
-    
+
             return out
-    
+
         # interpolate/extrapolate each mu bin
         pkmu_out = np.stack([interp_signed_loglog(pkmu[:, imu]) for imu in range(nmu)], axis=1)  # (nkout, nmu)
-    
+
         # P(k, mu) -> multipoles
         # P_ell(k) = (2ell + 1)/2 int_{-1}^{1} dmu P(k,mu) L_ell(mu)
         poles_out = []

@@ -14,6 +14,7 @@ import time
 import logging
 import functools
 import operator
+import itertools
 from collections.abc import Callable
 
 import numpy as np
@@ -1779,7 +1780,7 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
             params[name].update(**update)
 
     # Minimize likelihood to get best-fit theory
-    posterior = compile(Posterior(likelihood))    
+    posterior = compile(Posterior(likelihood))
     profiler = Profiler(posterior, kernel=Minuit(), rng=42)
     profiles = profiler.maximize()
     # Get best-fit parameters
