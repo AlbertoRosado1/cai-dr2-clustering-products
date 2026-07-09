@@ -25,6 +25,7 @@ from mpi4py import MPI
 from clustering_statistics import tools
 from clustering_statistics.tools import renormalize_randoms_over_data, Catalog, desi_dir, default_mpicomm, setup_logging
 from clustering_statistics.spectrum2_tools import compute_mesh2_spectrum
+from clustering_statistics.spectrum3_tools import compute_mesh3_spectrum
 
 
 logger = logging.getLogger('angular_shotnoise')
@@ -45,7 +46,6 @@ def get_catalog_fn(kind='data', tracer='ELG_LOPnotqso', region='NGC', iran=0):
 @default_mpicomm
 def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', region=None,
                            imweights=['WEIGHT_IMLIN'], norm_regions=('N', 'S'),
-                           ells=(0, 2, 4), edges=None,
                            randomize=None, mattrs=None, mpicomm=None):
     r"""
     Compute the power spectrum of the fNL ELG catalogs with imaging systematic weights.
@@ -71,7 +71,9 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
 
     Returns
     -------
-    spectrum : Mesh2SpectrumPoles
+    spectra : list of dict
+        One dict per ``imweight``, with keys 'mesh2_spectrum' (:class:`Mesh2SpectrumPoles`)
+        and 'mesh3_spectrum' (:class:`Mesh3SpectrumPoles`).
     """
     if mattrs is None: mattrs = dict(meshsize=960, cellsize=7.5)
 
@@ -150,7 +152,8 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
             catalog = tools.mask_catalog(catalog, kind, zrange=zrange, region=region)
             catalog = tools.set_positions_from_rdz(catalog)
             catalogs[kind] = catalog[['POSITION', 'INDWEIGHT', 'TARGETID']]
-        spectra.append(compute_mesh2_spectrum(lambda: catalogs, ells=ells, edges=edges, mattrs=mattrs))
+        spectra.append({'mesh2_spectrum': compute_mesh2_spectrum(lambda: catalogs, mattrs=mattrs),
+                        'mesh3_spectrum': compute_mesh3_spectrum(lambda: catalogs, mattrs=mattrs)})
 
     return spectra
 
@@ -173,5 +176,6 @@ if __name__ == '__main__':
                 norm_regions = ''.join(norm_regions)
                 randomize_label = f'_randomize-{randomize}' if randomize else ''
                 for spectrum, imweight in zip(spectra, imweights):
-                    tools.write_stats(stats_dir / f'mesh2_spectrum_ELG_LOPnotqso_{region}_{imweight}_norm{norm_regions}{randomize_label}.h5',
-                                    spectrum, mpicomm=mpicomm)
+                    for stat, value in spectrum.items():
+                        tools.write_stats(stats_dir / f'{stat}_ELG_LOPnotqso_{region}_{imweight}_norm{norm_regions}{randomize_label}.h5',
+                                        value, mpicomm=mpicomm)

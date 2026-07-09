@@ -21,7 +21,9 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
         ``'w_wa'`` (free dark energy equation of state), ``'_w'`` (free ``w_0``
         only), ``'fixed'`` (fix all parameters).
     engine : str, optional
-        Boltzmann solver: ``'class'`` (default) or ``'camb'``.
+        Boltzmann solver: ``'class'`` (default) or ``'camb'``; or ``'ace'`` for the packaged
+        jaxace / jaxmapse / jaxcapse neural-network emulators (pure JAX, differentiable;
+        LCDM-only Cl, parameters NaN-masked outside the emulator training ranges).
     parameterization : str, optional
         ``'background'`` (default) samples ``Omega_m`` only, plus the
         per-family absolute-scale anchor: ``r_d`` sampled directly for BAO
@@ -52,8 +54,8 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
         :class:`~desilike.likelihoods.bao.DESIDR2BAOLikelihood`.
     """
     from desilike import VariableCollection, Parameter
-    from desilike.theories import CosmoprimoCosmology
-    if isinstance(model, CosmoprimoCosmology):
+    from desilike.theories import PrimordialCosmology, CosmoprimoCosmology, ACECosmology
+    if isinstance(model, PrimordialCosmology):
         return model
     is_cmb = parameterization == 'cmb'
     is_lss = parameterization in ('lss', 'cmb')  # lss: logA/n_s free, tau fixed; cmb: all three free
@@ -172,7 +174,12 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
     if is_lss:
         params.set(Parameter('sigma8_m', derived=True, latex=r'\sigma_{8,\mathrm{m}}'))
         params.set(Parameter('sigma8_cb', derived=True, latex=r'\sigma_{8,\mathrm{cb}}'))
-    cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial, params=params)
+    if engine == 'ace':
+        # Packaged jaxace / jaxmapse / jaxcapse neural-network emulators (pure JAX end-to-end,
+        # differentiable); see desilike.theories.primordial_cosmology.ACECosmology.
+        cosmo = ACECosmology(engine=engine, fiducial=fiducial, params=params)
+    else:
+        cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial, params=params)
     cosmo.rs_drag_param = rs_drag_param
     return cosmo
 
