@@ -586,9 +586,6 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
             # Main driver: loops over ell and calls compute(...)
             results = loop_over_optimal_weights(ells, compute, join)
 
-    # Return single result or dictionary of variants
-    if len(results) == 1:
-        return next(iter(results.values()))
     return results
 
 

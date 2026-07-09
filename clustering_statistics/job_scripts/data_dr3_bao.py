@@ -73,7 +73,7 @@ def run_stats(version='data-dr3-daily-test', tracer='LRG', weight='default-FKP',
     # Create partial function with stats directory preset for cleaner calls
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project)
     # Loop over Northern and Southern galactic caps
-    for region in ['NGC', 'SGC']:
+    for region in ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'][2:]:
         # Configuration for particle pair correlation function (optional fine binning)
         # battrs: custom binning in separation s and line-of-sight angle mu
         battrs = None #dict(s=np.linspace(0., 150., 151), mu=(np.linspace(-1., 1., 201), 'midpoint'))
@@ -121,11 +121,11 @@ if __name__ == '__main__':
     # window_mesh2_spectrum: compute survey window function via random catalogs
     # covariance_mesh2_spectrum: estimate power spectrum covariance matrix
     # recon_particle2_correlation: pair counting on BAO-reconstructed positions
-    #stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'covariance_recon_particle2_correlation']
+    stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'covariance_recon_particle2_correlation']
     #stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation']
-    stats = ['covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
+    #stats = ['covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
     # combine_regions: merge NGC and SGC measurements into GCcomb estimates
-    postprocess = ['combine_regions']
+    postprocess = ['combine_regions'][:0]
 
     # Output directory for measurement results (SCRATCH filesystem for performance)
     #stats_dir = Path(os.environ['SCRATCH']) / 'validation_dr3'
