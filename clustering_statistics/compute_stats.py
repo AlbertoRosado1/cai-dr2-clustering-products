@@ -1143,7 +1143,9 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                         if key == 'auw' and kw_window.get('cut', None):
                             effects = [effect for effect in effects if effect != 'auw']
                             continue
-                        if isinstance(fns, dict):
+                        if callable(fns):
+                            fns = fns(**kw_window['catalog'], kind=stat, key=key)
+                        elif isinstance(fns, dict):
                             imocks = fns.get('imock', imocks)
                             fns = [get_stats_fn(kind=stat, **{**kw_window, 'imock': imock, 'auw': None, 'cut': None, **fns}) for imock in imocks]
                         if not isinstance(fns, (tuple, list)):

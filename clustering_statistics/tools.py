@@ -543,7 +543,12 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
 
     propose_fiducial['window_mesh3_spectrum']['buffer_size'] = {'BGS': 3, 'LRG': 3, 'LGE': 3, 'ELG': 0, 'LRG+ELG': 3, 'QSO': 0}[simple_tracers[0]]
     propose_fiducial['rotation_mesh2_spectrum'] = {'select': {'k': slice(0, None, 5)}}
-    propose_fiducial['systematic_templates'] = {}
+    from .systematic_templates import get_template_mock_fns
+    propose_fiducial['systematic_templates'] = {'templates': {'auw': {'extra': 'auw'}, 'raw': {},
+                                                              'mock_amr': get_template_mock_fns,
+                                                              'mock_noamr': get_template_mock_fns,
+                                                              'mock_ric': get_template_mock_fns,
+                                                              'mock_noric': get_template_mock_fns}}
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
