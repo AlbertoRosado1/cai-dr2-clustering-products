@@ -2538,8 +2538,9 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
             tmp_z = data['Z'][mask_data]
             tmp_nz = data['NX'][mask_data] / (data_ftile_ntile[region][data_ntile] / data_wcomp_ntile[region][data_ntile])
         elif 'NZ' in merged_data:
-            tmp_z = merged_data['Z'][mask_data]
-            tmp_nz = merged_data['NZ'][mask_data]
+            mask_merged_data = select_region(merged_data['RA'], merged_data['DEC'], region=region)
+            tmp_z = merged_data['Z'][mask_merged_data]
+            tmp_nz = merged_data['NZ'][mask_merged_data]
         else:
             mask_merged_data = select_region(merged_data['RA'], merged_data['DEC'], region=region)
             merged_data_ntile = merged_data['NTILE'][mask_merged_data]
