@@ -56,7 +56,7 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
     options = fill_fiducial_options(options)
 
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler='emcee')
-    sampler_kw = {'nparallel': mpicomm.size, 'gelman_rubin': 1.05, 'ess': 500}
+    sampler_kw = {'nparallel': mpicomm.size, 'gelman_rubin': 1.01, 'ess': 1000}
     # Distribute arguments
     for section in ['init', 'run']:
         for name, value in options['sampler'][section].items():

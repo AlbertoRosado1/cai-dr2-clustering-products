@@ -2,7 +2,7 @@
 import numpy as np
 
 import lsstypes as types
-from .tools import get_stats_fn, base_stats_dir
+from .tools import get_stats_fn, base_stats_dir, get_full_tracer, _decode_catalog_options, _zip_catalog_options
 
 
 def include_systematic_templates(window: types.WindowMatrix, templates: dict, effects: tuple | list=('auw',)):
@@ -15,26 +15,22 @@ def include_systematic_templates(window: types.WindowMatrix, templates: dict, ef
             # - sign, as applied on the theory side
             windows.append(- diff[:, None])
             theories.append(types.ObservableLeaf(value=np.array([1.]), scale=np.array([0.3])))
-            _types.append(effect)
-        elif effect == 'photo':
+        elif effect == 'imsys':
+            diff_wsys = templates['imsys'].match(observable).value()
+            windows.append(diff_wsys[:, None])
+            theories.append(types.ObservableLeaf(value=np.array([0.]), scale=np.array([0.3])))
+        elif effect == 'amr':
             diff_amr = templates['mock_amr'].clone(value=templates['mock_amr'].value() - templates['mock_noamr'].value())
-            diff_amr = smooth_template(diff_amr, effect='amr')
+            diff_amr = smooth_template(diff_amr, effect='amr').value()
             windows.append(diff_amr[:, None])
             theories.append(types.ObservableLeaf(value=np.array([1.]), scale=np.array([0.1])))
-            _types.append('amr')
-            if 'sys' in templates:
-                diff_wsys = templates['sys'].match(observable).value()
-                windows.append(diff_wsys[:, None])
-            theories.append(types.ObservableLeaf(value=np.array([0.]), scale=np.array([0.3])))
-            _types.append('sys')
         elif effect == 'ric':
             diff_ric = templates['mock_ric'].clone(value=templates['mock_ric'].value() - templates['mock_noric'].value())
-            diff_ric = smooth_template(diff_ric, effect='ric')
+            diff_ric = smooth_template(diff_ric, effect='ric').value()
             windows.append(diff_ric[:, None])
             theories.append(types.ObservableLeaf(value=np.array([1.]), scale=np.array([0.1])))
-            _types.append('ric')
     theory = window.theory
-    theory = types.ObservableTree([theory] + theories, types=['theory'] + _types)
+    theory = types.ObservableTree([theory] + theories, types=['theory'] + list(effects))
     window = window.clone(value=np.concatenate([window.value()] + windows, axis=1), theory=theory)
     return window
 
@@ -96,37 +92,53 @@ def smooth_template(stat, effect='amr', order=None, klim=None, wkp=None):
     return stat.clone(value=np.hstack(values))
 
 
-def get_template_mock_fns(tracer=None, zrange=None, region=None, kind='mesh2_spectrum', key='mock_amr', **kwargs):
+def get_template_mock_fns(kind='mesh2_spectrum', key='mock_amr', **kwargs):
+    catalog_options = _decode_catalog_options(**kwargs)
+    catalog_options = _zip_catalog_options(catalog_options, squeeze=True, unique=True, ignore=['expand', 'binned_weight'])
+    tracer, region, version, zrange = [catalog_options[key] for key in ['tracer', 'region', 'version', 'zrange']]
     mock_stats_dir = base_stats_dir
     if kind not in ['mesh2_spectrum', 'mesh3_spectrum']:
         raise ValueError(kind)
     weight, extra = 'default-FKP', None
     if key in ['mock_amr', 'mock_noamr']:
-        if kind == 'mesh2_spectrum':  # GLAM mocks
+        if 'ELG' not in tracer: #kind == 'mesh2_spectrum':  # GLAM mocks
             version = 'glam-uchuu-bgs-altmtl' if 'BGS' in tracer else 'glam-uchuu-v2-altmtl'
             project = 'full_shape/imaging_systematics' if 'BGS' in tracer else 'full_shape/base'
             imocks = [imock for imock in range(150, 250) if imock not in [210, 243]]
+            weight = {'mock_amr': 'default-FKP', 'mock_noamr': 'default-noimsys-FKP'}[key]
         else:  # Abacus mocks
             version = 'abacus-hf-dr2-v2-altmtl'
             project = 'full_shape/imaging_systematics'
             imocks = list(range(25))
-        weight = {'mock_amr': 'default-FKP', 'mock_noamr': 'default-FKP-noimsys'}[key]
+            weight = {'mock_amr': 'default-FKP', 'mock_noamr': 'default-FKP-noimsys'}[key]
     elif key in ['mock_ric', 'mock_noric']:  # Abacus mocks
-        version = 'holi-v3-altmtl'
+        #version = 'holi-v3-altmtl'
+        #if 'BGS' in tracer:
+        #    version = 'holi-bgs-altmtl'
+        version = 'abacus-hf-dr2-v2-altmtl'
         if 'BGS' in tracer:
-            version = 'holi-bgs-altmtl'
+            version = 'abacus-2ndgen-dr2-altmtl'
         project = 'full_shape/base'
         imocks = list(range(25))
         extra = {'mock_ric': None, 'mock_noric': 'reshuffle'}[key]
     else:
         raise ValueError(key)
+    try:
+        tracer = get_full_tracer(tracer, version=version)
+    except NotImplementedError:
+        pass
     options = dict(project=project, version=version, tracer=tracer, zrange=zrange, region=region, weight=weight, auw=False,
                    kind=kind, basis='sugiyama-diagonal', extra=extra)
     return [get_stats_fn(mock_stats_dir, imock=imock, **options) for imock in imocks]
 
 
-def get_smooth_template(tracer, zrange, region, effect='amr', kind='mesh2_spectrum'):
-    weight = types.mean([types.read(fn) for fn in get_template_mock_fns(tracer, zrange, region, kind=kind, key=f'mock_{effect}')])
-    noweight = types.mean([types.read(fn) for fn in get_template_mock_fns(tracer, zrange, region, kind=kind, key=f'mock_no{effect}')])
-    diff = weight.clone(value=weight.value() - noweight.value())
-    return smooth_template(diff, effect=effect)
+def get_smooth_template(effect='amr', kind='mesh2_spectrum', return_stats=False, **kwargs):
+    effects = [types.read(fn) for fn in get_template_mock_fns(kind=kind, key=f'mock_{effect}', **kwargs)]
+    noeffects = [types.read(fn) for fn in get_template_mock_fns(kind=kind, key=f'mock_no{effect}', **kwargs)]
+    mean_effect = types.mean(effects)
+    mean_noeffect = types.mean(noeffects)
+    diff = mean_effect.clone(value=mean_effect.value() - mean_noeffect.value())
+    smooth = smooth_template(diff, effect=effect)
+    if return_stats:
+        return smooth, effects, noeffects
+    return smooth

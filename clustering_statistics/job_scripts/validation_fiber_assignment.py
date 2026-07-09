@@ -23,8 +23,8 @@ from clustering_statistics import tools
 setup_logging()
 
 # to run job
-#mode = 'interactive'
-mode = 'slurm'
+mode = 'interactive'
+#mode = 'slurm'
 
 if mode == 'slurm':
     queue = Queue('abacus_mocks2')
@@ -134,8 +134,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
                    combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'particle2_correlation', 'particle3_correlation'][:4]},
                    mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True},
                    mesh3_spectrum={'auw': True}, window_mesh3_spectrum={},
-                   systematic_templates={'stats': ['mesh2_spectrum', 'mesh3_spectrum'], 'effects': ['auw'],
-                                        'templates': {'auw': {'extra': 'auw'}, 'raw': {}}})
+                   systematic_templates={'stats': ['mesh2_spectrum', 'mesh3_spectrum'], 'effects': ['auw', 'amr']})
     _get_stats_fn = functools.partial(get_stats_fn, stats_dir=stats_dir, project=project, onthefly=onthefly)
     postprocess_stats_from_options(postprocess, analysis=analysis, get_stats_fn=_get_stats_fn, **options)
 
@@ -145,13 +144,13 @@ if __name__ == '__main__':
 
     check_for_existing_measurements = False
     stats, postprocess = [], []
-    version = 'abacus-hf-dr2-v2-altmtl'
+    #version = 'abacus-hf-dr2-v2-altmtl'
     #version = 'glam-uchuu-v2-altmtl'
     #version = 'glam-uchuu-v2-altmtl-maskedfraczpNN'
     #version = ('glam-uchuu-v2-altmtl', 'glam-uchuu-v2-altmtl-maskedfraczpNN')
     #version = 'abacus-2ndgen-dr2-complete'
     #version = 'abacus-2ndgen-dr2-altmtl'
-    #version = 'data-dr2-v2'
+    version = 'data-dr2-v2'
     #version = 'data-dr2-test-maskedfracz'
     #version = 'data-dr2-test-maskedfraczpNN'
     analysis = 'full_shape'
@@ -182,7 +181,7 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:] #[1:2]
+    tracers = ['BGS', 'LRG', 'ELG', 'QSO'][2:3] #[1:2]
     #tracers = [('LRG', 'ELG')]
     #tracers = ['ELG', 'LRG'][:1]
     #tracers = ['LRG']
@@ -203,10 +202,10 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
     #stats = ['mesh3_spectrum', 'close_pair_correction']
     #postprocess = ['combine_regions']
-    #postprocess = ['systematic_templates']
+    postprocess = ['systematic_templates']
     weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'

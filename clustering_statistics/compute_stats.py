@@ -1144,7 +1144,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                             effects = [effect for effect in effects if effect != 'auw']
                             continue
                         if callable(fns):
-                            fns = fns(**kw_window['catalog'], kind=stat, key=key)
+                            fns = fns(catalog=kw_window['catalog'], kind=stat, key=key)
                         elif isinstance(fns, dict):
                             imocks = fns.get('imock', imocks)
                             fns = [get_stats_fn(kind=stat, **{**kw_window, 'imock': imock, 'auw': None, 'cut': None, **fns}) for imock in imocks]
@@ -1203,54 +1203,6 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                 kw = options.get(kind_stat, {}) | dict(auw=False, cut=True)
                 fn = get_stats_fn(kind=stat, catalog=fn_catalog_options, **kw)
                 tools.write_stats(fn, rotation)
-
-
-def combine_stats_from_options(stats, region_comb, regions, get_stats_fn=tools.get_stats_fn, **kwargs):
-    """
-    Combine summary statistics from multiple regions based on the provided options.
-
-    Warning
-    --------
-    Use postprocess_from_options(['combine_regions']) instead.
-
-    Parameters
-    ----------
-    stats : str or list of str
-        Summary statistics to combine.
-    region_comb : str
-        Combined region name, e.g. 'GCcomb'.
-    regions : list of str
-        Regions to combine, e.g. ['NGC', 'SGC'].
-    get_stats_fn : callable, optional
-        Function to get the filename for storing the measurement.
-    **kwargs : dict
-        Options for catalog and summary statistics. For example:
-            catalog = dict(version='holi-v1-altmtl', tracer='LRG', zrange=[(0.4, 0.6), (0.8, 1.1)], imock=451)
-            mesh2_spectrum = dict(cut=True, auw=True, ells=(0, 2, 4), mattrs=dict(boxsize=7000., cellsize=8.))  # all arguments for compute_mesh2_spectrum
-            mesh3_spectrum = dict(basis='sugiyama-diagonal', ells=[(0, 0, 0)], mattrs=dict(boxsize=7000., cellsize=10.))  # all arguments for compute_mesh3_spectrum
-    """
-    warnings.warn("deprecated; use postprocess_from_options(['combine_regions']) instead")
-    options = fill_fiducial_options(kwargs)
-    regions = list(regions)
-    all_fns = {}
-    # List all measurement files for each region
-    for region in regions + [region_comb]:
-        kwargs = dict(options)
-        kwargs['catalog'] = {tracer: options['catalog'][tracer] | dict(region=region) for tracer in options['catalog']}
-        all_fns[region] = list_stats(stats, get_stats_fn=get_stats_fn, **kwargs)
-
-    stats = next(iter(all_fns.values())).keys()
-    # Combine each statistic
-    for stat in stats:
-        for ifn, (fn_comb, _) in enumerate(all_fns[region_comb][stat]):
-            fns = [all_fns[region][stat][ifn][0] for region in regions]  # [1] is kwargs
-            exists = {os.path.exists(fn): fn for fn in fns}
-            if all(exists):
-                # Read and combine measurements from different regions
-                combined = tools.combine_stats([types.read(fn) for fn in fns])
-                tools.write_stats(fn_comb, combined)
-            else:
-                logger.debug(f'Skipping {fn_comb} as {[fn for ex, fn in exists.items() if not ex]} do not exist')
 
 
 def main(**kwargs):

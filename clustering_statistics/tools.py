@@ -121,6 +121,8 @@ def get_full_tracer(tracer, version=None):
                 return 'ELG_LOP'
             else:
                 return 'ELG'
+        if tracer in ['ELG_LOPnotqso']:
+            return tracer
         raise NotImplementedError(f'tracer {tracer} is unknown')
 
     if isinstance(tracer, str):
@@ -546,9 +548,7 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     from .systematic_templates import get_template_mock_fns
     propose_fiducial['systematic_templates'] = {'templates': {'auw': {'extra': 'auw'}, 'raw': {},
                                                               'mock_amr': get_template_mock_fns,
-                                                              'mock_noamr': get_template_mock_fns,
-                                                              'mock_ric': get_template_mock_fns,
-                                                              'mock_noric': get_template_mock_fns}}
+                                                              'mock_noamr': get_template_mock_fns}}
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
@@ -778,33 +778,33 @@ def fill_fiducial_options(kwargs, analysis='full_shape'):
                             if options[stat].get('optimal_weights', None) is not None:
                                 warnings.warn('Removing optimal_weights from mesh2_spectrum as OQE not in weights')
                             options[stat]['optimal_weights'] = None
-        for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'window_mesh2_spectrum_fm']:
-            spectrum_options = options[stat.replace('window_', '').replace('_fm', '')]
-            spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['selection_weights', 'optimal_weights', 'basis']}
-            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            options[stat] = fiducial_options | spectrum_options | options.get(stat, {})
-        options['window_mesh2_spectrum'].setdefault('zeff', options['mesh2_spectrum'].get('norm', {}))
-        options['window_mesh3_spectrum'].setdefault('zeff', options['mesh3_spectrum'].get('norm', {}))
-        for stat in ['covariance_mesh2_spectrum']:
-            spectrum_options = options[stat.replace('covariance_', '')]
-            spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
-            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            # spectrum_options | fiducial_options because we override mattrs if given
-            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
-        for stat in ['covariance_mesh3_spectrum']:
-            spectrum_options = options['mesh3_spectrum']
-            spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
-            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
-        for stat in ['covariance_particle2_correlation']:
-            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
-        for stat in ['covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']:
-            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            options[stat] = fiducial_options | options[stat.replace('recon_', '')] | options.get(stat, {})
-        for stat in ['combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum']:
-            fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
-            options[stat] = fiducial_options | options.get(stat, {})
+    for stat in ['window_mesh2_spectrum', 'window_mesh3_spectrum', 'window_mesh2_spectrum_fm']:
+        spectrum_options = options[stat.replace('window_', '').replace('_fm', '')]
+        spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['selection_weights', 'optimal_weights', 'basis']}
+        fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+        options[stat] = fiducial_options | spectrum_options | options.get(stat, {})
+    options['window_mesh2_spectrum'].setdefault('zeff', options['mesh2_spectrum'].get('norm', {}))
+    options['window_mesh3_spectrum'].setdefault('zeff', options['mesh3_spectrum'].get('norm', {}))
+    for stat in ['covariance_mesh2_spectrum']:
+        spectrum_options = options[stat.replace('covariance_', '')]
+        spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
+        fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+        # spectrum_options | fiducial_options because we override mattrs if given
+        options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+    for stat in ['covariance_mesh3_spectrum']:
+        spectrum_options = options['mesh3_spectrum']
+        spectrum_options = {key: value for key, value in spectrum_options.items() if key in ['mattrs']}
+        fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+        options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+    for stat in ['covariance_particle2_correlation']:
+        fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+        options[stat] = spectrum_options | fiducial_options | options.get(stat, {})
+    for stat in ['covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']:
+        fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+        options[stat] = fiducial_options | options[stat.replace('recon_', '')] | options.get(stat, {})
+    for stat in ['combine_window_mesh2_spectrum', 'rotation_mesh2_spectrum', 'systematic_templates']:
+        fiducial_options = propose_fiducial(stat, tracer=tracers, analysis=analysis)
+        options[stat] = fiducial_options | options.get(stat, {})
     return options
 
 
@@ -1138,6 +1138,19 @@ def float2str(value, prec_min=1, prec_max=10):
     return s
 
 
+def _decode_catalog_options(**kwargs):
+    _default_options = dict(version=None, tracer=None, region=None, zrange=None, weight=None, imock=None)
+    catalog_options = kwargs.pop('catalog', {})
+    if not catalog_options:
+        kwargs_options = {key: kwargs.pop(key, _default_options[key]) for key, value in _default_options.items()}
+        catalog_options = _unzip_catalog_options(kwargs_options)
+    else:
+        catalog_options = _merge_catalog_options(catalog_options, {key: kwargs.pop(key) for key in list(kwargs) if key in _default_options}, zipped=[None, True])
+        for tracer in catalog_options:
+            catalog_options[tracer].setdefault('imock', None)
+    return catalog_options
+
+
 def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', project='', kind='mesh2_spectrum',
                  auw=None, cut=None, extra='', ext='h5', **kwargs):
     """
@@ -1179,15 +1192,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         Measurement filename(s).
         Multiple filenames are returned as a list when imock is '*'.
     """
-    _default_options = dict(version=None, tracer=None, region=None, zrange=None, weight=None, imock=None)
-    catalog_options = kwargs.pop('catalog', {})
-    if not catalog_options:
-        kwargs_options = {key: kwargs.pop(key, _default_options[key]) for key, value in _default_options.items()}
-        catalog_options = _unzip_catalog_options(kwargs_options)
-    else:
-        catalog_options = _merge_catalog_options(catalog_options, {key: kwargs.pop(key) for key in list(kwargs) if key in _default_options}, zipped=[None, True])
-        for tracer in catalog_options:
-            catalog_options[tracer].setdefault('imock', None)
+    catalog_options = _decode_catalog_options(**kwargs)
     imock = next(iter(catalog_options.values()))['imock']
     if imock == '*': imock = np.arange(2001) # broad range that should cover all existing mocks; existence is checked later
     if np.iterable(imock) and not isinstance(imock, str): # string is iterable but we don't want to iterate over characters. not sure if we should expect strings other than '*', but better be safe than sorry
