@@ -44,15 +44,30 @@ def get_catalog_fn(kind='data', tracer='ELG_LOPnotqso', region='NGC', iran=0):
 
 @default_mpicomm
 def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', region=None,
-                           imweights=['WEIGHT_IMLIN'],
+                           imweights=['WEIGHT_IMLIN'], norm_regions=('N', 'S'),
                            ells=(0, 2, 4), edges=None,
-                           mattrs=None, mpicomm=None):
+                           randomize=None, mattrs=None, mpicomm=None):
     r"""
     Compute the power spectrum of the fNL ELG catalogs with imaging systematic weights.
 
     Data individual weight is WEIGHT times the ``data_weights`` columns.
     The ``randoms_weights`` columns are reassigned from the data to the randoms via
     TARGETID_DATA match, and folded into the randoms WEIGHT.
+
+    If ``randomize``, the ratio data[imweight] / data['WEIGHT_SYS'] is randomized
+    (breaking its correlation with the imaging systematics) before entering data
+    INDWEIGHT, and propagated to the randoms INDWEIGHT through the TARGETID_DATA match.
+    Randomization is performed in each region (NGC / SGC) separately; the same random
+    draws (seed 42) are used for all ``imweights``. Options are:
+
+    - 'isotropic': reshuffle the ratio among the data
+    - 'angular': bin the ratio in healpix pixels (nside=256, nest=True, mean per pixel),
+      reshuffle the values of the non-empty pixels, and use the (reshuffled) pixel value
+      instead of the per-object ratio
+    - 'isotropic_norm': same as 'isotropic', but draw per-object values from a Gaussian
+      with the mean and std of the ratio
+    - 'angular_norm': same as 'angular', but draw pixel values from a Gaussian with the
+      mean and std of the non-empty pixel values
 
     Returns
     -------
@@ -80,18 +95,57 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
 
         randoms['INDEX'] = match_data_column(randoms, data)
 
+        if randomize:
+            if randomize not in ['isotropic', 'angular', 'isotropic_norm', 'angular_norm']:
+                raise ValueError(f"randomize must be one of 'isotropic', 'angular', 'isotropic_norm', 'angular_norm', got {randomize!r}")
+            region_masks = [tools.select_region(data['RA'], data['DEC'], region=_region) for _region in regions]
+            if 'angular' in randomize:
+                import healpy as hp
+                data_pix = hp.ang2pix(256, data['RA'], data['DEC'], nest=True, lonlat=True)
+            # Per-region draws, generated once so all imweights share the same randomization
+            rng = np.random.default_rng(seed=42)
+            draws = []
+            for mask in region_masks:
+                size = np.unique(data_pix[mask]).size if 'angular' in randomize else int(mask.sum())
+                draws.append(rng.standard_normal(size) if 'norm' in randomize else rng.permutation(size))
+
+            def randomize_ratio(ratio):
+                randomized = np.empty_like(ratio)
+                for mask, draw in zip(region_masks, draws):
+                    values = ratio[mask]
+                    if 'angular' in randomize:
+                        # mean ratio in each non-empty healpix pixel
+                        _, inverse = np.unique(data_pix[mask], return_inverse=True)
+                        values = np.bincount(inverse, weights=values) / np.bincount(inverse)
+                    if 'norm' in randomize:
+                        values = values.mean() + values.std() * draw
+                    else:
+                        values = values[draw]
+                    if 'angular' in randomize:
+                        values = values[inverse]
+                    randomized[mask] = values
+                return randomized
+
     spectra = []
     for imweight in imweights:
         if mpicomm.rank == 0:
-            data['INDWEIGHT'] = data['WEIGHT'] * data[imweight] / data['WEIGHT_SYS'] * data['WEIGHT_FKP']
-            randoms['INDWEIGHT'] = randoms['WEIGHT'] * data[imweight][randoms['INDEX']] / randoms['WEIGHT_SYS'] * randoms['WEIGHT_FKP']
+            ratio = data[imweight] / data['WEIGHT_SYS']
+            if randomize:
+                ratio = randomize_ratio(ratio)
+                randoms_ratio = ratio[randoms['INDEX']]
+            else:
+                randoms_ratio = ratio[randoms['INDEX']]
+            data['INDWEIGHT'] = data['WEIGHT'] * ratio * data['WEIGHT_FKP']
+            randoms['INDWEIGHT'] = randoms['WEIGHT'] * randoms_ratio * randoms['WEIGHT_FKP']
 
         catalogs = {'data': data.deepcopy() if data is not None else None,
                     'randoms': randoms.deepcopy() if randoms is not None else None}
         if mpicomm.size > 1:
             catalogs['data'] = Catalog.scatter(data, mpicomm=mpicomm, mpiroot=0)
             catalogs['randoms'] = Catalog.scatter(randoms, mpicomm=mpicomm, mpiroot=0)
-        renormalize_randoms_over_data(catalogs['randoms'], catalogs['data'], tracer=tracer)
+        for kind, catalog in catalogs.items():
+            catalogs[kind] = tools.mask_catalog(catalog, kind, zrange=zrange)
+        renormalize_randoms_over_data(catalogs['randoms'], catalogs['data'], regions=norm_regions)
         for kind, catalog in catalogs.items():
             catalog = tools.mask_catalog(catalog, kind, zrange=zrange, region=region)
             catalog = tools.set_positions_from_rdz(catalog)
@@ -112,8 +166,12 @@ if __name__ == '__main__':
     mpicomm = MPI.COMM_WORLD
     tracer = 'ELG_LOPnotqso'
     imweights = ['WEIGHT_SYS', 'WEIGHT_IMLIN', 'WEIGHT_IMLIN_DES']
-    for region in ['NGC', 'SGC'][1:]:
-        spectra = compute_spectrum_imlin(imweights=imweights, region=region, tracer=tracer, mpicomm=mpicomm)
-        for spectrum, imweight in zip(spectra, imweights):
-            tools.write_stats(stats_dir / f'mesh2_spectrum_ELG_LOPnotqso_{region}_{imweight}.h5',
-                              spectrum, mpicomm=mpicomm)
+    for randomize in [None, 'isotropic', 'angular', 'isotropic_norm', 'angular_norm']:
+        for region in ['NGC', 'SGC'][1:]:
+            for norm_regions in [['N', 'S'], ['N', 'SnoDES', 'DES']]:
+                spectra = compute_spectrum_imlin(imweights=imweights, region=region, tracer=tracer, norm_regions=norm_regions, randomize=randomize, mpicomm=mpicomm)
+                norm_regions = ''.join(norm_regions)
+                randomize_label = f'_randomize-{randomize}' if randomize else ''
+                for spectrum, imweight in zip(spectra, imweights):
+                    tools.write_stats(stats_dir / f'mesh2_spectrum_ELG_LOPnotqso_{region}_{imweight}_norm{norm_regions}{randomize_label}.h5',
+                                    spectrum, mpicomm=mpicomm)
