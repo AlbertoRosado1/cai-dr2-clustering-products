@@ -47,6 +47,21 @@ def _json_attr(value):
     return json.dumps(value, sort_keys=True)
 
 
+def _get_covariance_display_version(covariance: dict):
+    """Return a readable covariance version label for cache filenames."""
+    version = covariance.get('version', 'none')
+    if (covariance.get('source') == 'mock') and version is None:
+        stats_dir = covariance.get('stats_dir', None)
+        if stats_dir is not None:
+            try:
+                parts = Path(stats_dir).parts
+                if len(parts) >= 2 and parts[-2:] == ('mock_challenge', 'ezmock'):
+                    return 'ezmock-mc'
+            except TypeError:
+                pass
+    return 'none' if version is None else str(version)
+
+
 _fiducial = None
 
 def get_fiducial():
@@ -74,7 +89,7 @@ def get_cosmology(cosmology_options: dict=None):
     model = cosmology_options.get('model', 'base_ns-fixed')
     is_fixed_model = model == 'fixed'
     is_ns_fixed = is_fixed_model or 'ns-fixed' in model
-    has_w0wa = 'w0wa' in model
+    has_w0wa = any(w in model for w in ['w_wa', 'w0wa'])
     fiducial = get_fiducial()
 
     params = VariableCollection()
@@ -116,8 +131,8 @@ def get_cosmology(cosmology_options: dict=None):
                             ref=dict(dist='norm', loc=0., scale=0.3),
                             fd_eps=0.3, latex=r'w_a'))
     if is_fixed_model:
-        for name in params:
-            params[name].update(fixed=True)
+        for param in params:
+            param.update(fixed=True)
     params['n_s'].update(fixed=is_ns_fixed)
     if has_w0wa:
         params['w0_fld'].update(fixed=is_fixed_model)
@@ -673,17 +688,19 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         return mpicomm.bcast(stats, root=0)
 
     # Helper: iterate over (stat, tracer) combinations
-    def iter_stat_tracer_combinations(observables_options, with_stat_kw=False):
+    def iter_stat_tracer_combinations(observables_options, with_stat_kw=False, catalog_options=None):
         """
         Yield (stat, labels, file_kwargs, observable_options) for each requested observable.
 
         Compact helper for iterating the user-provided observables and producing file kwargs
         and labeling information used when reading files.
         """
+        _catalog_options = dict(catalog_options or {})
         for observable_options in observables_options:
             stat = observable_options['stat']['kind']
-            tracers = _make_tuple(observable_options['catalog']['tracer'])
-            version = observable_options['catalog'].get('version', None)
+            catalog_options = observable_options['catalog'] | _catalog_options
+            tracers = _make_tuple(catalog_options['tracer'])
+            version = catalog_options.get('version', None)
             full_tracer = get_full_tracer(tracers, version=version)
             nfields = 3 if 'mesh3' in stat else 2
             simple_tracers = get_simple_tracer(tracers)
@@ -698,7 +715,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     kw[name] = observable_options['stat'][name]
                 elif with_stat_kw and name not in ['kind', 'select']:
                     kw[name] = observable_options['stat'][name]
-            file_kw = kw | observable_options['catalog'] | {'tracer': full_tracer}
+            file_kw = kw | catalog_options | {'tracer': full_tracer}
             yield stat, labels, file_kw, dict(observable_options)
 
     def _with_project(observable: types.ObservableTree):
@@ -797,13 +814,6 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
     def _window_mode(observable_options):
         return str(observable_options.get('window', {}).get('mode', 'file')).lower()
 
-    interpolation_options = covariance_options.get('interpolation', {})
-    if isinstance(interpolation_options, bool):
-        interpolation_options = {'enabled': interpolation_options}
-    interpolate_covariance = bool(
-        interpolation_options.get('enabled', False)
-        or covariance_options.get('interpolate_to_data', False)
-    )
     covariance_stat_options = covariance_options.get('stat_options', {})
     covariance_file_options = {key: value for key, value in covariance_options.items() if key != 'stat_options'}
 
@@ -902,7 +912,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                         if key != 'mode'
                     }
                     file_kw = file_kw | window_options
-                    fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
+                    #fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
+                    fn = get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
             # Join mesh2_spectrum, mesh3_spectrum, etc.
@@ -961,12 +972,17 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         covariance_cache_hit = covariance is not None
         if covariance is not None and mpicomm.rank == 0:
             logger.info(f"Reading covariance cache {cache_fn} from manifest {get_covariance_manifest_fn()}.")
+        if covariance is not None and imocks_exists is not None:
+            canonical_cache_fn = get_cache_fn('covariance', dict(imocks=imocks_exists))
+            if canonical_cache_fn != cache_fn:
+                cache_fn = canonical_cache_fn
+                covariance_cache_hit = all(mpicomm.allgather(cache_fn.exists()))
         if covariance is None:
             all_fns = []
             covariance_log_patterns = []
             all_imocks = None
             covariance_labels = []
-            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
+            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options, catalog_options=covariance_file_options):
                 file_kw = file_kw | {'imock': '*'} | covariance_file_options | covariance_stat_options.get(stat, {})
                 imocks = file_kw.pop('imock')
                 if imocks == '*':
@@ -977,7 +993,6 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     all_imocks = [imock for imock in all_imocks if imock in imocks]
                 stat_fns = [get_stats_fn(kind=stat, **(file_kw | {'imock': imock})) for imock in imocks]
                 all_fns.append(stat_fns)
-                covariance_labels.append(labels)
                 covariance_log_patterns.append((stat, _format_log_fns(stat_fns)))
             all_fns = list(zip(*all_fns, strict=True))  # get a list of list of file names
             ifns_exists = []
@@ -997,7 +1012,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             covariance = get_from_cache(cache_fn)
             covariance_cache_hit = covariance is not None
         if covariance is None:
-            mocks, mock_vectors = [], []
+            mocks = []
             if mpicomm.rank == 0:
                 covariance_read_fns = [all_fns[ifn] for ifn in ifns_exists]
                 logger.info(f"Reading covariance for {len(covariance_read_fns)} mock realizations from "
@@ -1007,26 +1022,10 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     observables = [types.read(fn) for fn in all_fns[ifn]]
                     observables = [_apply_project(observable, select)[0] if _with_project(observable) else _apply_select(observable, select)
                                    for observable, select in zip(observables, selects)]
-                    if interpolate_covariance:
-                        mock_vectors.append(np.concatenate([
-                            box_tools.interpolate_observable_to_template(observable, data.get(**labels))
-                            for observable, labels in zip(observables, covariance_labels, strict=True)
-                        ]))
-                    else:
-                        mock = types.ObservableTree(observables, **joint_labels)
-                        mocks.append(mock)
-                if interpolate_covariance:
-                    if len(mock_vectors) < 2:
-                        raise ValueError('at least two covariance mock realizations are required')
-                    covariance = types.CovarianceMatrix(
-                        value=np.cov(np.asarray(mock_vectors), rowvar=False, ddof=1),
-                        observable=data,
-                        attrs={'nobs': len(mock_vectors),
-                               'covariance_interpolation': _json_attr(dict(interpolation_options))},
-                    )
-                else:
-                    covariance = types.cov(mocks)
-                    covariance.attrs['nobs'] = len(mocks)
+                    mock = types.ObservableTree(observables, **joint_labels)
+                    mocks.append(mock)
+                covariance = types.cov(mocks)
+                covariance.attrs['nobs'] = len(mocks)
             covariance = mpicomm.bcast(covariance, root=0)
             covariance_cache_hit = False
         if write_cache and cache_fn is not None and not covariance_cache_hit:
@@ -1203,7 +1202,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
                         assert mean.size == 1
                         prior = dict(dist='norm', loc=mean.flat[0], scale=sigma.flat[0])
                         param = Parameter(label['types'], namespace=namespace, value=mean.flat[0],
-                                        ref=prior, prior=prior, derived='best')
+                                        ref=prior, prior=prior) #, derived='best')
                         template = window.at.theory.get(**label).value()
                         templates.append((param, template[..., 0]))
                 window = window.at.theory.get('theory')  # window becomes the "standard window"
@@ -1213,7 +1212,8 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             read_cache = cache_dir is not None and 'r' in cache_mode
             write_cache = cache_dir is not None and 'w' in cache_mode
             cache_dir = Path(cache_dir)
-            _hash = _hash_options({name: observable_options[name] for name in ['theory', 'catalog']})
+            _hoptions = {name: observable_options[name] for name in ['theory', 'catalog']}
+            _hash = _hash_options(_hoptions)
             _str_cosmology = str_from_cosmology_options(observable_options['theory']['cosmology'], level=100)
             _str_cosmology += '_' + observable_options['emulator']['name']
             _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'window': 0, 'catalog': 2})
@@ -1319,7 +1319,8 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
                                         'basis': 'sugiyama-diagonal'},
                    'recon_particle2_correlation': {'select': [{'ells': ell, 's': [60., 150., 4.]} for ell in [0, 2]]},
                    'recon_bao': {}}
-    base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'damping': 'lor', 'marg': True}
+    base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'marg': True,
+                              'damping': 'vdg'}
     base_bao_theory = {'model': 'bao', 'broadband': 'pcs2', 'marg': True}
     propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'coevolution': '', 'A_full': False},
                       'mesh3_spectrum': base_full_shape_theory | {'A_full': False},
@@ -1671,7 +1672,7 @@ def _str_from_observable_options(options: dict, level: int=None) -> str:
         select_str = '-'.join(select_str)
         out_str.append(select_str)
     if level['window'] > 0:
-        templates = list(options['window']['templates'])
+        templates = list(options.get('window', {}).get('templates', []))
         if templates:
             out_str.append('w')
             out_str.extend(templates)
@@ -1706,8 +1707,11 @@ def str_from_likelihood_options(likelihood_options, level: int | dict=None):
         covariance = likelihood_options.get('covariance', {}) or {}
         covariance_str = []
         for name in ['source', 'version']:
-            value = covariance.get(name, 'none')
-            covariance_str.append('none' if value is None else str(value))
+            if name == 'version':
+                covariance_str.append(_get_covariance_display_version(covariance))
+            else:
+                value = covariance.get(name, 'none')
+                covariance_str.append('none' if value is None else str(value))
         covariance_str = ['cov-' + '-'.join(covariance_str)]
         if level['covariance'] >= 3:
             corrections = covariance.get('corrections', None)

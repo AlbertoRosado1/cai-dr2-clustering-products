@@ -16,50 +16,41 @@ from pathlib import Path
 # -----------------------------------------------------------------------------
 
 DEFAULT_BAO_DATA_PATH = Path('/global/cfs/cdirs/desicollab/science/cpe/y3_bao_cosmo/bao_v1p2/bao/cobaya_data')
+DEFAULT_BAO_LYA_FS_DATA_PATH = Path('/global/cfs/cdirs/desicollab/science/cpe/dr2_fs/lya_fs/likelihood/cobaya/measurements')
 
-BAO_DR2_DATASETS = {
-    'desi-dr2-bao-all': {
-        'likelihood': 'desi_dr2_bao_all',
-        'measurements_file': 'desi_gaussian_bao_ALL_GCcomb_mean.txt',
-        'cov_file': 'desi_gaussian_bao_ALL_GCcomb_cov.txt',
-    },
-    'desi-dr2-bao-bgs': {
-        'likelihood': 'desi_dr2_bao_bgs_z1',
-        'measurements_file': 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4_mean.txt',
-        'cov_file': 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4_cov.txt',
-    },
-    'desi-dr2-bao-lrg-z1': {
-        'likelihood': 'desi_dr2_bao_lrg_z1',
-        'measurements_file': 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6_mean.txt',
-        'cov_file': 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6_cov.txt',
-    },
-    'desi-dr2-bao-lrg-z2': {
-        'likelihood': 'desi_dr2_bao_lrg_z2',
-        'measurements_file': 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8_mean.txt',
-        'cov_file': 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8_cov.txt',
-    },
-    'desi-dr2-bao-lrgpluselg': {
-        'likelihood': 'desi_dr2_bao_lrgpluselg_z1',
-        'measurements_file': 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1_mean.txt',
-        'cov_file': 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1_cov.txt',
-    },
-    'desi-dr2-bao-elg': {
-        'likelihood': 'desi_dr2_bao_elg_z2',
-        'measurements_file': 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6_mean.txt',
-        'cov_file': 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6_cov.txt',
-    },
-    'desi-dr2-bao-qso': {
-        'likelihood': 'desi_dr2_bao_qso_z1',
-        'measurements_file': 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1_mean.txt',
-        'cov_file': 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1_cov.txt',
-    },
-    'desi-dr2-bao-lya': {
-        'likelihood': 'desi_dr2_bao_lya',
-        'measurements_file': 'desi_gaussian_bao_Lya_GCcomb_mean.txt',
-        'cov_file': 'desi_gaussian_bao_Lya_GCcomb_cov.txt',
-    },
-}
+_BAO_DR2_DATASET_SPECS = (
+    ('desi-dr2-bao-all', 'desi_dr2_bao_all', 'desi_gaussian_bao_ALL_GCcomb', {}),
+    ('desi-dr2-bao-gqc', 'desi_dr2_bao_gqc', 'desi_gaussian_bao_noLya_GCcomb', {}),
+    ('desi-dr2-bao-lya-fs', 'desi_dr2_bao_lya_fs', 'desi_gaussian_bao_Lya_GCcomb_with_new_lyman_alpha_fs', {
+        'path': DEFAULT_BAO_LYA_FS_DATA_PATH,
+        'rs_fid': 1,
+        'aliases': ['BAO'],
+        'speed': 2000,
+    }),
+    ('desi-dr2-bao-gqc-lya-fs', 'desi_dr2_bao_gqc_lya_fs', 'desi_gaussian_bao_ALL_GCcomb_with_new_lyman_alpha_fs', {
+        'path': DEFAULT_BAO_LYA_FS_DATA_PATH,
+        'rs_fid': 1,
+        'aliases': ['BAO'],
+        'speed': 2000,
+    }),
+    ('desi-dr2-bao-bgs', 'desi_dr2_bao_bgs_z1', 'desi_gaussian_bao_BGS_BRIGHT-21.35_GCcomb_z0.1-0.4', {}),
+    ('desi-dr2-bao-lrg-z1', 'desi_dr2_bao_lrg_z1', 'desi_gaussian_bao_LRG_GCcomb_z0.4-0.6', {}),
+    ('desi-dr2-bao-lrg-z2', 'desi_dr2_bao_lrg_z2', 'desi_gaussian_bao_LRG_GCcomb_z0.6-0.8', {}),
+    ('desi-dr2-bao-lrgpluselg', 'desi_dr2_bao_lrgpluselg_z1', 'desi_gaussian_bao_LRG+ELG_LOPnotqso_GCcomb_z0.8-1.1', {}),
+    ('desi-dr2-bao-elg', 'desi_dr2_bao_elg_z2', 'desi_gaussian_bao_ELG_LOPnotqso_GCcomb_z1.1-1.6', {}),
+    ('desi-dr2-bao-qso', 'desi_dr2_bao_qso_z1', 'desi_gaussian_bao_QSO_GCcomb_z0.8-2.1', {}),
+    ('desi-dr2-bao-lya', 'desi_dr2_bao_lya', 'desi_gaussian_bao_Lya_GCcomb', {}),
+)
 
+BAO_DR2_DATASETS = {}
+for _name, _likelihood, _file_root, _extra in _BAO_DR2_DATASET_SPECS:
+    _metadata = {'likelihood': _likelihood}
+    if 'path' in _extra:
+        _metadata['path'] = _extra['path']
+    _metadata['measurements_file'] = f'{_file_root}_mean.txt'
+    _metadata['cov_file'] = f'{_file_root}_cov.txt'
+    _metadata.update({key: value for key, value in _extra.items() if key != 'path'})
+    BAO_DR2_DATASETS[_name] = _metadata
 
 def make_list(value):
     """Return ``value`` as a list, treating strings as scalars."""
@@ -186,6 +177,82 @@ def _cmb_spa_cobaya():
     }
 
 
+def _cmb_sp4a_cobaya():
+    """Return the CMB-SP4A composite likelihood block from the June 2026 CPE baseline."""
+    return {
+        'planck_2018_lowl.TT': None,
+        'planck_2018_lowl.EE_sroll2': None,
+        'camspec_npipe_lite': {
+            'ell_cuts': {'TT': [30, 1500], 'TE': [30, 1000], 'EE': [30, 600]},
+            'params': {
+                'A_planck': {
+                    'prior': {'dist': 'norm', 'loc': 1.0, 'scale': 0.0025},
+                    'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1},
+                    'latex': r'A_{\rm planck}',
+                    'proposal': 0.003,
+                },
+                'calTE': {
+                    'prior': {'dist': 'norm', 'loc': 1.0, 'scale': 0.01},
+                    'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.01},
+                    'proposal': 0.01,
+                    'latex': r'c_{TE}',
+                },
+                'calEE': {
+                    'prior': {'dist': 'norm', 'loc': 1.0, 'scale': 0.01},
+                    'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.01},
+                    'proposal': 0.01,
+                    'latex': r'c_{EE}',
+                },
+            },
+        },
+        'act_dr6_cmbonly.ACTDR6CMBonly': {
+            'ell_cuts': {'TT': [1500, 6500], 'TE': [1000, 6500], 'EE': [600, 6500]},
+            'lmax_theory': 6500,
+            'params': {
+                'A_act': {
+                    'value': 'lambda A_planck: A_planck',
+                    'latex': r'A_{\rm ACT}',
+                },
+                'P_act': {
+                    'prior': {'min': 0.9, 'max': 1.1},
+                    'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.01},
+                    'proposal': 0.01,
+                    'latex': r'p_{\rm ACT}',
+                },
+            },
+        },
+        'candl_like': {
+            'external': _candl_likelihood_class(),
+            'data_set_file': _spt_candl_dataset_file(),
+            'clear_internal_priors': True,
+            'variant': 'lite',
+            'feedback': True,
+            'wrapper': None,
+            'additional_args': {},
+            'params': {
+                'Tcal': {
+                    'latex': r'T_{\rm cal}',
+                    'prior': {'dist': 'norm', 'loc': 1.0, 'scale': 0.0036},
+                    'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 5.0e-05},
+                    'proposal': 5.0e-05,
+                },
+                'Ecal': {
+                    'latex': r'E_{\rm cal}',
+                    'prior': {'min': 0.8, 'max': 1.2},
+                    'ref': 1.0,
+                },
+            },
+        },
+        'act_dr6_spt_lenslike.ACTDR6LensLike': {
+            'lens_only': False,
+            'stop_at_error': True,
+            'variant': 'actplanckspt3g_baseline',
+            'lmax': 4000,
+            'version': 'v1.2',
+        },
+    }
+
+
 CMB_SPA_PRIORS = {
     'cal_dip_prior': 'lambda A_act: stats.norm.logpdf(A_act, loc = 1.0, scale = 0.003)',
     'gaussian_Tcal': 'lambda Tcal: stats.norm.logpdf(Tcal, loc=1.0, scale=0.0036)',
@@ -195,6 +262,7 @@ CMB_SPA_PRIORS = {
 CMB_LIKELIHOODS = {
     'CMB-SPA': {'family': 'cmb', 'parameterization': 'cmb', 'cobaya': _cmb_spa_cobaya(), 'prior': CMB_SPA_PRIORS},
     'CMB-SPA-tauprior': {'family': 'cmb', 'parameterization': 'cmb', 'cobaya': _cmb_spa_cobaya(), 'prior': CMB_SPA_PRIORS, 'tauprior': True},
+    'CMB-SP4A': {'family': 'cmb', 'parameterization': 'cmb', 'cobaya': _cmb_sp4a_cobaya()},
     # Planck 2018 theta*/rdrag priors.
     'planck2018-thetastar-fixed-nnu': {'family': 'cmb_compressed', 'parameterization': 'background', 'cobaya': {'cosmo.cobaya.external_likelihoods.cmb.thetastar_planck2018_fixed_nnu': None}},
     'planck2018-thetastar-varied-nnu': {'family': 'cmb_compressed', 'parameterization': 'background', 'cobaya': {'cosmo.cobaya.external_likelihoods.cmb.thetastar_planck2018_varied_nnu': None}},
@@ -273,18 +341,12 @@ BAO_LIKELIHOODS = {
     for name, metadata in BAO_DR2_DATASETS.items()
 }
 
-from cosmo.desilike.mapping_likelihoods import _FS_TRACERS as _desilike_FS_TRACERS
-FS_LIKELIHOODS = {
-    fs_name: {'family': 'fs', 'parameterization': 'lss'}
-    for fs_name in _desilike_FS_TRACERS
-}
 
 LIKELIHOOD_REGISTRY = {
     **BAO_LIKELIHOODS,
     **SN_LIKELIHOODS,
     **BBN_LIKELIHOODS,
     **CMB_LIKELIHOODS,
-    **FS_LIKELIHOODS,
 }
 
 
@@ -305,10 +367,16 @@ def normalize_likelihoods(likelihoods=None, dataset=None, default='desi-dr2-bao-
 
 
 def get_likelihood_metadata(likelihoods=None, dataset=None, registry=LIKELIHOOD_REGISTRY):
-    """Return metadata dictionaries for one or more likelihoods."""
-    return [registry[name] for name in normalize_likelihoods(likelihoods=likelihoods, dataset=dataset,
-                                                            registry=registry)]
-
+    """Return metadata dictionaries for registered likelihoods."""
+    names = normalize_likelihoods(likelihoods=likelihoods, dataset=dataset, registry=registry)
+    metadata = []
+    for name in names:
+        item = registry[name]
+        alias = item.get('alias')
+        if alias is not None:
+            item = registry[alias]
+        metadata.append({**item, 'name': name})
+    return metadata
 
 def get_likelihood_families(likelihoods=None, dataset=None, registry=LIKELIHOOD_REGISTRY):
     """Return the likelihood families needed by a likelihood combination."""
@@ -337,36 +405,7 @@ def get_parameterization(likelihoods=None, dataset=None, registry=LIKELIHOOD_REG
 # Former cosmo bindings section: combinations
 # -----------------------------------------------------------------------------
 
-LIKELIHOOD_COMBINATIONS = {
-    'bao': ['desi-dr2-bao-all'],
-    'bao-sn-pantheonplus': ['desi-dr2-bao-all', 'pantheonplus'],
-    'bao-sn-union3': ['desi-dr2-bao-all', 'union3'],
-    'bao-sn-desy5': ['desi-dr2-bao-all', 'desy5sn'],
-    'bao-sn-desdovekie': ['desi-dr2-bao-all', 'desdovekie'],
-    'bao-sn-pantheonplus-zmin0.1': ['desi-dr2-bao-all', 'pantheonplus-zmin0.1'],
-    'bao-sn-union3-zmin0.1': ['desi-dr2-bao-all', 'union3-zmin0.1'],
-    'bao-sn-desy5-zmin0.1': ['desi-dr2-bao-all', 'desy5sn-zmin0.1'],
-    'bao-bbn': ['desi-dr2-bao-all', 'schoneberg2024-bbn'],
-    'bao-bbn-fixed-nnu': ['desi-dr2-bao-all', 'schoneberg2024-bbn-fixed-nnu'],
-    'bao-thetastar-fixed-nnu': ['desi-dr2-bao-all', 'planck2018-thetastar-fixed-nnu'],
-    'bao-thetastar-varied-nnu': ['desi-dr2-bao-all', 'planck2018-thetastar-varied-nnu'],
-    'bao-rdrag-fixed-nnu': ['desi-dr2-bao-all', 'planck2018-rdrag-fixed-nnu'],
-    'bao-cmb-compressed-theta': ['desi-dr2-bao-all', 'CMB-compressed-theta'],
-    'bao-cmb-compressed-r-la': ['desi-dr2-bao-all', 'CMB-compressed-R-lA'],
-    'bao-cmb-compressed-theta-ombh2': ['desi-dr2-bao-all', 'CMB-compressed-theta-ombh2'],
-    'bao-cmb-compressed-theta-ombh2-ombch2': ['desi-dr2-bao-all', 'CMB-compressed-theta-ombh2-ombch2'],
-    'bao-sn-cmb-compressed-theta': ['desi-dr2-bao-all', 'pantheonplus', 'CMB-compressed-theta'],
-    'bao-sn-cmb-compressed-r-la': ['desi-dr2-bao-all', 'pantheonplus', 'CMB-compressed-R-lA'],
-    'cmb-spa': ['CMB-SPA'],
-    'cmb-spa-tauprior': ['CMB-SPA-tauprior'],
-    'bao-cmb-spa': ['desi-dr2-bao-all', 'CMB-SPA'],
-    'bao-sn-desdovekie-cmb-spa': ['desi-dr2-bao-all', 'desdovekie', 'CMB-SPA'],
-    'bao-planck-npipe': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE'],
-    'bao-planck-npipe-lensing': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE', 'planckpr4lensing'],
-    'bao-planck-npipe-ell-max-600': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE-ell-max-600'],
-    'bao-planck-npipe-cuts-for-act': ['desi-dr2-bao-all', 'planck-NPIPE-highl-CamSpec-TTTEEE-cuts-for-act'],
-    'bao-planck-npipe-sroll2-momento': ['desi-dr2-bao-all', 'planck2018-lowl-TTTEEE-sroll2-momento'],
-}
+LIKELIHOOD_COMBINATIONS = {}
 
 
 def is_likelihood_combination(name):
@@ -419,7 +458,7 @@ def normalize_likelihood_combination(value):
 
 def normalize_likelihood_combinations(values):
     """Normalize multiple CLI/config likelihood-combination values."""
-    values = values or ['bao']
+    values = values or ['desi-dr2-bao-all']
     return [normalize_likelihood_combination(value) for value in values]
 
 
@@ -440,12 +479,18 @@ def _get_bao_cobaya_likelihood(metadata, likelihood_package=None, likelihood_pat
     """Return one Cobaya likelihood entry for a BAO data product."""
     if likelihood_package is None:
         likelihood_package = DEFAULT_BAO_LIKELIHOOD_PACKAGE
-    likelihood_path = get_bao_data_path(likelihood_path)
+    if likelihood_path is None:
+        likelihood_path = metadata.get('path', get_bao_data_path(None))
+    else:
+        likelihood_path = get_bao_data_path(likelihood_path)
     config = {
         'path': str(likelihood_path),
         'measurements_file': metadata['measurements_file'],
         'cov_file': metadata['cov_file'],
     }
+    for key in ['rs_fid', 'aliases', 'speed']:
+        if key in metadata:
+            config[key] = metadata[key]
     if python_path is not None:
         config['python_path'] = str(python_path)
     return f'{likelihood_package}.{metadata["likelihood"]}', config

@@ -21,7 +21,7 @@ setup_logging()
 
 
 THEORY_MODELS = ['folpsD', 'folpsEFT', 'reptvelocileptors', 'comet']
-COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed']
+COSMO_MODELS = ['base', 'base_ns-fixed', 'fixed', 'base_w_wa']
 PRIOR_BASES = ['physical', 'physical_aap', 'tcm_chudaykin_aap', 'standard']
 SAMPLERS = ['emcee', 'zeus', 'mhmcmc', 'nuts', 'pocomc', 'nautilus', 'numpyro_nuts', 'numpyro_barker']
 DEFAULT_STATS_DIR = Path('/global/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics')
@@ -65,14 +65,20 @@ def _build_likelihoods_options(stats, tracers, version, covariance, stats_dir, p
     _validate_theory_model(stats, theory_model)
     likelihoods = []
     for tracer in tracers:
+        _version, _covariance = version, covariance
+        if 'BGS' in tracer:
+            if 'abacus' in version:
+                _version = 'abacus-2ndgen-dr2-altmtl'
+            if isinstance(covariance, str) and 'holi' in covariance:
+                _covariance = 'holi-bgs-altmtl'
         likelihood_options = tools.generate_likelihood_options_helper(
             stats=stats,
             tracer=tracer,
-            version=version,
-            covariance=covariance,
+            version=_version,
+            covariance=_covariance,
             stats_dir=stats_dir,
             project=project,
-            emulator=emulator or theory_model != 'comet',
+            emulator=emulator and theory_model != 'comet',
         )
         for observable_options in likelihood_options['observables']:
             _apply_kranges(observable_options)
@@ -105,7 +111,7 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, project, 
     )
     options['cosmology'] = {'template': template, 'model': cosmo_model, 'engine': 'eisenstein_hu' if 'comet' in theory_model else 'class'}
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler=sampler)
-    sampler_kw = {'nparallel': nchains}
+    sampler_kw = {'nparallel': nchains, 'gelman_rubin': 1.02, 'ess': 600}
     for section in ['init', 'run']:
         for name, value in options['sampler'][section].items():
             if name in sampler_kw:
@@ -188,8 +194,8 @@ def run_fit(actions=('profile',), template='direct', version='abacus-2ndgen-dr2-
 
 
 def _get_parser():
-    datasets = ['abacus-2ndgen-dr2-altmtl', 'abacus-2ndgen-dr2-complete', 'abacus-hf-dr2-v2-altmtl']
     parser = argparse.ArgumentParser()
+    datasets = ['abacus-2ndgen-dr2-altmtl', 'abacus-2ndgen-dr2-complete', 'abacus-hf-dr2-v2-altmtl', 'data-dr2-v2', 'data-dr2-test-maskedfraczpNN']
     parser.add_argument('--dataset', choices=datasets, default='abacus-hf-dr2-v2-altmtl',
                         help='Dataset to fit..')
     parser.add_argument('--todo', type=str, nargs='*', default=['profile'],
@@ -208,6 +214,7 @@ def _get_parser():
                         choices=COSMO_MODELS,
                         help='Cosmology parameter setup to fit. base varies h, omega_cdm, omega_b, logA, n_s; '
                              'base_ns-fixed varies h, omega_cdm, omega_b, logA; '
+                             'the _w_wa variants additionally vary w0_fld, wa_fld; '
                              'fixed varies only nuisance parameters. Defaults to base.')
     parser.add_argument('--sampler', type=str, default='emcee',
                         choices=SAMPLERS,

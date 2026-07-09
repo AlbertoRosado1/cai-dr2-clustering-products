@@ -18,7 +18,7 @@ from bao import tools, setup_logging
 setup_logging()
 
 
-def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='base/bao', stats_dir=tools.base_stats_dir, fits_dir=Path(os.getenv('SCRATCH')) / 'fits'):
+def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='base/bao', covariance='jaxpower', recenter=False, stats_dir=tools.base_stats_dir, fits_dir=Path(os.getenv('SCRATCH')) / 'fits'):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -48,13 +48,15 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
             observable_options['stat']['jackknife'] = {'nsplits': 60}
             observable_options['stat']['project'] = 'bao/with_desi-clustering'
         cov_stats_dir = tools.base_stats_dir
-        likelihood_options['covariance'] = {'source': 'rascalc', 'version': 'data-dr2-v1.1', 'project': 'bao/rascalc', 'stats_dir': cov_stats_dir}
-        #likelihood_options['covariance'] = {'source': 'jaxpower', 'version': 'data-dr2-v1.1', 'stats_dir': stats_dir}
+        if covariance == 'jaxpower':
+            likelihood_options['covariance'] = {'source': 'jaxpower', 'version': data, 'project': 'bao/with_desi-clustering', 'stats_dir': stats_dir}
+        else:
+            likelihood_options['covariance'] = {'source': 'rascalc', 'version': data, 'project': 'bao/rascalc', 'stats_dir': cov_stats_dir}
     options['cosmology'] = {'template': template, 'apmode': 'qisoqap'}
     options = fill_fiducial_options(options)
 
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler='emcee')
-    sampler_kw = {'nparallel': mpicomm.size, 'gelman_rubin': 1.05, 'ess': 500}
+    sampler_kw = {'nparallel': mpicomm.size, 'gelman_rubin': 1.01, 'ess': 1000}
     # Distribute arguments
     for section in ['init', 'run']:
         for name, value in options['sampler'][section].items():
@@ -76,15 +78,17 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
     qnames = ['qiso', 'qap']
     means = MCSamples.concatenate([sample.remove_burnin(0.3) for sample in samples]).mean(qnames)
     for sample, output_fn in zip(samples, output_fns):
-        for qname, mean in zip(qnames, means):
-            sample[qname] = sample[qname] - mean + 1.
+        if recenter:
+            for qname, mean in zip(qnames, means):
+                sample[qname] = sample[qname] - mean + 1.
         if mpicomm.rank == 0:
             sample.write(output_fn)
     output_fn = get_fits_fn(kind='profiles', **options)
     profiles = Profiles.read(output_fn)
-    # Hack to complement DR3 blinding
-    for qname in qnames:
-        profiles.best[qname][...] = 1.
+    if recenter:
+        # Hack to complement DR3 blinding
+        for qname in qnames:
+            profiles.best[qname][...] = 1.
     if mpicomm.rank == 0:
         profiles.write(output_fn)
         print(profiles.to_stats(tablefmt='pretty'))
@@ -104,5 +108,14 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
     fits_dir = tools.base_fits_dir
 
+    #data = 'data-dr3-matterhorn-v2-v0-bao'
+    #recenter = True
+    #covariance = 'jaxpower'
+
+    data = 'data-dr2-v1.1'
+    recenter = True
+    #covariance = 'rascalc'
+    covariance = 'jaxpower'
+
     for tracer in ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1']:
-        run_fit(actions=['profile', 'sample'], data='data-dr2-v1.1', project='bao/centered_alphas', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir)
+        run_fit(actions=['profile', 'sample'], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance)

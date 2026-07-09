@@ -2,17 +2,10 @@
 import os
 from pathlib import Path
 
+from .mapping_likelihoods import get_likelihood_label
+
 
 DEFAULT_COSMO_OUTPUT_DIR = Path(os.getenv('SCRATCH', '.')) / 'desi-clustering' / 'cosmo'
-
-
-def get_likelihood_label(likelihoods=None):
-    """Return a filesystem-friendly label for a likelihood or list of likelihoods."""
-    if likelihoods is None:
-        return 'none'
-    if isinstance(likelihoods, str):
-        return likelihoods
-    return '_'.join(likelihoods)
 
 
 def get_desilike_output(model='base', engine='class', likelihoods=None, kind='samples',
@@ -72,8 +65,7 @@ def get_posterior(likelihoods, model=None, engine='class', **kwargs):
     """
     from desilike.base import SumLikelihood, Posterior, compile
     from cosmo.desilike.parameters import get_cosmology, get_prior
-    from cosmo.desilike.mapping_likelihoods import get_likelihood
-    from cosmo.cobaya.mapping_likelihoods import get_parameterization
+    from cosmo.desilike.mapping_likelihoods import get_likelihood, get_parameterization
 
     if isinstance(likelihoods, str):
         likelihoods = [likelihoods]
@@ -181,15 +173,20 @@ def profile_desilike(posterior, kernel='minuit', init: dict=None, run: dict=None
     conditioner = AffineConditioner(**{name: init.pop(name, None) for name in ['rescale', 'covariance']})
     profiler = Profiler(posterior, kernel=kernel_obj, output_fn=output_fn, conditioner=conditioner, **init)
     profiler.maximize(**run)
+    if profiler.mpicomm.rank == 0:
+        print(profiler.profiles.to_stats(tablefmt='pretty'))
     return profiler.profiles
 
 
-def sample_desilike(posterior, kernel='pocomc', init: dict=None, run: dict=None, output_dir=None, resume=False):
+def sample_desilike(posterior, kernel='pocomc', init: dict=None, run: dict=None, output_dir=None, resume=False, profiles_fn=None):
+    import logging
     import shutil
     from pathlib import Path
+    from desilike.samples import Profiles
     from desilike.samplers import Sampler
     from desilike.conditioning import AffineConditioner
     from desilike.distributed import get_mpicomm
+    logger = logging.getLogger('sample_desilike')
     init = dict(init or {})
     run = dict(run or {})
     if output_dir is not None:
@@ -202,6 +199,24 @@ def sample_desilike(posterior, kernel='pocomc', init: dict=None, run: dict=None,
                         path.unlink() if path.is_file() else shutil.rmtree(path)
         mpicomm.Barrier()
         output_dir.mkdir(parents=True, exist_ok=True)
+    if profiles_fn is None and output_dir is not None:
+        profiles_fn = output_dir / 'profiles.h5'
+
+    if init.get('rescale', False) and init.get('covariance', None) is None:
+        profiles = None
+        if profiles_fn is not None and Path(profiles_fn).exists():
+            profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
+        if profiles is None:
+            logger.warning(f'No profiles found at {profiles_fn}; conditioning will fall back to ref.std().')
+        elif profiles.covariance is None:
+            logger.warning(f'Covariance is not provided in {profiles_fn}; conditioning will fall back to ref.std().')
+        else:
+            init['covariance'] = profiles.covariance
+            best, error = profiles.best, profiles.error
+            if best is not None and error is not None:
+                for param in posterior.params.select(varied=True, derived=False):
+                    if param.name in error:
+                        param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
     cls = get_sampler_cls(kernel)
     _non_kernel = ['rng', 'rescale', 'covariance', 'nparallel', 'prior', 'batch_size']
     kernel_obj = cls(**{name: init.pop(name) for name in list(init) if name not in _non_kernel})
