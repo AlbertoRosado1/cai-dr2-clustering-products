@@ -598,6 +598,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
           ``['hartlap', 'percival']``.
         - ``'nparams'``: effective parameter count for the Percival correction
           (inferred automatically when omitted).
+        - ``'scale'``: positive multiplicative factor for the final matched
+          covariance matrix.
 
         If ``None`` or ``{}``, the covariance-source dispatch falls through to ``None``
         and no covariance is built.
@@ -1036,6 +1038,15 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             write_covariance_manifest_entry(cache_fn, imocks_exists)
 
     covariance = covariance.at.observable.match(data)
+
+    covariance_scale = float(covariance_options.get('scale', 1.))
+    if not np.isfinite(covariance_scale) or covariance_scale <= 0.:
+        raise ValueError(f'covariance scale must be positive and finite, got {covariance_scale!r}')
+    if covariance_scale != 1.:
+        covariance = covariance.clone(value=covariance.value() * covariance_scale)
+        if mpicomm.rank == 0:
+            logger.info(f'Applied covariance scale factor {covariance_scale:.6f}.')
+    covariance.attrs['covariance_scale'] = covariance_scale
 
     factor, metadata = _get_covariance_correction_factor(covariance, observables_options, covariance_options)
     if factor != 1.:

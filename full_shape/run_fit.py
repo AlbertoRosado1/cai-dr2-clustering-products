@@ -159,6 +159,10 @@ if __name__ == '__main__':
         help='Covariance mock set (default: holi-v3-altmtl).',
     )
     parser.add_argument(
+        '--covariance_scale', type=float, default=1.,
+        help='Positive multiplicative factor applied to the matched covariance matrix.',
+    )
+    parser.add_argument(
         '--project', type=str, default='',
         help='Optional measurement project subdirectory under stats_dir.',
     )
@@ -179,6 +183,7 @@ if __name__ == '__main__':
     for tracer in args.tracers:
         likelihood_options = generate_likelihood_options_helper(stats=args.stats, version=args.data, tracer=tracer, region=args.region,
                                                                 covariance=args.covariance, project=args.project)
+        likelihood_options['covariance']['scale'] = args.covariance_scale
         options['likelihoods'].append(likelihood_options)
     run_fit_from_options(args.actions,
                          get_fits_fn=functools.partial(tools.get_fits_fn, fits_dir=args.fits_dir),
