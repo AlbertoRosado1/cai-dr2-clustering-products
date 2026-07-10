@@ -2,13 +2,13 @@
 import os
 from pathlib import Path
 
-from .mapping_likelihoods import get_likelihood_label
+from .mapping_likelihoods import get_likelihood_label, get_engine_label
 
 
 DEFAULT_COSMO_OUTPUT_DIR = Path(os.getenv('SCRATCH', '.')) / 'desi-clustering' / 'cosmo'
 
 
-def get_desilike_output(model='base', engine='class', likelihoods=None, kind='samples',
+def get_desilike_output(model='base', engine=None, likelihoods=None, kind='samples',
                         output_dir=None, run='run1', ext=None, output_label=None):
     """Return the desilike output path for a configuration.
 
@@ -16,8 +16,10 @@ def get_desilike_output(model='base', engine='class', likelihoods=None, kind='sa
     ----------
     model : str
         Cosmological model, e.g. ``'base'``, ``'base'``, ``'w0wa'``.
-    engine : str
-        Boltzmann engine, e.g. ``'class'`` or ``'camb'``.
+    engine : str or dict, optional
+        Boltzmann engine, e.g. ``'class'`` or ``'camb'``; ``None`` resolves the
+        per-likelihood default and ACE-style engine dicts are labelled ``'ace'``
+        (see :func:`~cosmo.desilike.mapping_likelihoods.get_engine_label`).
     likelihoods : str or list of str, optional
         Likelihood name(s) used to build the label.
     kind : str
@@ -40,14 +42,14 @@ def get_desilike_output(model='base', engine='class', likelihoods=None, kind='sa
     if output_dir is None:
         output_dir = DEFAULT_COSMO_OUTPUT_DIR
     label = output_label or get_likelihood_label(likelihoods)
-    directory = Path(output_dir) / engine / run / model / label
+    directory = Path(output_dir) / get_engine_label(engine, likelihoods=likelihoods) / run / model / label
     if kind == 'profiles':
         suffix = f'.{ext.lstrip(".")}' if ext else '.h5'
         return directory / f'profiles{suffix}'
     return directory
 
 
-def get_posterior(likelihoods, model=None, engine='class', **kwargs):
+def get_posterior(likelihoods, model=None, engine=None, **kwargs):
     """Build and compile a :class:`desilike.base.Posterior` for cosmology inference.
 
     Parameters
@@ -56,8 +58,11 @@ def get_posterior(likelihoods, model=None, engine='class', **kwargs):
         Likelihood name(s) as registered in ``mapping_likelihoods.get_likelihood``.
     model : str, optional
         Cosmological model string (see :func:`parameters.get_cosmology`).
-    engine : str, optional
-        Boltzmann solver: ``'class'`` (default) or ``'camb'``.
+    engine : str or dict, optional
+        Boltzmann solver, e.g. ``'class'`` or ``'camb'``. ``None`` (default) picks
+        the per-likelihood default: ``'eisenstein_hu'`` for COMET-only full-shape
+        fits, the ACE emulator set for FolpsD-style ones, ``'class'`` otherwise
+        (see :func:`~cosmo.desilike.mapping_likelihoods.get_default_engine`).
 
     Returns
     -------
@@ -85,6 +90,77 @@ def get_posterior(likelihoods, model=None, engine='class', **kwargs):
     likelihood = all_likes[0] if len(all_likes) == 1 else SumLikelihood(all_likes)
     prior = get_prior(likelihood)
     return compile(Posterior(likelihood, prior=prior))
+
+
+def time_posterior(posterior, nvmap=10, nrepeats=10, rng=42):
+    """Time posterior evaluation after JIT compilation, single-point and under vmap.
+
+    Draws evaluation points from the varied parameters' reference distributions,
+    then times a jitted single-point call and a jitted ``jax.vmap`` call over
+    *nvmap* points in parallel (first call of each excluded as compilation).
+
+    Parameters
+    ----------
+    posterior : CompiledGraph
+        Compiled posterior, as returned by :func:`get_posterior`.
+    nvmap : int
+        Number of points evaluated in parallel under ``jax.vmap``.
+    nrepeats : int
+        Number of timed repetitions per configuration.
+    rng : int
+        Seed for the reference-distribution draws.
+
+    Returns
+    -------
+    dict
+        ``{'jit': ..., 'vmap': ...}``, each with ``'compile'`` (first-call seconds,
+        tracing + compilation), ``'mean'`` / ``'best'`` (seconds per call over
+        *nrepeats*) and ``'per_point'`` (best seconds divided by the number of
+        points in the call).
+    """
+    import time
+    import numpy as np
+    import jax
+
+    varied_params = [param for param in posterior.params if not (param.derived or param.fixed)]
+    key = jax.random.PRNGKey(rng)
+    points = {}
+    for param in varied_params:
+        key, subkey = jax.random.split(key)
+        if param.ref is not None and param.ref.is_proper():
+            points[param.name] = np.asarray(param.ref.sample(subkey, shape=(nvmap,) + param.shape))
+        else:
+            points[param.name] = np.broadcast_to(np.asarray(param.value), (nvmap,) + param.shape).copy()
+    single_point = {name: values[0] for name, values in points.items()}
+
+    def logposterior(params):
+        return posterior(params)
+
+    configurations = [('jit', jax.jit(logposterior), single_point, 1),
+                      ('vmap', jax.jit(jax.vmap(logposterior)), points, nvmap)]
+    timings = {}
+    for label, function, arguments, npoints in configurations:
+        start = time.perf_counter()
+        value = jax.block_until_ready(function(arguments))
+        compile_seconds = time.perf_counter() - start
+        if not np.all(np.isfinite(value)):
+            print(f'time_posterior [{label}]: WARNING, non-finite logposterior {value} at the timed point(s)')
+        repeat_seconds = []
+        for _ in range(nrepeats):
+            start = time.perf_counter()
+            jax.block_until_ready(function(arguments))
+            repeat_seconds.append(time.perf_counter() - start)
+        timings[label] = {'compile': compile_seconds, 'mean': float(np.mean(repeat_seconds)),
+                          'best': float(np.min(repeat_seconds)), 'per_point': float(np.min(repeat_seconds)) / npoints}
+        print(f'time_posterior [{label}, {npoints} point(s)]: compile {compile_seconds:.2f} s, '
+              f'per call {timings[label]["mean"]:.4f} s (best {timings[label]["best"]:.4f} s), '
+              f'per point {timings[label]["per_point"]:.4f} s')
+    # Graphs going through pure_callback (e.g. CLASS/CAMB engines) are vmapped
+    # sequentially, so no speed-up is expected there; pure-JAX graphs (ACE
+    # emulators, ...) should approach nvmap.
+    print(f'time_posterior: vmap({nvmap}) speed-up over sequential jit calls: '
+          f'{timings["jit"]["best"] * nvmap / timings["vmap"]["best"]:.2f}x')
+    return timings
 
 
 def propose_fiducial_sampler_options(sampler=None):

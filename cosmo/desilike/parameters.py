@@ -10,7 +10,7 @@ def get_fiducial():
     return _fiducial
 
 
-def get_cosmology(model=None, engine='class', parameterization='background', likelihoods=None):
+def get_cosmology(model=None, engine=None, parameterization='background', likelihoods=None):
     """
     Construct and return a :mod:`desilike` :class:`CosmoprimoCosmology` calculator.
 
@@ -20,10 +20,17 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
         Cosmological model string.  Default is ``'base'``.  Supported tokens:
         ``'w_wa'`` (free dark energy equation of state), ``'_w'`` (free ``w_0``
         only), ``'fixed'`` (fix all parameters).
-    engine : str, optional
-        Boltzmann solver: ``'class'`` (default) or ``'camb'``; or ``'ace'`` for the packaged
+    engine : str or dict, optional
+        Boltzmann solver: ``'class'`` or ``'camb'``; ``'ace'`` for the packaged
         jaxace / jaxmapse / jaxcapse neural-network emulators (pure JAX, differentiable;
-        LCDM-only Cl, parameters NaN-masked outside the emulator training ranges).
+        LCDM-only Cl, parameters NaN-masked outside the emulator training ranges); or an
+        :class:`~desilike.theories.primordial_cosmology.ACECosmology` per-section engine
+        dict. ``None`` (default) resolves from *likelihoods* via
+        :func:`~cosmo.desilike.mapping_likelihoods.get_default_engine`: ``'eisenstein_hu'``
+        for COMET-only full-shape fits,
+        :data:`~cosmo.desilike.mapping_likelihoods.DEFAULT_ACE_ENGINE` (jaxace w0waCDM
+        background + jaxmapse pk + Capse w0waCDM Cl) when a FolpsD-style full-shape
+        likelihood is present, ``'class'`` otherwise.
     parameterization : str, optional
         ``'background'`` (default) samples ``Omega_m`` only, plus the
         per-family absolute-scale anchor: ``r_d`` sampled directly for BAO
@@ -57,6 +64,9 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
     from desilike.theories import PrimordialCosmology, CosmoprimoCosmology, ACECosmology
     if isinstance(model, PrimordialCosmology):
         return model
+    if engine is None:
+        from .mapping_likelihoods import get_default_engine
+        engine = get_default_engine(likelihoods)
     is_cmb = parameterization == 'cmb'
     is_lss = parameterization in ('lss', 'cmb')  # lss: logA/n_s free, tau fixed; cmb: all three free
     is_background = not is_lss
@@ -174,9 +184,10 @@ def get_cosmology(model=None, engine='class', parameterization='background', lik
     if is_lss:
         params.set(Parameter('sigma8_m', derived=True, latex=r'\sigma_{8,\mathrm{m}}'))
         params.set(Parameter('sigma8_cb', derived=True, latex=r'\sigma_{8,\mathrm{cb}}'))
-    if engine == 'ace':
+    if engine == 'ace' or isinstance(engine, dict):
         # Packaged jaxace / jaxmapse / jaxcapse neural-network emulators (pure JAX end-to-end,
-        # differentiable); see desilike.theories.primordial_cosmology.ACECosmology.
+        # differentiable), 'ace' or a per-section {'background'/'fourier'/'harmonic': name}
+        # dict; see desilike.theories.primordial_cosmology.ACECosmology.
         cosmo = ACECosmology(engine=engine, fiducial=fiducial, params=params)
     else:
         cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial, params=params)
