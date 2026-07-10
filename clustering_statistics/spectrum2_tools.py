@@ -14,6 +14,7 @@ import time
 import logging
 import functools
 import operator
+import itertools
 from collections.abc import Callable
 
 import numpy as np
@@ -585,9 +586,6 @@ def compute_mesh2_spectrum(*get_data_randoms, mattrs=None, cut=None, auw=None,
             # Main driver: loops over ell and calls compute(...)
             results = loop_over_optimal_weights(ells, compute, join)
 
-    # Return single result or dictionary of variants
-    if len(results) == 1:
-        return next(iter(results.values()))
     return results
 
 
@@ -1268,7 +1266,7 @@ def compute_window_mesh2_spectrum_fm(
     all_regression_maps = None
     if regression_maps is not None:
         if not is_sequence(regression_maps):
-            regresion_maps = [regression_maps]
+            regression_maps = [regression_maps]
         if isinstance(regression_maps[0], str):
             regression_maps = (regression_maps,) * ntracers
         all_regression_maps = {}
@@ -1504,8 +1502,7 @@ def compute_window_mesh2_spectrum_fm(
                 if jax.process_index() == 0: logger.info("Computing geometry window with desiwinds...")
                 _, windows["geometry"] = get_window_spikes(
                     **window_fm_kw,
-                    mock_survey_kwargs=mock_survey_kwargs
-                    | {"ric_args": None, "amr_args": None},
+                    mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None, "data_regions": None, "randoms_regions": None},
                 )
 
             if ric:
@@ -1658,7 +1655,7 @@ def compute_window_mesh2_spectrum_fm(
                     if geo:
                         if jax.process_index() == 0:
                             logger.info("Computing geometry window for ell=%i, optimal weights combination %i with desiwinds...", ell, iopt)
-                        _, _windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None})
+                        _, _windows_fm_geo = get_window_spikes(**window_fm_kw, mock_survey_kwargs=mock_survey_kwargs | {"ric_args": None, "amr_args": None, "data_regions": None, "randoms_regions": None})
                         windows["geometry"][ell].append(_windows_fm_geo)
 
                     if ric:
@@ -1780,7 +1777,7 @@ def run_preliminary_fit_mesh2_spectrum(data: types.Mesh2SpectrumPoles, window: t
             params[name].update(**update)
 
     # Minimize likelihood to get best-fit theory
-    posterior = compile(Posterior(likelihood))    
+    posterior = compile(Posterior(likelihood))
     profiler = Profiler(posterior, kernel=Minuit(), rng=42)
     profiles = profiler.maximize()
     # Get best-fit parameters

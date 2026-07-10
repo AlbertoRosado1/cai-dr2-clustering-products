@@ -52,22 +52,32 @@ Override this path with `likelihood_path=` or:
 export DESI_CLUSTERING_COSMO_BAO_DATA_PATH=/path/to/cobaya_data
 ```
 
-Registered likelihoods include DESI BAO DR2, SN, BBN, compressed CMB, full CMB,
+Registered likelihoods include DESI BAO DR2, BAO GQC/Lya-FS variants, SN, BBN, compressed CMB, full CMB,
 and CMB-lensing entries. BBN, SN zmin variants, compressed-CMB priors, and the
 Momento/SROLL wrapper are native `desi-clustering` likelihoods under
 `cosmo.cobaya.external_likelihoods`. The Cobaya helper supports background-only
 combinations, such as BAO+SN+BBN+compressed-CMB priors, and full-CMB Cobaya
-configs for standard external Planck/ACT/lensing likelihoods. Full-CMB
-initialization and production runs depend on the external Cobaya likelihood
-packages/data available in the active environment. DESI DR1 BAO would require a
-separate data mapping.
+configs for standard external Planck/ACT/lensing likelihoods. The `CMB-SP4A`
+preset is the June 2026 CPE full-CMB baseline: PR4 CamSpec-NPIPE-lite, ACT
+DR6 CMB-only, SPT-3G lite, low-ell TT/EE, and joint Planck+ACT+SPT lensing.
+Full-CMB initialization and production runs depend on the external Cobaya
+likelihood packages/data available in the active environment. DESI DR1 BAO
+would require a separate data mapping.
 
-- likelihoods: `desi-bao-all`, SN names such as `pantheonplus`, BBN names such
+- likelihoods: `desi-dr2-bao-all`, SN names such as `pantheonplus`, BBN names such
   as `schoneberg2024-bbn`, compressed-CMB names such as `CMB-compressed-theta`,
-  and full-CMB names such as `planck-NPIPE-highl-CamSpec-TTTEEE`;
+  and full-CMB names such as `planck-NPIPE-highl-CamSpec-TTTEEE`
+  and `CMB-SP4A`;
 - models: `base`, `base_w`, `base_w_wa`;
 - theory: `camb`;
 - samplers: `evaluate`, `cobaya` MCMC, `iminuit` minimization.
+
+Use explicit likelihood names for BAO products, following the desilike
+mapping. In particular, `desi-dr2-bao-all` is the standard DESI DR2 BAO
+product also used by the standard desilike DR2 BAO mapping. For CPE SP4A
+reference-chain comparisons, use `desi-dr2-bao-gqc-lya-fs`, the GQC + updated
+Lyman-alpha full-shape compressed product. Pass combinations as comma-separated
+explicit likelihood names, e.g. `desi-dr2-bao-gqc-lya-fs,desdovekie,CMB-SP4A`.
 
 Compressed BAO products from `bao/` can be connected by writing compatible
 mean/covariance text files and pointing `likelihood_path` to their directory.
@@ -81,18 +91,18 @@ from cosmo.cobaya import get_cobaya_info, sample_cobaya
 
 info = get_cobaya_info(
     model='base',
-    likelihoods='desi-bao-all',
+    likelihoods='desi-dr2-bao-all',
     sampler='evaluate',
     output=False,
 )
 
-sample_cobaya(model='base', likelihoods='desi-bao-all', sampler='evaluate', output=False)
+sample_cobaya(model='base', likelihoods='desi-dr2-bao-all', sampler='evaluate', output=False)
 ```
 
-For BAO-only calls, `dataset=` is accepted as a convenience alias:
+For BAO-only calls, `dataset=` accepts explicit BAO dataset names:
 
 ```python
-info = get_cobaya_info(model='base', dataset='desi-bao-all', sampler='evaluate', output=False)
+info = get_cobaya_info(model='base', dataset='desi-dr2-bao-all', sampler='evaluate', output=False)
 ```
 
 Full-CMB configs can be generated with the `likelihoods=` interface:
@@ -100,7 +110,7 @@ Full-CMB configs can be generated with the `likelihoods=` interface:
 ```python
 info = get_cobaya_info(
     model='base',
-    likelihoods='bao-planck-npipe',
+    likelihoods='desi-dr2-bao-all,planck-NPIPE-highl-CamSpec-TTTEEE',
     sampler='evaluate',
     output=False,
 )
@@ -111,8 +121,8 @@ To write a Cobaya YAML:
 ```python
 from cosmo.cobaya import get_cobaya_info, write_cobaya_yaml
 
-info = get_cobaya_info(model='base', likelihoods='desi-bao-all', sampler='cobaya')
-write_cobaya_yaml(info, 'configs/base_desi-bao-all.yaml')
+info = get_cobaya_info(model='base', likelihoods='desi-dr2-bao-all', sampler='cobaya')
+write_cobaya_yaml(info, 'configs/base_desi-dr2-bao-all.yaml')
 ```
 
 ## Cobaya run launcher
@@ -123,44 +133,33 @@ The Cobaya launcher entry point is:
 python cosmo/job_scripts/run_cobaya.py \
     --todo evaluate \
     --models base \
-    --likelihoods bao-sn-cmb-compressed-theta
+    --likelihoods desi-dr2-bao-all,pantheonplus,CMB-compressed-theta
 ```
 
-Named likelihood-combination presets are available. List them with:
-
-```bash
-python cosmo/job_scripts/run_cobaya.py --list-likelihood-combinations
-```
-
-Common presets include:
+The launcher uses explicit likelihood names. Pass comma-separated names for
+combined configurations. Examples:
 
 ```text
-bao
-bao-sn-pantheonplus
-bao-sn-union3
-bao-sn-desy5
-bao-sn-desdovekie
-bao-bbn
-bao-cmb-compressed-theta
-bao-sn-cmb-compressed-theta
-bao-planck-npipe
-bao-planck-npipe-lensing
-cmb-spa
-bao-cmb-spa
-bao-sn-desdovekie-cmb-spa
-cmb-spa-tauprior
+desi-dr2-bao-all
+desi-dr2-bao-gqc
+desi-dr2-bao-lya-fs
+desi-dr2-bao-gqc-lya-fs
+desi-dr2-bao-gqc-lya-fs,desdovekie
+desi-dr2-bao-gqc-lya-fs,desdovekie,CMB-SP4A
+CMB-SP4A
+CMB-SPA
 ```
 
-Explicit comma-separated likelihood combinations still work. Pass multiple
+Comma-separated explicit likelihood combinations are supported. Pass multiple
 `--likelihoods` values to create multiple configurations:
 
 ```bash
 python cosmo/job_scripts/run_cobaya.py \
     --todo evaluate \
     --models base \
-    --likelihoods bao \
-                  desi-bao-all,pantheonplus \
-                  bao-cmb-compressed-theta
+    --likelihoods desi-dr2-bao-all \
+                  desi-dr2-bao-all,pantheonplus \
+                  desi-dr2-bao-all,CMB-compressed-theta
 ```
 
 Inspect and spawn:
@@ -185,7 +184,7 @@ queue. This is the preferred mode for production matrices.
 python cosmo/job_scripts/run_cobaya.py \
     --todo sample \
     --models base \
-    --likelihoods bao bao-sn-desdovekie bao-bbn \
+    --likelihoods desi-dr2-bao-all desi-dr2-bao-all,desdovekie desi-dr2-bao-all,schoneberg2024-bbn \
     --run run1 \
     --output_dir $SCRATCH/desi-clustering-cosmo-dev \
     --queue-name desi_clustering_cobaya
@@ -206,7 +205,7 @@ python cosmo/job_scripts/run_cobaya.py \
     --interactive \
     --todo evaluate \
     --models base \
-    --likelihoods bao-cmb-compressed-theta \
+    --likelihoods desi-dr2-bao-all,CMB-compressed-theta \
     --test
 ```
 
@@ -221,7 +220,7 @@ python cosmo/job_scripts/run_cobaya.py \
     --interactive-node \
     --todo sample \
     --models base \
-    --likelihoods bao-bbn bao-cmb-compressed-theta \
+    --likelihoods desi-dr2-bao-all,schoneberg2024-bbn desi-dr2-bao-all,CMB-compressed-theta \
     --run interactive-test \
     --output_dir $SCRATCH/desi-clustering-cosmo-dev \
     --time 04:00:00
@@ -241,7 +240,7 @@ To export Cobaya YAML files for review without launching jobs:
 python cosmo/job_scripts/run_cobaya.py \
     --todo export \
     --models base base_w base_w_wa \
-    --likelihoods bao bao-bbn bao-cmb-compressed-theta bao-cmb-spa \
+    --likelihoods desi-dr2-bao-all desi-dr2-bao-all,schoneberg2024-bbn desi-dr2-bao-all,CMB-compressed-theta desi-dr2-bao-all,CMB-SPA \
     --config-dir configs/cobaya
 ```
 
@@ -250,7 +249,7 @@ This writes files such as:
 ```text
 configs/cobaya/base/bao.yaml
 configs/cobaya/base/bao-bbn.yaml
-configs/cobaya/base/bao-cmb-compressed-theta.yaml
+configs/cobaya/base/desi-dr2-bao-all,CMB-compressed-theta.yaml
 configs/cobaya/base/bao-cmb-spa.yaml
 ```
 

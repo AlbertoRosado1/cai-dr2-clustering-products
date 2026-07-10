@@ -87,7 +87,7 @@ def run_stats(tracer='LRG', project='', version='abacus-hf-dr2-v2-altmtl', onthe
             options = fill_fiducial_options(options, analysis=analysis)
             
             for itracer in options['catalog']:
-                #options['catalog'][itracer]['nran'] = 2
+                options['catalog'][itracer]['nran'] = 2
                 options['catalog'][itracer]['zranges'] = zranges  # override fiducial zranges 
                 options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran'])}
                 if onthefly is not None and onthefly.startswith('complete'):
@@ -139,9 +139,10 @@ if __name__ == '__main__':
     #stats = ['recon_mesh2_spectrum', 'covariance_recon_mesh2_spectrum'][1:]
     #stats = ['recon_particle2_correlation', 'covariance_recon_particle2_correlation']
     #stats = ['covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
+    stats = ['mesh3_spectrum', 'covariance_mesh3_spectrum'][1:]
     #stats = ['particle3_correlation']
-    stats = []
-    postprocess = ['combine_regions']
+    #stats = []
+    postprocess = ['combine_regions'][:0]
     analysis = 'full_shape'
     project = f'{analysis}/analytic_covariance_validation'
     weight = 'default-FKP'

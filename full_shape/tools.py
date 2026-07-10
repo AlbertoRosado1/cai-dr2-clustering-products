@@ -89,7 +89,7 @@ def get_cosmology(cosmology_options: dict=None):
     model = cosmology_options.get('model', 'base_ns-fixed')
     is_fixed_model = model == 'fixed'
     is_ns_fixed = is_fixed_model or 'ns-fixed' in model
-    has_w0wa = 'w0wa' in model
+    has_w0wa = any(w in model for w in ['w_wa', 'w0wa'])
     fiducial = get_fiducial()
 
     params = VariableCollection()
@@ -131,8 +131,8 @@ def get_cosmology(cosmology_options: dict=None):
                             ref=dict(dist='norm', loc=0., scale=0.3),
                             fd_eps=0.3, latex=r'w_a'))
     if is_fixed_model:
-        for name in params:
-            params[name].update(fixed=True)
+        for param in params:
+            param.update(fixed=True)
     params['n_s'].update(fixed=is_ns_fixed)
     if has_w0wa:
         params['w0_fld'].update(fixed=is_fixed_model)
@@ -690,17 +690,19 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         return mpicomm.bcast(stats, root=0)
 
     # Helper: iterate over (stat, tracer) combinations
-    def iter_stat_tracer_combinations(observables_options, with_stat_kw=False):
+    def iter_stat_tracer_combinations(observables_options, with_stat_kw=False, catalog_options=None):
         """
         Yield (stat, labels, file_kwargs, observable_options) for each requested observable.
 
         Compact helper for iterating the user-provided observables and producing file kwargs
         and labeling information used when reading files.
         """
+        _catalog_options = dict(catalog_options or {})
         for observable_options in observables_options:
             stat = observable_options['stat']['kind']
-            tracers = _make_tuple(observable_options['catalog']['tracer'])
-            version = observable_options['catalog'].get('version', None)
+            catalog_options = observable_options['catalog'] | _catalog_options
+            tracers = _make_tuple(catalog_options['tracer'])
+            version = catalog_options.get('version', None)
             full_tracer = get_full_tracer(tracers, version=version)
             nfields = 3 if 'mesh3' in stat else 2
             simple_tracers = get_simple_tracer(tracers)
@@ -715,7 +717,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                     kw[name] = observable_options['stat'][name]
                 elif with_stat_kw and name not in ['kind', 'select']:
                     kw[name] = observable_options['stat'][name]
-            file_kw = kw | observable_options['catalog'] | {'tracer': full_tracer}
+            file_kw = kw | catalog_options | {'tracer': full_tracer}
             yield stat, labels, file_kw, dict(observable_options)
 
     def _with_project(observable: types.ObservableTree):
@@ -912,7 +914,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
                         if key != 'mode'
                     }
                     file_kw = file_kw | window_options
-                    fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
+                    #fn = _get_mock_stats_fn(f'window_{stat}', file_kw) if 'stats_dir' in file_kw else get_stats_fn(kind=f'window_{stat}', **file_kw)
+                    fn = get_stats_fn(kind=f'window_{stat}', **file_kw)
                     logger.info(f"Reading window for {stat} from {fn}")
                     windows.append(types.read(fn))
             # Join mesh2_spectrum, mesh3_spectrum, etc.
@@ -980,7 +983,8 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
             all_fns = []
             covariance_log_patterns = []
             all_imocks = None
-            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options):
+            covariance_labels = []
+            for stat, labels, file_kw, kw in iter_stat_tracer_combinations(observables_options, catalog_options=covariance_file_options):
                 file_kw = file_kw | {'imock': '*'} | covariance_file_options | covariance_stat_options.get(stat, {})
                 imocks = file_kw.pop('imock')
                 if imocks == '*':
@@ -1071,14 +1075,25 @@ def rebin_spectrum3_window(window, data=None):
         data = window.observable
     # Simplify window matrix
     ostep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in data)
-    tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window.theory)
+    with_templates = hasattr(window.theory, 'types')
+    window_theory = window.at.theory.get(types='theory') if with_templates else window
+
+    tstep = min(np.diff(pole.edges('k'), axis=-1).min() for pole in window_theory.theory)
     rebin = int(ostep / tstep)
     assert rebin >= 1
-    window = window.at.theory.select(k=slice(0, None, rebin))
+    window_theory = window_theory.at.theory.select(k=slice(0, None, rebin))
     # Compact non-diagonal term
-    rebin = rebinning_matrix(window.theory, new_coords=window.theory.select(k=slice(0, None, 2)),
+    rebin = rebinning_matrix(window_theory.theory, new_coords=window_theory.theory.select(k=slice(0, None, 2)),
                              interp_order=3, diag='separate')
-    window = window.clone(value=window.value() @ rebin.value(), theory=rebin.theory)
+    window_theory = window_theory.clone(value=window_theory.value() @ rebin.value(), theory=rebin.theory)
+
+    if with_templates:
+        # Re-assemble the window matrix
+        window_templates = window.at.theory.get(types=[t for t in window.theory.types if t != 'theory'])
+        window = window.clone(value=np.concatenate([window_theory.value(), window_templates.value()], axis=-1),
+                              theory=window.theory.at(types='theory').replace(window_theory.theory))
+    else:
+        window = window_theory
     return window
 
 
@@ -1189,7 +1204,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
                         assert mean.size == 1
                         prior = dict(dist='norm', loc=mean.flat[0], scale=sigma.flat[0])
                         param = Parameter(label['types'], namespace=namespace, value=mean.flat[0],
-                                        ref=prior, prior=prior, derived='best')
+                                        ref=prior, prior=prior) #, derived='best')
                         template = window.at.theory.get(**label).value()
                         templates.append((param, template[..., 0]))
                 window = window.at.theory.get('theory')  # window becomes the "standard window"
@@ -1225,7 +1240,7 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
                 pt_graph = compile(observable.theory if is_compressed else theory.pt)
                 emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
-                if write_cache:
+                if write_cache and mpicomm.rank == 0:
                     mkdir(cache_fn.parent)
                     emulator.write(str(cache_fn))
             emulated_pt = emulator.to_calculator()
@@ -1484,11 +1499,11 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     for tracer, stat in itertools.product(tracers, stats):
         tracer, zrange = get_full_tracer_zrange(tracer, zrange)
         catalog = {'version': version, 'tracer': tracer, 'zrange': zrange, 'region': region, 'stats_dir': stats_dir, 'imock': imock}
-        if project:
-            catalog['project'] = project
         if 'data' not in version and imock is None:
             catalog['imock'] = '*'  # read all available mocks
         observable_options = {'stat': {'kind': stat}, 'catalog': catalog}
+        if project:
+            observable_options['stat']['project'] = project
         if emulator is False: emulator_options = {'name': ''}
         elif emulator is True: emulator_options = {}
         else: emulator_options = dict(emulator)

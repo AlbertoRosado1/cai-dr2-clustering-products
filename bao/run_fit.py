@@ -82,8 +82,8 @@ def run_fit_from_options(actions,
             profiler = Profiler(posterior, kernel=kernel, output_fn=profiles_fn, **kw)
             profiler.maximize(**profiler_options.get('maximize', {}))
             #profiler.covariance()
-            if mpicomm.rank == 0:
-                print(profiler.profiles.to_stats(tablefmt='pretty'))
+            #if mpicomm.rank == 0:
+            #    print(profiler.profiles.to_stats(tablefmt='pretty'))
         elif action == 'sample':
             sampler_options = dict(options['sampler'])
             cls = tools.get_sampler_cls(sampler_options.pop('sampler', 'emcee'))

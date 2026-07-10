@@ -37,3 +37,15 @@ class desi_dr2_bao_qso_z1(BAO):
 
 class desi_dr2_bao_lya(BAO):
     """DESI BAO DR2 likelihood for Lyman-alpha."""
+
+
+class desi_dr2_bao_gqc(BAO):
+    """DESI DR2 BAO likelihood for galaxy+QSO combined tracers, excluding Lyman-alpha."""
+
+
+class desi_dr2_bao_lya_fs(BAO):
+    """DESI DR2 BAO likelihood for the updated Lyman-alpha full-shape product."""
+
+
+class desi_dr2_bao_gqc_lya_fs(BAO):
+    """DESI DR2 BAO likelihood for galaxy+QSO combined with updated Lyman-alpha full-shape."""

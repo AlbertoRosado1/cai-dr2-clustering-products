@@ -101,20 +101,22 @@ def run_fit_from_options(actions,
             if kw.get('rescale', False):
                 profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
                 if profiles.error is None:
-                    logger.warn(f'Error is not provided in {profiles_fn}; skipping rescaling.')
+                    logger.warning(f'Error is not provided in {profiles_fn}; skipping rescaling.')
                     kw['rescale'] = False
-                best, error, covariance = profiles.best, profiles.error, profiles.covariance
-                kw['covariance'] = covariance
-                #error = {param: covariance.std(param) for param in covariance.names()}
-                for param in get_params(likelihood_sampler):
-                    if param.name in error:
-                        param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
+                else:
+                    best, error, covariance = profiles.best, profiles.error, profiles.covariance
+                    kw['covariance'] = covariance
+                    #error = {param: covariance.std(param) for param in covariance.names()}
+                    for param in get_params(likelihood_sampler):
+                        if param.name in error:
+                            param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
             if kw.get('prior', None) is not None:
                 profiles = Profiles.read(profiles_fn).choice(index='argmax', squeeze=True)
-                if profiles.error is None:
-                    logger.warn(f'Error is not provided in {profiles_fn}; skipping prior.')
+                if profiles.covariance is None:
+                    logger.warning(f'Covariance is not provided in {profiles_fn}; skipping prior.')
                     kw['prior'] = None
-                kw['prior'] = kw['prior'] * profiles.covariance
+                else:
+                    kw['prior'] = kw['prior'] * profiles.covariance
             posterior = compile(Posterior(likelihood_sampler, prior=get_prior(likelihood_sampler)))
             kernel = cls(**{name: kw.pop(name) for name in list(kw) if name not in ['rng', 'rescale', 'covariance', 'nparallel', 'prior', 'batch_size']})
             conditioner =  AffineConditioner(**{name: kw.pop(name, None) for name in ['rescale', 'covariance']})
