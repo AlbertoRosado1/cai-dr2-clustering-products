@@ -260,7 +260,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
                     'alpha2': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
                     'alpha4': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 50.}},
                     'ct': {'value': 0., 'fixed': True, 'prior': {}},
-                    'X_FoG': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
+                    'X_FoG': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 20]}},
                     'sn0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
                     'sn2': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 5.}},
                 })
@@ -275,14 +275,14 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
                     'c2': {'value': 0., 'fixed': True, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 20.}},
                     'sn0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 2.}},
                     'snb0': {'value': 0., 'fixed': False, 'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
-                    'X_FoG': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 10]}},
+                    'X_FoG': {'value': 0., 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [0, 20]}},
                 })
 
         # ── FoG damping ───────────────────────────────────────────────────
         if 'EFT' in model.upper():
             configs['X_FoG*'] = {'fixed': True}
         else:
-            configs['X_FoG*'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 10]}}
+            configs['X_FoG*'] = {'fixed': False, 'prior': {'dist': 'uniform', 'limits': [0, 20]}}
         if marg:
             for param in params.select(basename=['alpha*', 'sn2', 'sn4']):
                 param.update(derived='marg')
@@ -362,7 +362,9 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
         elif theory_options['model'] in ['folpsD', 'folpsEFT']:
             A_full = theory_options.get('A_full', True)
             pt = FOLPSPTSpectrum2Poles(A_full=A_full)
-            kw = {name: theory_options[name] for name in ['damping', 'prior_basis'] if name in theory_options}
+            if theory_options['model'] == 'folpsD':
+                theory_options.setdefault('damping_method', 'tree')
+            kw = {name: theory_options[name] for name in ['damping', 'damping_method', 'prior_basis'] if name in theory_options}
             theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
             theory.update(**kw_stoch, nbar=nbar, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, kw['prior_basis'], marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
@@ -1212,19 +1214,29 @@ def get_single_likelihood(likelihood_options, stats: types.GaussianLikelihood=No
             read_cache = cache_dir is not None and 'r' in cache_mode
             write_cache = cache_dir is not None and 'w' in cache_mode
             cache_dir = Path(cache_dir)
-            _hoptions = {name: observable_options[name] for name in ['theory', 'catalog']}
-            _hash = _hash_options(_hoptions)
+            emulator_cache_options = _get_emulator_cache_options(observable_options, observable=observable)
+            _hash = _hash_options(emulator_cache_options)
             _str_cosmology = str_from_cosmology_options(observable_options['theory']['cosmology'], level=100)
             _str_cosmology += '_' + observable_options['emulator']['name']
-            _str_theory = _str_from_observable_options(observable_options, level={'theory': 100, 'window': 0, 'catalog': 2})
+            _str_theory = _str_from_observable_options(
+                observable_options,
+                level={'stat': 2, 'theory': 100, 'window': 1, 'catalog': 2},
+            )
             cache_fn = cache_dir / f'emulator_{_str_cosmology}' / f'emulator_{_str_theory}_{_hash}.h5'
             from desilike.base import compile
             from desilike.emulators import TaylorEmulator
+            expected_theory_size = _get_emulator_theory_size(observable)
             if read_cache and cache_fn.exists():
-                logger.info(f'Reading cached emulator {cache_fn}')
+                msg = f'Reading cached emulator {cache_fn}'
+                if expected_theory_size is not None:
+                    msg += f' for {expected_theory_size} theory entries'
+                logger.info(msg)
                 emulator = TaylorEmulator.read(str(cache_fn))
             else:
-                logger.info(f'Fitting emulator {cache_fn}')
+                msg = f'Fitting emulator {cache_fn}'
+                if expected_theory_size is not None:
+                    msg += f' for {expected_theory_size} theory entries'
+                logger.info(msg)
                 pt_graph = compile(observable.theory if is_compressed else theory.pt)
                 emulator = TaylorEmulator(pt_graph, order=observable_options['emulator'].get('order', 3))
                 emulator.fit()
@@ -1319,10 +1331,9 @@ def propose_fiducial_observable_options(stat, tracer=None, zrange=None):
                                         'basis': 'sugiyama-diagonal'},
                    'recon_particle2_correlation': {'select': [{'ells': ell, 's': [60., 150., 4.]} for ell in [0, 2]]},
                    'recon_bao': {}}
-    base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'marg': True,
-                              'damping': 'vdg'}
+    base_full_shape_theory = {'model': 'folpsD', 'prior_basis': 'physical_aap', 'damping': 'vdg', 'marg': True}
     base_bao_theory = {'model': 'bao', 'broadband': 'pcs2', 'marg': True}
-    propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'coevolution': '', 'A_full': False},
+    propose_theory = {'mesh2_spectrum': base_full_shape_theory | {'damping_method': 'tree', 'coevolution': '', 'A_full': False},
                       'mesh3_spectrum': base_full_shape_theory | {'A_full': False},
                       'recon_particle2_correlation': base_bao_theory,
                       'recon_bao': {}}
@@ -1579,6 +1590,56 @@ def _base_type_options(options):
             return v
         return str(v)
     return convert(options)
+
+
+def _get_emulator_theory_grid_signature(observable):
+    """Return a cache-stable description of the initialized observable theory grid."""
+    window = getattr(observable, 'window', None)
+    theory = getattr(window, 'theory', None)
+    if theory is None:
+        theory = getattr(observable, 'theory', None)
+    if theory is None:
+        return None
+    if hasattr(theory, 'items'):
+        leaves = []
+        for label, leaf in theory.items(level=None):
+            coords = {}
+            for coord_name in leaf.coords():
+                coords[coord_name] = np.asarray(leaf.coords(coord_name))
+            leaves.append({'label': dict(label), 'coords': coords})
+        return leaves
+    signature = {}
+    for name in ['k', 's', 'ells']:
+        if hasattr(theory, name):
+            signature[name] = getattr(theory, name)
+    return signature or None
+
+
+def _get_emulator_theory_size(observable):
+    window = getattr(observable, 'window', None)
+    theory = getattr(window, 'theory', None)
+    if theory is not None and hasattr(theory, 'size'):
+        return int(theory.size)
+    flatdata = getattr(observable, 'flatdata', None)
+    if flatdata is not None:
+        return int(np.size(flatdata))
+    return None
+
+
+def _get_emulator_cache_options(observable_options, observable=None):
+    """Return options that define the reusable Taylor-emulator domain."""
+    options = {
+        name: observable_options[name]
+        for name in ['stat', 'catalog', 'theory', 'emulator']
+        if name in observable_options
+    }
+    if 'window' in observable_options:
+        options['window'] = observable_options['window']
+    if observable is not None:
+        grid = _get_emulator_theory_grid_signature(observable)
+        if grid is not None:
+            options['theory_grid'] = grid
+    return options
 
 
 def _hash_options(options, length=8):
