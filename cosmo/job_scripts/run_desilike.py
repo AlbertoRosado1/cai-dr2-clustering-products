@@ -9,6 +9,11 @@ from cosmo.desilike.run import (get_likelihood_label, get_desilike_output,
 def profile(likelihoods, model='base', engine='class',
             run='run1', output_dir=None, output_label=None, profiler='minuit', **kwargs):
     """Build posterior and run profiling for one configuration."""
+    import os
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
+    from desilike import distributed
+    try: distributed.initialize()
+    except RuntimeError: print('Distributed environment already initialized')
     from desilike import setup_logging
     from cosmo.desilike.run import get_posterior, profile_desilike as _profile
     setup_logging()
@@ -22,6 +27,11 @@ def profile(likelihoods, model='base', engine='class',
 def sample(likelihoods, model='base', engine='class',
            run='run1', output_dir=None, output_label=None, sampler='pocomc', resume=False, **kwargs):
     """Build posterior and run sampling for one configuration."""
+    import os
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
+    from desilike import distributed
+    try: distributed.initialize()
+    except RuntimeError: print('Distributed environment already initialized')
     from desilike import setup_logging
     from cosmo.desilike.run import get_posterior, sample_desilike as _sample
     setup_logging()
@@ -60,11 +70,11 @@ def _setup_task_manager():
 
 if __name__ == '__main__':
 
-    todo = ['profile', 'sample'][:1]
+    todo = ['profile', 'sample'][1:]
     models = ['base']
     #likelihoods = [['desi-dr2-bao-all', 'desdovekie'], 'CMB-SP4A']
     #likelihoods = ['desi-dr2-bao-lya-fs']
-    likelihoods = [['abacus-dr2-fs-s2-s3-lrg1-comet', 'desdovekie']]
+    likelihoods = [['abacus-dr2-fs-s2-s3-all-comet', 'desdovekie']]
     #engine = 'camb'
     engine = 'eisenstein_hu'
     run = 'run1'
@@ -72,22 +82,17 @@ if __name__ == '__main__':
     resume = False
     interactive = True
 
-    if True:  # install
+    if False:  # install
         for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
             install_likelihoods(config['likelihoods'])
 
-    if interactive:
-        for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
-            if task == 'profile':
-                profile(**config)
-            else:
-                sample(resume=resume, **config)
-    else:
+    if not interactive:
         tm_sample, tm_profile = _setup_task_manager()
-        profile_app = tm_profile.python_app(profile)
-        sample_app = tm_sample.python_app(sample)
-        for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
-            if task == 'profile':
-                profile_app(**config)
-            else:
-                sample_app(resume=resume, **config)
+        profile = tm_profile.python_app(profile)
+        sample = tm_sample.python_app(sample)
+    
+    for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
+        if task == 'profile':
+            profile(**config)
+        else:
+            sample(resume=resume, sampler='emcee', **config)

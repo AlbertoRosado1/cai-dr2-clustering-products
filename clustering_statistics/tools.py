@@ -1278,7 +1278,8 @@ def float2str(value, prec_min=1, prec_max=10):
     return s
 
 
-def _decode_catalog_options(**kwargs):
+def _decode_catalog_options(kwargs):
+    # kwargs modified in place (on purpose!)
     _default_options = dict(version=None, tracer=None, region=None, zrange=None, weight=None, imock=None)
     catalog_options = kwargs.pop('catalog', {})
     if not catalog_options:
@@ -1332,7 +1333,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         Measurement filename(s).
         Multiple filenames are returned as a list when imock is '*'.
     """
-    catalog_options = _decode_catalog_options(**kwargs)
+    catalog_options = _decode_catalog_options(kwargs)  # kwargs modified in-place
     imock = next(iter(catalog_options.values()))['imock']
     if imock == '*': imock = np.arange(2001) # broad range that should cover all existing mocks; existence is checked later
     if np.iterable(imock) and not isinstance(imock, str): # string is iterable but we don't want to iterate over characters. not sure if we should expect strings other than '*', but better be safe than sorry

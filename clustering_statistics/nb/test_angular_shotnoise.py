@@ -44,7 +44,7 @@ def get_catalog_fn(kind='data', tracer='ELG_LOPnotqso', region='NGC', iran=0):
 
 @default_mpicomm
 def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', region=None,
-                           imweights=['WEIGHT_IMLIN'], renorm_imweight=False, norm_regions=('N', 'S'),
+                           imweights=['WEIGHT_IMLIN'], refweight='WEIGHT_SYS', renorm_imweight=False, norm_regions=('N', 'S'),
                            randomize=None, mattrs=None, mpicomm=None):
     r"""
     Compute the power spectrum of the fNL ELG catalogs with imaging systematic weights.
@@ -78,6 +78,7 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
 
     data = randoms = None
     regions = ['NGC', 'SGC']
+    renorm_imweight_regions = ['N', 'SnoDES', 'DES']
 
     def match_data_column(randoms, data):
         sorted_index = np.argsort(data['TARGETID'])
@@ -88,12 +89,15 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
     if mpicomm.rank == 0:  # faster to read and process catalogs from one rank
         data = tools._read_catalog([get_catalog_fn(kind='data', tracer=tracer, region=_region) for _region in regions], mpicomm=MPI.COMM_SELF)
         randoms = tools._read_catalog([get_catalog_fn(kind='randoms', tracer=tracer, region=_region, iran=iran) for _region in regions for iran in range(nran)], mpicomm=MPI.COMM_SELF)
+        for catalog in [data, randoms]:
+            catalog['WEIGHT_ONE'] = catalog.ones()
 
         randoms['INDEX'] = match_data_column(randoms, data)
 
         if randomize:
-            if randomize not in ['isotropic', 'angular', 'isotropic_norm', 'angular_norm']:
-                raise ValueError(f"randomize must be one of 'isotropic', 'angular', 'isotropic_norm', 'angular_norm', got {randomize!r}")
+            choices = ['constant', 'isotropic', 'angular', 'isotropic_norm', 'angular_norm']
+            if randomize not in choices:
+                raise ValueError(f"randomize must be one of {choices}, got {randomize!r}")
             region_masks = [tools.select_region(data['RA'], data['DEC'], region=_region) for _region in regions]
             if 'angular' in randomize:
                 import healpy as hp
@@ -107,6 +111,11 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
 
             def randomize_ratio(ratio):
                 randomized = np.empty_like(ratio)
+                if randomize == 'constant':
+                    for renorm_imweight_region in renorm_imweight_regions:
+                        mask = select_region(data['RA'], data['DEC'], region=renorm_imweight_region)
+                        randomized[mask] = ratio[mask].mean()
+                    return randomized
                 for mask, draw in zip(region_masks, draws):
                     values = ratio[mask]
                     if 'angular' in randomize:
@@ -125,12 +134,12 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
     spectra = []
     for imweight in imweights:
         if mpicomm.rank == 0:
-            ratio = data[imweight] / data['WEIGHT_SYS']
+            ratio = data[imweight] / data[refweight]
+            print(imweight, refweight, ratio)
             if randomize:
                 ratio = randomize_ratio(ratio)
             if renorm_imweight:
                 mean_ratios = []
-                renorm_imweight_regions = ['N', 'SnoDES', 'DES']
                 for renorm_imweight_region in renorm_imweight_regions:
                     mask = select_region(data['RA'], data['DEC'], region=renorm_imweight_region)
                     mean_ratios.append(ratio[mask].mean())
@@ -139,9 +148,8 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
                 for renorm_imweight_region, mean_ratio in zip(renorm_imweight_regions, mean_ratios):
                     mask = select_region(data['RA'], data['DEC'], region=renorm_imweight_region)
                     ratio[mask] /= mean_ratio
-            randoms_ratio = ratio[randoms['INDEX']]
             data['INDWEIGHT'] = data['WEIGHT'] * ratio * data['WEIGHT_FKP']
-            randoms['INDWEIGHT'] = randoms['WEIGHT'] * randoms_ratio * randoms['WEIGHT_FKP']
+            randoms['INDWEIGHT'] = randoms['WEIGHT'] * ratio[randoms['INDEX']] * randoms['WEIGHT_FKP']
 
         catalogs = {'data': data.deepcopy() if data is not None else None,
                     'randoms': randoms.deepcopy() if randoms is not None else None}
@@ -172,11 +180,12 @@ if __name__ == '__main__':
     setup_logging()
 
     mpicomm = MPI.COMM_WORLD
-    tracer = 'ELG_LOPnotqso'
-    imweights = ['WEIGHT_SYS', 'WEIGHT_IMLIN', 'WEIGHT_IMLIN_DES']
-    renorm_imweight = True
-    for randomize in [None, 'isotropic', 'angular', 'isotropic_norm', 'angular_norm'][:1]:
-        for region in ['NGC', 'SGC'][1:]:
+    #tracer = 'ELG_LOPnotqso'
+    tracer = 'QSO'
+    imweights = ['WEIGHT_SYS', 'WEIGHT_ONE', 'WEIGHT_IMLIN', 'WEIGHT_IMLIN_DES'][1:2]
+    renorm_imweight = False #True
+    for randomize in [None, 'constant', 'isotropic', 'angular', 'isotropic_norm', 'angular_norm'][1:2]:
+        for region in ['NGC', 'SGC']:
             for norm_regions in [['N', 'S'], ['N', 'SnoDES', 'DES']][1:]:
                 spectra = compute_spectrum_imlin(imweights=imweights, region=region, tracer=tracer, norm_regions=norm_regions, randomize=randomize, renorm_imweight=renorm_imweight, mpicomm=mpicomm)
                 norm_regions = ''.join(norm_regions)
@@ -184,5 +193,4 @@ if __name__ == '__main__':
                 renorm_imweight_label = '_renorm-imweight' if renorm_imweight else ''
                 for spectrum, imweight in zip(spectra, imweights):
                     for stat, value in spectrum.items():
-                        tools.write_stats(stats_dir / f'{stat}_ELG_LOPnotqso_{region}_{imweight}_norm{norm_regions}{randomize_label}{renorm_imweight_label}.h5',
-                                        value, mpicomm=mpicomm)
+                        tools.write_stats(stats_dir / f'{stat}_{tracer}_{region}_{imweight}_norm{norm_regions}{randomize_label}{renorm_imweight_label}.h5', value, mpicomm=mpicomm)
