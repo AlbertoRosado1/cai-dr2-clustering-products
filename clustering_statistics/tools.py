@@ -1101,6 +1101,13 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
 
+        elif version == 'holi-v4-altmtl':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_v4/altmtl'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
+
         elif version == 'holi-bgs-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/holi_bgs'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -1128,7 +1135,13 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
-
+        
+        elif version == 'glam-uchuu-v2-complete':
+            # TODO: Decide where to save complete version of the clustering catalogs.
+            base_dir = base_stats_dir / 'auxiliary_data' / version
+            cat_dir = base_dir / f'complete{imock:d}/loa-v1/mock{imock:d}/LSScats'
+            ext = 'h5'
+            
         elif version == 'glam-uchuu-bgs-altmtl':
             base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/glam_bgs/'
             cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
@@ -1136,11 +1149,12 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
 
-        elif version == 'glam-uchuu-v2-complete':
-            # TODO: Decide where to save complete version of the clustering catalogs.
-            base_dir = base_stats_dir / 'auxiliary_data' / version
-            cat_dir = base_dir / f'complete{imock:d}/loa-v1/mock{imock:d}/LSScats'
+        elif version == 'glam-uchuu-bgs-v2-altmtl':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/glam_bgs_v2/'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats'
             ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
 
         elif version == 'abacus-2ndgen-dr2-complete':
             if 'BGS' in tracer:
