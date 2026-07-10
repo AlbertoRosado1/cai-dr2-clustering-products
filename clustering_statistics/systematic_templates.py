@@ -2,7 +2,7 @@
 import numpy as np
 
 import lsstypes as types
-from .tools import get_stats_fn, base_stats_dir, get_full_tracer, _decode_catalog_options, _zip_catalog_options
+from .tools import get_stats_fn, base_stats_dir, get_full_tracer, get_simple_tracer, _decode_catalog_options, _zip_catalog_options
 
 
 def include_systematic_templates(window: types.WindowMatrix, templates: dict, effects: tuple | list=('auw',)):
@@ -112,13 +112,14 @@ def get_template_mock_fns(kind='mesh2_spectrum', key='mock_amr', **kwargs):
             imocks = list(range(25))
             weight = {'mock_amr': 'default-FKP', 'mock_noamr': 'default-FKP-noimsys'}[key]
     elif key in ['mock_ric', 'mock_noric']:  # Abacus mocks
-        version = 'holi-v3-altmtl'
+        #version = 'holi-v3-altmtl'
         #if 'BGS' in tracer:
         #    version = 'holi-bgs-altmtl'
         #imocks = [0, 1, 3, 4, 6, 7, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 48, 49, 52, 53, 55, 56, 57, 58, 59, 60][:30]
         version = 'abacus-hf-dr2-v2-altmtl'
         if 'BGS' in tracer:
             version = 'abacus-2ndgen-dr2-altmtl'
+            tracer = get_simple_tracer(tracer)
         imocks = list(range(25))
         project = 'full_shape/base'
         extra = {'mock_ric': None, 'mock_noric': 'reshuffle'}[key]

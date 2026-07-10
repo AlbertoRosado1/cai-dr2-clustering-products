@@ -552,7 +552,9 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     from .systematic_templates import get_template_mock_fns
     propose_fiducial['systematic_templates'] = {'templates': {'auw': {'extra': 'auw'}, 'raw': {},
                                                               'mock_amr': get_template_mock_fns,
-                                                              'mock_noamr': get_template_mock_fns}}
+                                                              'mock_noamr': get_template_mock_fns,
+                                                              'mock_ric': get_template_mock_fns,
+                                                              'mock_noric': get_template_mock_fns}}
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
@@ -835,7 +837,7 @@ def _zip_catalog_options(catalog, squeeze=True, unique=True, ignore=()):
             toret[key].append(value)
             num[key] += 1
     toret = {key: tuple(value) if len(tracers) > 1 or not squeeze else value[0] for key, value in toret.items()}
-    toret['tracer'] = tracers
+    toret['tracer'] = tracers if len(tracers) > 1 or not squeeze else tracers[0]
     return toret
 
 
