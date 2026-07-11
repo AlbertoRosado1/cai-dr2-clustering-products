@@ -82,8 +82,8 @@ def get_cosmology(cosmology_options: dict=None):
         Instance with configured priors.
     """
     from desilike import VariableCollection, Parameter
-    from desilike.theories import CosmoprimoCosmology
-    if isinstance(cosmology_options, CosmoprimoCosmology):
+    from desilike.theories import PrimordialCosmology, CosmoprimoCosmology
+    if isinstance(cosmology_options, PrimordialCosmology):  # already-constructed calculator (CosmoprimoCosmology, ACECosmology, ...)
         return cosmology_options
     cosmology_options = cosmology_options or {}
     model = cosmology_options.get('model', 'base_ns-fixed')

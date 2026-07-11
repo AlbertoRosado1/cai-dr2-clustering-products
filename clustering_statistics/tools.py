@@ -1874,8 +1874,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                 logger.info('Reshuffling randoms')
             merged_data = read(merged_data_fn, mpicomm=MPI.COMM_SELF)
         seed = reshuffle.get('seed', 100 * imock)
+        reshuffle_from_data = reshuffle.get('from_data', [])
         def reshuffle(catalog, ifn, seed=seed):
-            return reshuffle_randoms(catalog, merged_data=merged_data, data=data, tracer=tracer, seed=seed + ifn)
+            return reshuffle_randoms(catalog, merged_data=merged_data, data=data, tracer=tracer, seed=seed + ifn, from_data=reshuffle_from_data)
     else:
         reshuffle = None
 
@@ -2646,10 +2647,10 @@ def renormalize_randoms_over_data(randoms, data, tracer=None, regions=None):
     alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
     for region, alpha in zip(regions, alphas):
         mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
-        randoms['INDWEIGHT'] *= alpha
+        randoms['INDWEIGHT'][mask_randoms] *= alpha
 
 
-def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
+def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42, from_data=()):
     """
     Reshuffled random redshifts from (merged) data.
 
@@ -2665,6 +2666,9 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         Tracer, to define reshuffling regions.
     seed : int, optional
         Random seed.
+    from_data : list, tuple, optional
+        Extra column names to propagate from ``merged_data`` to the randoms,
+        taken from the same data object as the assigned redshift.
 
     Returns
     -------
@@ -2715,6 +2719,8 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     # P0 = np.rint(np.mean((1. / merged_data['WEIGHT_FKP'] - 1.) / merged_data['NX']))
     randoms['Z'] = -randoms.ones() # place holder, since will be filled with 'Z' from merged_data anyway
     randoms['NZ'] = randoms.zeros()
+    for column in from_data:
+        randoms[column] = randoms.ones()
 
     rng = np.random.RandomState(seed=seed)
 
@@ -2743,6 +2749,8 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         randoms['Z'][mask_randoms] = merged_data['Z'][mask_merged_data][index]
         randoms['WEIGHT'][mask_randoms] *= merged_data_wtotp[mask_merged_data][index]
         randoms['WEIGHT_SYS'][mask_randoms] = merged_data['WEIGHT_SYS'][mask_merged_data][index]  # needed for when 'noimsys' is in weight option
+        for column in from_data:
+            randoms[column][mask_randoms] = merged_data[column][mask_merged_data][index]
         #randoms['NZ'][mask_randoms] = merged_data_nz[mask_merged_data][index]
         sum_data_weights.append(data_wtotp[mask_data].sum())
         sum_randoms_weights.append(randoms['WEIGHT'][mask_randoms].sum())
