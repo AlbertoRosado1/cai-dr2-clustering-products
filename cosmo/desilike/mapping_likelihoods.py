@@ -661,6 +661,10 @@ def get_likelihood(name, cosmo=None, **kwargs):
         # Prepared stats and emulators are cached under cache_dir (pass
         # cache_dir=None explicitly to disable caching and the emulator).
         cache_dir = kwargs.pop('cache_dir', DEFAULT_FS_CACHE_DIR)
+        from desilike.theories import ACECosmology
+        if isinstance(cosmo, ACECosmology):
+            # ACECosmology is already emulator-based (pure JAX): no theory emulator.
+            kwargs.setdefault('emulator', False)
         options = _fs_likelihood_options(name, cache_dir=cache_dir, **kwargs)
         cosmology_options = cosmo if cosmo is not None else options.get('cosmology')
         return _get_fs_likelihood(options['likelihoods'], cosmology_options=cosmology_options, cache_dir=cache_dir)
