@@ -73,7 +73,7 @@ def run_stats(version='data-dr3-daily-test', tracer='LRG', weight='default-FKP',
     # Create partial function with stats directory preset for cleaner calls
     get_stats_fn = functools.partial(tools.get_stats_fn, stats_dir=stats_dir, project=project)
     # Loop over Northern and Southern galactic caps
-    for region in ['NGC', 'SGC']:
+    for region in ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES'][2:]:
         # Configuration for particle pair correlation function (optional fine binning)
         # battrs: custom binning in separation s and line-of-sight angle mu
         battrs = None #dict(s=np.linspace(0., 150., 151), mu=(np.linspace(-1., 1., 201), 'midpoint'))
@@ -107,7 +107,7 @@ def postprocess_stats(version='data-dr3-daily-test', tracer='LRG', weight='defau
     particle2_correlation = {'jackknife': {'nsplits': 60}}
     # Build post-processing options: combine statistics across regions
     # List statistics to combine: power spectrum, bispectrum, windows, covariance, pair correlations
-    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight), combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'window_mesh3_spectrum', 'recon_particle2_correlation', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']}, particle2_correlation=particle2_correlation, recon_particle2_correlation=particle2_correlation)
+    options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight), combine_regions={'stats': ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'recon_particle2_correlation', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation'], 'regions': ['NGC', 'SGC', 'N', 'NGCnoN', 'S', 'SGCnoDES']}, particle2_correlation=particle2_correlation, recon_particle2_correlation=particle2_correlation)
     # Execute post-processing: combines NGC+SGC, computes weighted averages, propagates covariance
     postprocess_stats_from_options(postprocess, get_stats_fn=get_stats_fn, **options)
 
@@ -121,9 +121,10 @@ if __name__ == '__main__':
     # window_mesh2_spectrum: compute survey window function via random catalogs
     # covariance_mesh2_spectrum: estimate power spectrum covariance matrix
     # recon_particle2_correlation: pair counting on BAO-reconstructed positions
-    #stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'covariance_recon_particle2_correlation']
+    stats = []
+    stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'covariance_recon_particle2_correlation']
     #stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation']
-    stats = ['covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
+    #stats = ['covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
     # combine_regions: merge NGC and SGC measurements into GCcomb estimates
     postprocess = ['combine_regions']
 
@@ -136,7 +137,7 @@ if __name__ == '__main__':
 
     # Loop over tracer types: BGS (Bright Galaxy Survey), LRG (Luminous Red Galaxy), ELG (Emission Line Galaxy), QSO (Quasar)
     # [1:2] selects only LRG; change to [:] to process all tracers
-    for tracer in ['BGS', 'LRG', 'ELG', 'QSO']:
+    for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][1:]:
         # Get full tracer name including version suffix (e.g., 'LRG_0' for redshift bin 0)
         tracer = tools.get_full_tracer(tracer, version=version)
         # Get fiducial redshift ranges for this tracer; [:1] takes only first bin

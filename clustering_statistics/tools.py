@@ -552,7 +552,9 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
     from .systematic_templates import get_template_mock_fns
     propose_fiducial['systematic_templates'] = {'templates': {'auw': {'extra': 'auw'}, 'raw': {},
                                                               'mock_amr': get_template_mock_fns,
-                                                              'mock_noamr': get_template_mock_fns}}
+                                                              'mock_noamr': get_template_mock_fns,
+                                                              'mock_ric': get_template_mock_fns,
+                                                              'mock_noric': get_template_mock_fns}}
     propose_fiducial['combine_window_mesh2_spectrum'] = {'effect': 'RIC+AMR', 'method': 'spline'}
 
     if "window_mesh2_spectrum_fm" in kind:
@@ -835,7 +837,7 @@ def _zip_catalog_options(catalog, squeeze=True, unique=True, ignore=()):
             toret[key].append(value)
             num[key] += 1
     toret = {key: tuple(value) if len(tracers) > 1 or not squeeze else value[0] for key, value in toret.items()}
-    toret['tracer'] = tracers
+    toret['tracer'] = tracers if len(tracers) > 1 or not squeeze else tracers[0]
     return toret
 
 
@@ -1278,7 +1280,8 @@ def float2str(value, prec_min=1, prec_max=10):
     return s
 
 
-def _decode_catalog_options(**kwargs):
+def _decode_catalog_options(kwargs):
+    # kwargs modified in place (on purpose!)
     _default_options = dict(version=None, tracer=None, region=None, zrange=None, weight=None, imock=None)
     catalog_options = kwargs.pop('catalog', {})
     if not catalog_options:
@@ -1332,7 +1335,7 @@ def get_stats_fn(stats_dir=Path(os.getenv('SCRATCH', '.')) / 'measurements', pro
         Measurement filename(s).
         Multiple filenames are returned as a list when imock is '*'.
     """
-    catalog_options = _decode_catalog_options(**kwargs)
+    catalog_options = _decode_catalog_options(kwargs)  # kwargs modified in-place
     imock = next(iter(catalog_options.values()))['imock']
     if imock == '*': imock = np.arange(2001) # broad range that should cover all existing mocks; existence is checked later
     if np.iterable(imock) and not isinstance(imock, str): # string is iterable but we don't want to iterate over characters. not sure if we should expect strings other than '*', but better be safe than sorry
@@ -1871,8 +1874,9 @@ def read_catalog(kind=None, concatenate=True, get_catalog_fn=get_catalog_fn,
                 logger.info('Reshuffling randoms')
             merged_data = read(merged_data_fn, mpicomm=MPI.COMM_SELF)
         seed = reshuffle.get('seed', 100 * imock)
+        reshuffle_from_data = reshuffle.get('from_data', [])
         def reshuffle(catalog, ifn, seed=seed):
-            return reshuffle_randoms(catalog, merged_data=merged_data, data=data, tracer=tracer, seed=seed + ifn)
+            return reshuffle_randoms(catalog, merged_data=merged_data, data=data, tracer=tracer, seed=seed + ifn, from_data=reshuffle_from_data)
     else:
         reshuffle = None
 
@@ -2291,12 +2295,11 @@ def possible_combine_regions(regions):
     """Return potential combinations of regions."""
     regions = sorted(regions)
     region_combs = {'GCcomb': ['NGC', 'SGC'],
-                    'NS': ['N', 'S'],
                     'GCcomb_noN': ['NGCnoN', 'SGC'],
                     'GCcomb_noDES': ['NGC', 'SGCnoDES']}
     combs = {}
     for _region_comb, _regions in region_combs.items():
-        if all(region in _regions for region in regions):
+        if all(region in regions for region in _regions):
             combs[_region_comb] = _regions
     return combs
 
@@ -2644,10 +2647,10 @@ def renormalize_randoms_over_data(randoms, data, tracer=None, regions=None):
     alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
     for region, alpha in zip(regions, alphas):
         mask_randoms = select_region(randoms['RA'], randoms['DEC'], region=region)
-        randoms['INDWEIGHT'] *= alpha
+        randoms['INDWEIGHT'][mask_randoms] *= alpha
 
 
-def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
+def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42, from_data=()):
     """
     Reshuffled random redshifts from (merged) data.
 
@@ -2663,6 +2666,9 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         Tracer, to define reshuffling regions.
     seed : int, optional
         Random seed.
+    from_data : list, tuple, optional
+        Extra column names to propagate from ``merged_data`` to the randoms,
+        taken from the same data object as the assigned redshift.
 
     Returns
     -------
@@ -2713,6 +2719,8 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
     # P0 = np.rint(np.mean((1. / merged_data['WEIGHT_FKP'] - 1.) / merged_data['NX']))
     randoms['Z'] = -randoms.ones() # place holder, since will be filled with 'Z' from merged_data anyway
     randoms['NZ'] = randoms.zeros()
+    for column in from_data:
+        randoms[column] = randoms.ones()
 
     rng = np.random.RandomState(seed=seed)
 
@@ -2741,6 +2749,8 @@ def reshuffle_randoms(randoms, merged_data, data, tracer, seed=42):
         randoms['Z'][mask_randoms] = merged_data['Z'][mask_merged_data][index]
         randoms['WEIGHT'][mask_randoms] *= merged_data_wtotp[mask_merged_data][index]
         randoms['WEIGHT_SYS'][mask_randoms] = merged_data['WEIGHT_SYS'][mask_merged_data][index]  # needed for when 'noimsys' is in weight option
+        for column in from_data:
+            randoms[column][mask_randoms] = merged_data[column][mask_merged_data][index]
         #randoms['NZ'][mask_randoms] = merged_data_nz[mask_merged_data][index]
         sum_data_weights.append(data_wtotp[mask_data].sum())
         sum_randoms_weights.append(randoms['WEIGHT'][mask_randoms].sum())

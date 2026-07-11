@@ -2,7 +2,7 @@
 import numpy as np
 
 import lsstypes as types
-from .tools import get_stats_fn, base_stats_dir, get_full_tracer, _decode_catalog_options, _zip_catalog_options
+from .tools import get_stats_fn, base_stats_dir, get_full_tracer, get_simple_tracer, _decode_catalog_options, _zip_catalog_options
 
 
 def include_systematic_templates(window: types.WindowMatrix, templates: dict, effects: tuple | list=('auw',)):
@@ -93,7 +93,7 @@ def smooth_template(stat, effect='amr', order=None, klim=None, wkp=None):
 
 
 def get_template_mock_fns(kind='mesh2_spectrum', key='mock_amr', **kwargs):
-    catalog_options = _decode_catalog_options(**kwargs)
+    catalog_options = _decode_catalog_options(kwargs)
     catalog_options = _zip_catalog_options(catalog_options, squeeze=True, unique=True, ignore=['expand', 'binned_weight'])
     tracer, region, version, zrange = [catalog_options[key] for key in ['tracer', 'region', 'version', 'zrange']]
     mock_stats_dir = base_stats_dir
@@ -115,11 +115,13 @@ def get_template_mock_fns(kind='mesh2_spectrum', key='mock_amr', **kwargs):
         #version = 'holi-v3-altmtl'
         #if 'BGS' in tracer:
         #    version = 'holi-bgs-altmtl'
+        #imocks = [0, 1, 3, 4, 6, 7, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 48, 49, 52, 53, 55, 56, 57, 58, 59, 60][:30]
         version = 'abacus-hf-dr2-v2-altmtl'
         if 'BGS' in tracer:
             version = 'abacus-2ndgen-dr2-altmtl'
-        project = 'full_shape/base'
+            tracer = get_simple_tracer(tracer)
         imocks = list(range(25))
+        project = 'full_shape/base'
         extra = {'mock_ric': None, 'mock_noric': 'reshuffle'}[key]
     else:
         raise ValueError(key)
@@ -129,7 +131,8 @@ def get_template_mock_fns(kind='mesh2_spectrum', key='mock_amr', **kwargs):
         pass
     options = dict(project=project, version=version, tracer=tracer, zrange=zrange, region=region, weight=weight, auw=False,
                    kind=kind, basis='sugiyama-diagonal', extra=extra)
-    return [get_stats_fn(mock_stats_dir, imock=imock, **options) for imock in imocks]
+    fns = [get_stats_fn(mock_stats_dir, imock=imock, **options) for imock in imocks]
+    return fns
 
 
 def get_smooth_template(effect='amr', kind='mesh2_spectrum', return_stats=False, **kwargs):

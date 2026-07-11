@@ -111,7 +111,7 @@ def _build_run_options(stats, tracers, version, covariance, stats_dir, project, 
     )
     options['cosmology'] = {'template': template, 'model': cosmo_model, 'engine': 'eisenstein_hu' if 'comet' in theory_model else 'class'}
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler=sampler)
-    sampler_kw = {'nparallel': nchains, 'gelman_rubin': 1.02, 'ess': 600}
+    sampler_kw = {'nparallel': nchains, 'gelman_rubin': 1.03, 'ess': 600}
     for section in ['init', 'run']:
         for name, value in options['sampler'][section].items():
             if name in sampler_kw:
@@ -219,7 +219,7 @@ def _get_parser():
     parser.add_argument('--sampler', type=str, default='emcee',
                         choices=SAMPLERS,
                         help='desilike sampler backend to use. Defaults to emcee.')
-    parser.add_argument('--tracers', action='extend', nargs='+', default=None,
+    parser.add_argument('--tracers', action='extend', nargs='+', default=[],
                         help='Tracer(s) to fit. Pass one or more values after --tracers. Defaults to LRG1.')
     parser.add_argument('--fits_dir', type=str, default=None,
                         help='Base directory for fits. Defaults to $SCRATCH/fits_abacus_mocks or ./fits_abacus_mocks.')
@@ -227,7 +227,7 @@ def _get_parser():
                         help=f'Base directory for clustering statistics. Defaults to {DEFAULT_STATS_DIR}.')
     parser.add_argument('--project', type=str, default='full_shape/fiber_assignment_systematics',
                         help=f'Base directory for clustering statistics.')
-    parser.add_argument('--syst_templates', type=str, nargs='*', default=[], choices=['auw'],
+    parser.add_argument('--syst_templates', type=str, nargs='*', default=[], choices=['auw', 'amr', 'ric'],
                         help=f'Systematic templates.')
     parser.add_argument('--cache_dir', type=str, default=DEFAULT_CACHE_DIR,
                         help=f'Base directory for cached prepared stats and emulators. Defaults to {DEFAULT_CACHE_DIR}.')
@@ -254,11 +254,9 @@ if __name__ == '__main__':
     covariance = 'holi-v3-altmtl'
     stats_dir = Path(args.stats_dir)
     cache_dir = Path(args.cache_dir)
-    stats = args.stats
-    tracers = args.tracers or ['LRG1']
-    _validate_theory_model(stats, args.theory_model)
+    _validate_theory_model(args.stats, args.theory_model)
     run_fit(actions=args.todo, version=version, covariance=covariance, stats_dir=stats_dir, project=args.project,
-            fits_dir=fits_dir, cache_dir=cache_dir, stats=stats, tracers=tracers, theory_model=args.theory_model,
+            fits_dir=fits_dir, cache_dir=cache_dir, stats=args.stats, tracers=args.tracers, theory_model=args.theory_model,
             syst_templates=args.syst_templates, cosmo_model=args.cosmo_params, sampler=args.sampler, nchains=args.nchains,
             resume=args.resume, prior_basis=args.prior_basis,
             local_safe_threads=args.local_safe_threads, emulator=not args.no_emulator)

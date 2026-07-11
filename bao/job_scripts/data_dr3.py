@@ -18,7 +18,7 @@ from bao import tools, setup_logging
 setup_logging()
 
 
-def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='base/bao', covariance='jaxpower', recenter=False, stats_dir=tools.base_stats_dir, fits_dir=Path(os.getenv('SCRATCH')) / 'fits'):
+def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='base/bao', covariance='jaxpower', region='GCcomb', recenter=False, stats_dir=tools.base_stats_dir, fits_dir=Path(os.getenv('SCRATCH')) / 'fits'):
     # Everything inside this function will be executed on the compute nodes;
     # This function must be self-contained; and cannot rely on imports from the outer scope.
     import os
@@ -45,6 +45,7 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
     for likelihood_options in options['likelihoods']:
         # rascalc = analytical covariance
         for observable_options in likelihood_options['observables']:
+            observable_options['stat']['region'] = region
             observable_options['stat']['jackknife'] = {'nsplits': 60}
             observable_options['stat']['project'] = 'bao/with_desi-clustering'
         cov_stats_dir = tools.base_stats_dir
@@ -108,14 +109,14 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
     fits_dir = tools.base_fits_dir
 
-    #data = 'data-dr3-matterhorn-v2-v0-bao'
-    #recenter = True
-    #covariance = 'jaxpower'
-
-    data = 'data-dr2-v1.1'
-    recenter = True
-    #covariance = 'rascalc'
+    data = 'data-dr3-matterhorn-v2-v0-bao'
+    recenter = False
     covariance = 'jaxpower'
+
+    #data = 'data-dr2-v1.1'
+    #recenter = True
+    #covariance = 'rascalc'
+    #covariance = 'jaxpower'
 
     for tracer in ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1']:
         run_fit(actions=['profile', 'sample'], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance)

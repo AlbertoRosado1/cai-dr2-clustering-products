@@ -7,21 +7,34 @@ from cosmo.desilike.run import (get_likelihood_label, get_desilike_output,
 
 
 def profile(likelihoods, model='base', engine='class',
-            run='run1', output_dir=None, output_label=None, profiler='minuit', **kwargs):
+            run='run1', output_dir=None, output_label=None, profiler='minuit', timing=False, **kwargs):
     """Build posterior and run profiling for one configuration."""
+    import os
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
+    from desilike import distributed
+    try: distributed.initialize()
+    except RuntimeError: print('Distributed environment already initialized')
     from desilike import setup_logging
-    from cosmo.desilike.run import get_posterior, profile_desilike as _profile
+    from cosmo.desilike.run import get_posterior, time_posterior, profile_desilike as _profile
     setup_logging()
     posterior = get_posterior(likelihoods, model=model, engine=engine)
+    if timing:
+        time_posterior(posterior)
+        return
     output_fn = get_desilike_output(model=model, engine=engine, likelihoods=likelihoods,
                                     kind='profiles', output_dir=output_dir, run=run, output_label=output_label)
     options = propose_fiducial_profiler_options(profiler)
-    return _profile(posterior, kernel=profiler, init=options['init'], run=options['maximize'], output_fn=output_fn)
+    _profile(posterior, kernel=profiler, init=options['init'], run=options['maximize'], output_fn=output_fn)
 
 
 def sample(likelihoods, model='base', engine='class',
            run='run1', output_dir=None, output_label=None, sampler='pocomc', resume=False, **kwargs):
     """Build posterior and run sampling for one configuration."""
+    import os
+    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.9'
+    from desilike import distributed
+    try: distributed.initialize()
+    except RuntimeError: print('Distributed environment already initialized')
     from desilike import setup_logging
     from cosmo.desilike.run import get_posterior, sample_desilike as _sample
     setup_logging()
@@ -29,7 +42,7 @@ def sample(likelihoods, model='base', engine='class',
     output_dir_path = get_desilike_output(model=model, engine=engine, likelihoods=likelihoods,
                                           kind='samples', output_dir=output_dir, run=run, output_label=output_label)
     options = propose_fiducial_sampler_options(sampler)
-    return _sample(posterior, kernel=sampler, init=options['init'], run=options['run'],
+    _sample(posterior, kernel=sampler, init=options['init'], run=options['run'],
                    output_dir=output_dir_path, resume=resume)
 
 
@@ -64,30 +77,25 @@ if __name__ == '__main__':
     models = ['base']
     #likelihoods = [['desi-dr2-bao-all', 'desdovekie'], 'CMB-SP4A']
     #likelihoods = ['desi-dr2-bao-lya-fs']
-    likelihoods = [['abacus-dr2-fs-s2-s3-lrg1-comet', 'desdovekie']]
+    likelihoods = [['abacus-dr2-fs-s2-s3-all-comet']]
     #engine = 'camb'
-    engine = 'eisenstein_hu'
+    engine = None  # per-likelihood default: eisenstein_hu (comet FS), ACE emulators (folpsD FS), class otherwise
     run = 'run1'
     output_dir = None
     resume = False
     interactive = True
 
-    if True:  # install
+    if False:  # install
         for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
             install_likelihoods(config['likelihoods'])
 
-    if interactive:
-        for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
-            if task == 'profile':
-                profile(**config)
-            else:
-                sample(resume=resume, **config)
-    else:
+    if not interactive:
         tm_sample, tm_profile = _setup_task_manager()
-        profile_app = tm_profile.python_app(profile)
-        sample_app = tm_sample.python_app(sample)
-        for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
-            if task == 'profile':
-                profile_app(**config)
-            else:
-                sample_app(resume=resume, **config)
+        profile = tm_profile.python_app(profile)
+        sample = tm_sample.python_app(sample)
+    
+    for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
+        if task == 'profile':
+            profile(**config, timing=True)
+        else:
+            sample(resume=resume, sampler='emcee', **config)
