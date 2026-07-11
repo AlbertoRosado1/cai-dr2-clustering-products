@@ -102,7 +102,7 @@ def _build_likelihoods_options(stats, tracers, regions, version, covariance, sta
                     'scale': _get_covariance_scale(tracer, region, coeff_fn=coeff_fn),
                 })
             else:
-                likelihood_options['covariance'].update({'region': region, 'scale': 1.0})
+                likelihood_options['covariance'].update({'region': region})
             likelihood_options['covariance']['stats_dir'] = region_cov_stats_dir
             if auw and 'mesh3_spectrum' in stats:
                 likelihood_options['covariance'].setdefault('stat_options', {})
