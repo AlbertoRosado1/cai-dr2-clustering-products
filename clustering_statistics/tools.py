@@ -2294,12 +2294,11 @@ def possible_combine_regions(regions):
     """Return potential combinations of regions."""
     regions = sorted(regions)
     region_combs = {'GCcomb': ['NGC', 'SGC'],
-                    'NS': ['N', 'S'],
                     'GCcomb_noN': ['NGCnoN', 'SGC'],
                     'GCcomb_noDES': ['NGC', 'SGCnoDES']}
     combs = {}
     for _region_comb, _regions in region_combs.items():
-        if all(region in _regions for region in regions):
+        if all(region in regions for region in _regions):
             combs[_region_comb] = _regions
     return combs
 

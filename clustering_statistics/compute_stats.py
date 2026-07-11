@@ -1062,6 +1062,10 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
             # Combine measurements from different sky regions (NGC, SGC)
             combine_options = dict(options.get('combine_regions', {}))
             regions = combine_options.pop('regions', ['NGC', 'SGC'])
+            possible_regions = tools.possible_combine_regions(regions)
+            comb_regions = combine_options.pop('comb_regions', list(possible_regions))
+            assert all(comb_region in possible_regions), f'Only these regions {list(possible_regions)} can be computed from {regions}'
+            comb_regions = {comb_region: possible_regions[comb_region] for comb_region in comb_regions}
             stats = combine_options.pop('stats', ['mesh2_spectrum', 'mesh3_spectrum'])
 
             def _combine_stats(stat, region_comb, regions, get_stats_fn=get_stats_fn, **options):
@@ -1086,7 +1090,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
                             logger.info(f'Skipping {fn_comb} as {[fn for ex, fn in exists.items() if not ex]} do not exist')
 
             # Get all possible region combinations
-            for region_comb, regions in tools.possible_combine_regions(regions).items():
+            for region_comb, regions in comb_regions.items():
                 for stat in stats:
                     if 'window' in stat or 'covariance' in stat:
                         # Window and covariance don't need to loop over mocks
