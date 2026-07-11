@@ -76,7 +76,7 @@ if __name__ == '__main__':
     #likelihoods = ['desi-dr2-bao-lya-fs']
     likelihoods = [['abacus-dr2-fs-s2-s3-all-comet', 'desdovekie']]
     #engine = 'camb'
-    engine = 'eisenstein_hu'
+    engine = None  # per-likelihood default: eisenstein_hu (comet FS), ACE emulators (folpsD FS), class otherwise
     run = 'run1'
     output_dir = None
     resume = False

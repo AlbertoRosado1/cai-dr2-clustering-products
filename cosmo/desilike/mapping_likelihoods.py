@@ -15,6 +15,7 @@ Skipped families / individual names:
 """
 
 import functools
+import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -211,6 +212,21 @@ _ABACUS_FS_SELECT = {
                        {'ells': (2, 0, 2), 'k': [0.02, 0.03, 0.01]}],
 }
 _ABACUS_FS_STATS_DIR = Path('/dvs_ro/cfs/cdirs/desicollab/science/cai/desi-clustering/dr2/summary_statistics')
+
+# Default cache for full-shape likelihoods (prepared stats + emulators), shared
+# with full_shape/job_scripts (e.g. validation_systematic_templates.py) so
+# products prepared there are reused. None (no $SCRATCH) disables caching, and
+# with it the emulator (see _fs_likelihood_options).
+DEFAULT_FS_CACHE_DIR = (Path(os.environ['SCRATCH']) / 'desi-clustering/full_shape/job_scripts/_cache'
+                        if 'SCRATCH' in os.environ else None)
+
+# Default ACECosmology engine for FolpsD-style full-shape fits (see
+# desilike.theories.primordial_cosmology.ACECosmology): jaxace w0waCDM background,
+# jaxmapse linear pk, and the local Capse w0waCDM Cl set (the packaged 'camb_lcdm'
+# harmonic emulator is LCDM-only).
+DEFAULT_ACE_ENGINE = {'background': 'ACE_mnuw0wacdm_ln10As_basis',
+                      'fourier': 'mnuw0wacdm_class',
+                      'harmonic': 'capse_mnuw0wacdm_250001'}
 for _stat_abbrev in ['s2', 's2-s3']:
     for _theory in ['folpsD', 'comet']:
         _FS_TRACERS[f'abacus-dr2-fs-{_stat_abbrev}-all-{_theory}'] = {
@@ -408,6 +424,45 @@ def get_parameterization(likelihoods=None, dataset=None):
     return max(parameterizations, key=lambda p: _PARAMETERIZATION_PRIORITY.get(p, -1))
 
 
+def get_default_engine(likelihoods=None):
+    """Return the default cosmology engine for the named likelihoods (used for ``engine=None``).
+
+    Full-shape likelihoods drive the choice, through their theory model
+    (``'folpsD'`` when the ``_FS_TRACERS`` entry does not set one, matching
+    ``full_shape.tools.fill_fiducial_likelihood_options``):
+
+    * all FS theories are COMET: ``'eisenstein_hu'`` — COMET emulates the power
+      spectrum internally from the cosmological parameters, so only cheap
+      background quantities are needed;
+    * any FolpsD-style FS theory (needs the real linear pk): the
+      :data:`DEFAULT_ACE_ENGINE` dict for
+      :class:`~desilike.theories.primordial_cosmology.ACECosmology`
+      (jaxace w0waCDM background + jaxmapse pk + Capse w0waCDM Cl);
+    * no FS likelihood: ``'class'``.
+    """
+    if isinstance(likelihoods, str):
+        likelihoods = [likelihoods]
+    models = set()
+    for name in likelihoods or []:
+        entry = _FS_TRACERS.get(name)
+        if entry is not None:
+            models.add(entry.get('theory', {}).get('model', 'folpsD'))
+    if models and models <= {'comet'}:
+        return 'eisenstein_hu'
+    if models:
+        return dict(DEFAULT_ACE_ENGINE)
+    return 'class'
+
+
+def get_engine_label(engine=None, likelihoods=None):
+    """Return a string label for *engine* (e.g. for output paths), resolving
+    ``engine=None`` through :func:`get_default_engine`; per-section engine
+    dicts (:data:`DEFAULT_ACE_ENGINE`-style) are labelled ``'ace'``."""
+    if engine is None:
+        engine = get_default_engine(likelihoods)
+    return engine if isinstance(engine, str) else 'ace'
+
+
 def install_likelihoods(names, **installer_kwargs):
     """Download and install data files required by the named likelihood(s).
 
@@ -534,9 +589,10 @@ def _fs_likelihood_options(name, cache_dir=None, **kwargs):
         likelihood_options['covariance'].update(covariance_options)
         likelihoods_options.append(likelihood_options)
     options = fill_fiducial_options({'likelihoods': likelihoods_options})
-    if cache_dir is None:
+    if cache_dir is None:  # full_shape.tools requires a cache_dir to build emulators
         for likelihood_options in options['likelihoods']:
-            likelihood_options['emulator'] = {'name': ''}
+            for observable_options in likelihood_options['observables']:
+                observable_options['emulator'] = {'name': ''}
     return options
 
 
@@ -551,6 +607,11 @@ def get_likelihood(name, cosmo=None, **kwargs):
     cosmo : BasePrimordialCosmology, optional
         Shared cosmology calculator.  When ``None`` each likelihood constructs
         its own default (``CosmoprimoCosmology(fiducial='DESI')``).
+    **kwargs
+        Full-shape names only: overrides for the ``_FS_TRACERS`` entry, plus
+        ``cache_dir`` — directory caching prepared stats and emulators
+        (default :data:`DEFAULT_FS_CACHE_DIR`; pass ``None`` to disable
+        caching, which also disables the emulator).
 
     Returns
     -------
@@ -596,8 +657,10 @@ def get_likelihood(name, cosmo=None, **kwargs):
     # ------------------------------------------------------------------
     if name in _FS_TRACERS:
         from full_shape.tools import get_likelihood as _get_fs_likelihood
-        cache_dir = kwargs.get('cache_dir', None)
-        options = _fs_likelihood_options(name, cache_dir=cache_dir, **{k: v for k, v in kwargs.items() if k != 'cache_dir'})
+        # Prepared stats and emulators are cached under cache_dir (pass
+        # cache_dir=None explicitly to disable caching and the emulator).
+        cache_dir = kwargs.pop('cache_dir', DEFAULT_FS_CACHE_DIR)
+        options = _fs_likelihood_options(name, cache_dir=cache_dir, **kwargs)
         cosmology_options = cosmo if cosmo is not None else options.get('cosmology')
         return _get_fs_likelihood(options['likelihoods'], cosmology_options=cosmology_options, cache_dir=cache_dir)
 
