@@ -53,11 +53,38 @@ def get_stats_fn(*args, extra='', imweight='', onthefly=None, **kwargs):
     return tools.get_stats_fn(*args, extra=extra, **kwargs)
 
 
-def compute_weight_sys_map(tracer='ELG_LOPnotqso', imweight='WEIGHT_SYS', nside=nside):
+def gaussianize_sys_map(wsys_map, mask, seed=42, nside=nside):
+    """
+    Return a full-sky healpix map (nside, nest=True) of Gaussian fluctuations following the
+    same angular power spectrum as ``wsys_map`` over the footprint ``mask``: the fsky-corrected
+    pseudo-Cl of the masked fluctuations is measured with anafast and a Gaussian realization
+    drawn with synfast, rescaled to the same footprint mean and standard deviation as
+    ``wsys_map``. Pixels outside the footprint are set to 1.
+    """
+    mean, std = wsys_map[mask].mean(), wsys_map[mask].std()
+    delta = np.where(mask, wsys_map - mean, 0.)
+    # anafast / synfast expect ring ordering; 1 / fsky corrects the pseudo-Cl mask suppression
+    cl = hp.anafast(hp.reorder(delta, n2r=True)) / mask.mean()
+    np.random.seed(seed)  # synfast draws from the global numpy state
+    gauss = hp.reorder(hp.synfast(cl, nside, pixwin=False), r2n=True)
+    # center and rescale over the footprint so mean and variance match the input map exactly
+    gauss_delta = gauss[mask] - gauss[mask].mean()
+    gauss_map = np.ones_like(wsys_map)
+    gauss_map[mask] = mean + gauss_delta * (std / gauss_delta.std())
+    if (gauss_map <= 0).any():
+        raise ValueError('Gaussian systematic map has pixels <= 0; cannot be used as a weight map')
+    logger.info(f'Gaussian map (seed = {seed:d}) with the spectrum of the input map; '
+                f'mean = {mean:.4f}, pixel range = [{gauss_map[mask].min():.4f}, {gauss_map[mask].max():.4f}]')
+    return gauss_map
+
+
+def compute_weight_sys_map(tracer='ELG_LOPnotqso', imweight='WEIGHT_SYS', nside=nside, gaussian=False, seed=42):
     """
     Return the full-sky healpix map (nside, nest=True) of the mean ``imweight``
     ('WEIGHT_SYS', 'WEIGHT_IMLIN' or 'WEIGHT_IMLIN_DES') of the fNL data catalogs
     (NGC + SGC); pixels with no data are set to 1.
+    If ``gaussian``, the map is replaced by a Gaussian realization with the same angular
+    power spectrum, footprint mean and variance (see :func:`gaussianize_sys_map`).
     """
     fns = [data_cat_dir / f'{tracer}_{region}_clustering.dat.fits' for region in ['NGC', 'SGC']]
     data = tools._read_catalog(fns, mpicomm=MPI.COMM_SELF)
@@ -68,18 +95,20 @@ def compute_weight_sys_map(tracer='ELG_LOPnotqso', imweight='WEIGHT_SYS', nside=
     wsys_map = np.divide(wsum, counts, out=np.ones(npix, dtype='f8'), where=counts > 0)
     logger.info(f'{imweight} map from {counts.sum():d} objects in {(counts > 0).sum():d} pixels; '
                 f'mean = {data[imweight].mean():.4f}, pixel range = [{wsys_map[counts > 0].min():.4f}, {wsys_map[counts > 0].max():.4f}]')
+    if gaussian:
+        wsys_map = gaussianize_sys_map(wsys_map, counts > 0, seed=seed, nside=nside)
     return wsys_map
 
 
 _wsys_maps = {}
 
-def get_weight_sys_map(tracer='ELG_LOPnotqso', imweight='WEIGHT_SYS', mpicomm=MPI.COMM_WORLD):
-    """Compute the healpix map on rank 0 and broadcast it; cache per (tracer, imweight)."""
-    key = (tracer, imweight)
+def get_weight_sys_map(tracer='ELG_LOPnotqso', imweight='WEIGHT_SYS', gaussian=False, mpicomm=MPI.COMM_WORLD):
+    """Compute the healpix map on rank 0 and broadcast it; cache per (tracer, imweight, gaussian)."""
+    key = (tracer, imweight, gaussian)
     if key not in _wsys_maps:
         wsys_map = None
         if mpicomm.rank == 0:
-            wsys_map = compute_weight_sys_map(tracer=tracer, imweight=imweight)
+            wsys_map = compute_weight_sys_map(tracer=tracer, imweight=imweight, gaussian=gaussian)
         _wsys_maps[key] = mpicomm.bcast(wsys_map, root=0)
     return _wsys_maps[key]
 
@@ -101,17 +130,22 @@ def add_cont_columns(catalog, wsys_map):
 
 def run_stats(stats=('mesh2_spectrum', 'mesh3_spectrum'), imweight='WEIGHT_SYS', contweight='CONT',
               region='NGC', imocks=(0,), tracer='ELG_LOPnotqso', zranges=((1.1, 1.6),), analysis='full_shape',
-              complete=None):
+              complete=None, gaussian=False):
     """
     Compute ``stats`` for the mocks contaminated with given ``imweight``
     ('WEIGHT_SYS', 'WEIGHT_IMLIN' or 'WEIGHT_IMLIN_DES'), applying
     WEIGHT * ``contweight`` column / WEIGHT_SYS ('CONT' or 'CONTCONST') to data and randoms.
     If ``complete`` is a dict (e.g. {} for complete, {'altmtl': True} for altmtl on-the-fly),
     catalogs are created on-the-fly.
+    If ``gaussian``, the contamination map is a Gaussian realization with the same angular
+    power spectrum (and footprint mean / variance) as the ``imweight`` map, and the stats
+    file names are tagged '<imweight>-gaussian'.
     """
     zranges = [tuple(zrange) for zrange in zranges]
     cache = {}
-    wsys_map = get_weight_sys_map(tracer=tracer, imweight=imweight)
+    wsys_map = get_weight_sys_map(tracer=tracer, imweight=imweight, gaussian=gaussian)
+    if gaussian:
+        imweight = f'{imweight}-gaussian'  # file name tag only; catalog columns are unchanged
 
     def read_catalog(kind=None, expand=None, reshuffle=None, **kwargs):
         if kind == 'randoms' and complete is None and isinstance(expand, dict) and not isinstance(expand.get('data_fn', None), Catalog):
@@ -173,10 +207,11 @@ if __name__ == '__main__':
     complete = None
     #complete = {}  # on-the-fly complete catalogs
     #complete = {'altmtl': True}  # on-the-fly altmtl catalogs
+    gaussian = False  # if True, contaminate with a Gaussian map following the imweight map's spectrum
     tracer = 'QSO'
     zranges = [(0.8, 2.1)]
     for imweight in imweights:
         for contweight in contweights:
             for region in ['NGC', 'SGC']:
-                run_stats(stats=['mesh2_spectrum', 'mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, tracer=tracer, zranges=zranges, imocks=range(5), complete=complete)
-                #run_stats(stats=['window_mesh2_spectrum', 'window_mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, imocks=[0], complete=complete)
+                run_stats(stats=['mesh2_spectrum', 'mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, tracer=tracer, zranges=zranges, imocks=range(5), complete=complete, gaussian=gaussian)
+                #run_stats(stats=['window_mesh2_spectrum', 'window_mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, imocks=[0], complete=complete, gaussian=gaussian)
