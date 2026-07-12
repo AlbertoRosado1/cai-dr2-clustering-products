@@ -77,7 +77,8 @@ if __name__ == '__main__':
     models = ['base']
     #likelihoods = [['desi-dr2-bao-all', 'desdovekie'], 'CMB-SP4A']
     #likelihoods = ['desi-dr2-bao-lya-fs']
-    likelihoods = [['abacus-dr2-fs-s2-s3-all-comet']]
+    #likelihoods = [['abacus-dr2-fs-s2-s3-all-comet']]
+    likelihoods = [['abacus-dr2-fs-s2-s3-all-folpsD']]
     #engine = 'camb'
     engine = None  # per-likelihood default: eisenstein_hu (comet FS), ACE emulators (folpsD FS), class otherwise
     run = 'run1'

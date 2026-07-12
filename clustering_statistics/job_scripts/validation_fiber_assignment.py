@@ -181,10 +181,10 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
 
     # run fiducial full_shape
-    tracers = ['BGS', 'LRG', 'ELG', 'QSO'] #[1:2]
+    #tracers = ['BGS', 'LRG', 'ELG', 'QSO'] #[1:2]
     #tracers = [('LRG', 'ELG')]
     #tracers = ['ELG', 'LRG'][:1]
-    #tracers = ['LRG']
+    tracers = ['LRG']
     #tracers = ['ELG', 'QSO'][:1]
     #tracers = ['LRG', 'QSO']
     # run BGS
@@ -202,14 +202,16 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'particle3_correlation', 'close_pair_correction'][:2]
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
-    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction']
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum']
+    #stats = ['window_mesh3_spectrum']
+    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:2]
     #stats = ['mesh3_spectrum', 'close_pair_correction']
     #postprocess = ['combine_regions']
-    postprocess = ['systematic_templates']
-    weight = 'default-FKP'
+    #postprocess = ['systematic_templates']
+    #weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
     #weight = 'default-FKP'
-    #weight = 'default-FKP-noimsys'
+    weight = 'default-FKP-noimsys'
     #weight = 'default'
     regions = ['NGC', 'SGC']
     #regions = ['SGCnoDES', 'DES']
@@ -233,6 +235,8 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
+        #zranges = [(0.8, 2.1), (0.8, 1.6), (1.6, 2.1)][:1]
+        zranges = [(0.8, 1.1)]
 
         def get_run_stats():
             if mode == 'interactive':

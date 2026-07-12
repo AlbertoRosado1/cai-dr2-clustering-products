@@ -314,6 +314,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
             # random redshift-dependent columns are then resampled from the
             # shifted data rather than directly BAO-shifting the randoms.
             raw_data_unblinded = read_catalog(kind='data', **_catalog_options, concatenate=True)
+
             raw_data = catalog_bao_blinding.apply_to_catalogs(raw_data_unblinded, catalog_bao_blinding_options[tracer])
             bao_nz_reweight = None
             if catalog_bao_blinding_options[tracer] is not None and catalog_bao_blinding_options[tracer].get('apply_nz_reweight', True):
@@ -1064,7 +1065,7 @@ def postprocess_stats_from_options(postprocess, analysis='full_shape', get_stats
             regions = combine_options.pop('regions', ['NGC', 'SGC'])
             possible_regions = tools.possible_combine_regions(regions)
             comb_regions = combine_options.pop('comb_regions', list(possible_regions))
-            assert all(comb_region in possible_regions), f'Only these regions {list(possible_regions)} can be computed from {regions}'
+            assert all(comb_region in possible_regions for comb_region in comb_regions), f'Only these regions {list(possible_regions)} can be computed from {regions}'
             comb_regions = {comb_region: possible_regions[comb_region] for comb_region in comb_regions}
             stats = combine_options.pop('stats', ['mesh2_spectrum', 'mesh3_spectrum'])
 

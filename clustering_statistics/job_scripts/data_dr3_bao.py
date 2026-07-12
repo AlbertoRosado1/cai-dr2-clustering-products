@@ -122,7 +122,7 @@ if __name__ == '__main__':
     # covariance_mesh2_spectrum: estimate power spectrum covariance matrix
     # recon_particle2_correlation: pair counting on BAO-reconstructed positions
     stats = []
-    stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'covariance_recon_particle2_correlation']
+    #stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation', 'covariance_recon_particle2_correlation']
     #stats = ['mesh2_spectrum', 'recon_mesh2_spectrum', 'window_mesh2_spectrum', 'particle2_correlation', 'recon_particle2_correlation']
     #stats = ['covariance_mesh2_spectrum', 'covariance_recon_mesh2_spectrum', 'covariance_recon_particle2_correlation']
     # combine_regions: merge NGC and SGC measurements into GCcomb estimates
@@ -137,7 +137,7 @@ if __name__ == '__main__':
 
     # Loop over tracer types: BGS (Bright Galaxy Survey), LRG (Luminous Red Galaxy), ELG (Emission Line Galaxy), QSO (Quasar)
     # [1:2] selects only LRG; change to [:] to process all tracers
-    for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][1:]:
+    for tracer in ['BGS', 'LRG', 'ELG', 'QSO'][2:3]:
         # Get full tracer name including version suffix (e.g., 'LRG_0' for redshift bin 0)
         tracer = tools.get_full_tracer(tracer, version=version)
         # Get fiducial redshift ranges for this tracer; [:1] takes only first bin

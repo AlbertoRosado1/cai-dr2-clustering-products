@@ -239,7 +239,7 @@ def select_region(ra, dec, region=None):
         Dec. coordinates in degrees.
     region : str, optional
         Region to select. Options are:
-        - None, 'ALL', 'GCcomb': all-sky
+        - None, 'ALL', 'GCcomb', 'NONE': all-sky
         - 'NGC': North Galactic Cap
         - 'SGC': South Galactic Cap
         - 'N': Northern region (Dec > 32.375 and in NGC)
@@ -263,7 +263,7 @@ def select_region(ra, dec, region=None):
     """
     import healpy as hp
     # print('select', region)
-    if region in [None, 'ALL', 'GCcomb']:
+    if region in [None, 'ALL', 'GCcomb', 'NONE']:
         return np.ones_like(ra, dtype='?')
 
     # North, South, SGC, and NGC footprints
@@ -1006,9 +1006,12 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
                                     region=region, weight=weight, nran=nran, imock=imock, ext=ext, **kwargs) for region in regions]
         # flatten list of lists (can append with nrand > 1 and region='ALL')
         if any(isinstance(fn_list, list) for fn_list in fn_lists):
-            return list(zip(*fn_lists)) # return list of tuples (filename_NGC, filename_SGC)
+            fn_lists = list(zip(*fn_lists)) # return list of tuples (filename_NGC, filename_SGC)
+            fn_lists = [tuple(dict.fromkeys(fn_list)) for fn_list in fn_lists]
         else:
-            return tuple(fn_lists)
+            # keep unique (ALL my be because there is just one catalog to read!)
+            fn_lists = tuple(dict.fromkeys(fn_lists))
+        return fn_lists
     nrans = nran
     if not isinstance(nran, list):
         nrans = list(range(nran))
@@ -1217,6 +1220,18 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
+
+        elif 'abacus-hf-lc-dr2' in version:
+            assert 'QSO' in tracer
+            version = version.split('-')[-1]
+            cat_dir = Path('/dvs_ro/cfs/cdirs/desi/mocks/cai/abacus_HF_lightcones/DR2/mock_catalogs/qso_base') / version
+            ext = 'fits'
+            if kind == 'data':
+                return cat_dir / f'{tracer}_AbacusSummit_base_c000_ph{imock:03d}_base_cmaes_opt_0_fit_DESI_nz_data.{ext}'
+            elif kind == 'randoms':
+                return [cat_dir / f'{tracer}_AbacusSummit_base_c000_ph001_base_cmaes_opt_0_fit_DESI_nz_randoms.{ext}']
+            else:
+                raise NotImplementedError
 
         elif 'uchuu-hf' in version:
             if 'altmtl' in version:
@@ -1518,10 +1533,10 @@ def _read_catalog(fn, mpicomm=None, **kwargs):
         catalog = Catalog.read(fn, mpicomm=mpicomm)
     catalog.attrs.update(catalog.header)  # for header not transmitted in pickling
     if 'WEIGHT' not in catalog:
-        logger.warning(f'WEIGHT not in catalog: {fn}')
+        logger.warning(f'WEIGHT not in catalog: {one_fn}')
         catalog['WEIGHT'] = catalog.ones()
     if 'TARGETID' not in catalog:
-        logger.warning(f'TARGETID not in catalog: {fn}')
+        logger.warning(f'TARGETID not in catalog: {one_fn}')
         catalog['TARGETID'] = catalog.cindex()
     return catalog
 
@@ -1963,11 +1978,13 @@ def mask_catalog(catalog, kind, zrange=None, region=None):
     if kind in ['data', 'randoms']:
         if zrange is not None:
             mask_z = (catalog['Z'] >= zrange[0]) & (catalog['Z'] < zrange[1])
-            mask_nx = mask_z & (catalog['NX'] == 0)
-            if 'NX' in catalog and np.any(mask_nx):
-                if mpicomm.rank == 0:
-                    logger.info(f"Found and removed {mask_nx.sum()} objects with NX=0")
-            mask &= mask_z & ~mask_nx
+            mask &= mask_z
+            if 'NX' in catalog:
+                mask_nx = mask_z & (catalog['NX'] == 0)
+                if 'NX' in catalog and np.any(mask_nx):
+                    if mpicomm.rank == 0:
+                        logger.info(f"Found and removed {mask_nx.sum()} objects with NX=0")
+                mask &= ~mask_nx
     if region is not None:
         mask &= select_region(catalog['RA'], catalog['DEC'], region)
     return catalog[mask]

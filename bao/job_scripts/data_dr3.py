@@ -45,7 +45,7 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
     for likelihood_options in options['likelihoods']:
         # rascalc = analytical covariance
         for observable_options in likelihood_options['observables']:
-            observable_options['stat']['region'] = region
+            observable_options['catalog']['region'] = region
             observable_options['stat']['jackknife'] = {'nsplits': 60}
             observable_options['stat']['project'] = 'bao/with_desi-clustering'
         cov_stats_dir = tools.base_stats_dir
@@ -57,7 +57,7 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
     options = fill_fiducial_options(options)
 
     options['sampler'] = tools.propose_fiducial_sampler_options(sampler='emcee')
-    sampler_kw = {'nparallel': mpicomm.size, 'gelman_rubin': 1.01, 'ess': 1000}
+    sampler_kw = {'nparallel': mpicomm.size, 'gelman_rubin': 1.04, 'ess': 600}
     # Distribute arguments
     for section in ['init', 'run']:
         for name, value in options['sampler'][section].items():
@@ -67,7 +67,7 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
     options['profiler']['maximize']['niterations'] = 5
 
     # options contains all possible options; print(options) to look at its content
-    get_fits_fn = functools.partial(tools.get_fits_fn, fits_dir=fits_dir, project=project)
+    get_fits_fn = functools.partial(tools.get_fits_fn, fits_dir=fits_dir, project=project, level={'catalog': 3})
     run_fit_from_options(actions, **options, get_fits_fn=get_fits_fn, cache_dir=None)
     mpicomm.Barrier()
     likelihood = get_likelihood(likelihoods_options=options['likelihoods'],
@@ -118,5 +118,6 @@ if __name__ == '__main__':
     #covariance = 'rascalc'
     #covariance = 'jaxpower'
 
-    for tracer in ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1']:
-        run_fit(actions=['profile', 'sample'], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance)
+    for tracer in ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1'][-2:-1]:
+        for region in ['GCcomb', 'NGC', 'SGC', 'GCcomb_noDES', 'GCcomb_noN', 'NGCnoN', 'SGCnoDES', 'N', 'S']:
+            run_fit(actions=['profile', 'sample'], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance, region=region)

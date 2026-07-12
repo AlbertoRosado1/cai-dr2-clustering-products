@@ -32,7 +32,7 @@ logger = logging.getLogger('angular_shotnoise')
 
 
 cat_dir = desi_dir / 'survey/catalogs/DA2/LSS/loa-v1/LSScats/v2/fNL'
-stats_dir = Path(os.getenv('SCRATCH', '.')) / 'measurements' / 'angular_shotnoise'
+stats_dir = Path(os.getenv('SCRATCH', '.')) / 'measurements' / 'angular_shotnoise3'
 
 
 def get_catalog_fn(kind='data', tracer='ELG_LOPnotqso', region='NGC', iran=0):
@@ -43,8 +43,8 @@ def get_catalog_fn(kind='data', tracer='ELG_LOPnotqso', region='NGC', iran=0):
 
 
 @default_mpicomm
-def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', region=None,
-                           imweights=['WEIGHT_IMLIN'], refweight='WEIGHT_SYS', renorm_imweight=False, norm_regions=('N', 'S'),
+def compute_spectrum_imlin(nran=4, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', region=None,
+                           imweights=['WEIGHT_IMLIN'], refweight='WEIGHT_SYS', renorm_imweight=False, norm_regions=('N', 'S'), renorm_randoms=True,
                            randomize=None, mattrs=None, mpicomm=None):
     r"""
     Compute the power spectrum of the fNL ELG catalogs with imaging systematic weights.
@@ -135,7 +135,7 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
     for imweight in imweights:
         if mpicomm.rank == 0:
             ratio = data[imweight] / data[refweight]
-            print(imweight, refweight, ratio)
+            print(imweight, refweight, ratio, renorm_imweight)
             if randomize:
                 ratio = randomize_ratio(ratio)
             if renorm_imweight:
@@ -158,13 +158,27 @@ def compute_spectrum_imlin(nran=5, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
             catalogs['randoms'] = Catalog.scatter(randoms, mpicomm=mpicomm, mpiroot=0)
         for kind, catalog in catalogs.items():
             catalogs[kind] = tools.mask_catalog(catalog, kind, zrange=zrange)
-        renormalize_randoms_over_data(catalogs['randoms'], catalogs['data'], regions=norm_regions)
+        if renorm_randoms:
+            renormalize_randoms_over_data(catalogs['randoms'], catalogs['data'], regions=norm_regions)
         for kind, catalog in catalogs.items():
-            catalog = tools.mask_catalog(catalog, kind, zrange=zrange, region=region)
+            catalogs[kind] = tools.mask_catalog(catalog, kind, zrange=zrange, region=region)
+        for kind, catalog in catalogs.items():
             catalog = tools.set_positions_from_rdz(catalog)
-            catalogs[kind] = catalog[['POSITION', 'INDWEIGHT', 'TARGETID']]
+            catalogs[kind] = catalog[['POSITION', 'RA', 'DEC', 'INDWEIGHT', 'TARGETID']]
             for column in catalogs[kind]:
                 catalogs[kind][column] = catalogs[kind][column].astype(int if column == 'TARGETID' else float)
+
+        if True:
+            sum_data_weights, sum_randoms_weights = [], []
+            for region in norm_regions:
+                mask_data = select_region(catalogs['data']['RA'], catalogs['data']['DEC'], region=region)
+                mask_randoms = select_region(catalogs['randoms']['RA'], catalogs['randoms']['DEC'], region=region)
+                sum_data_weights.append(catalogs['data']['INDWEIGHT'][mask_data].csum())
+                sum_randoms_weights.append(catalogs['randoms']['INDWEIGHT'][mask_randoms].csum())
+            sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
+            alphas = sum_data_weights / sum_randoms_weights / (sum(sum_data_weights) / sum(sum_randoms_weights))
+            print('ALPHAS', norm_regions, alphas, catalogs['data'].csize, catalogs['randoms'].csize)
+
         spectra.append({'mesh2_spectrum': compute_mesh2_spectrum(lambda: catalogs, mattrs=mattrs)['raw'],
                         'mesh3_spectrum': compute_mesh3_spectrum(lambda: catalogs, mattrs=mattrs)['raw']})
 
@@ -180,17 +194,20 @@ if __name__ == '__main__':
     setup_logging()
 
     mpicomm = MPI.COMM_WORLD
-    #tracer = 'ELG_LOPnotqso'
-    tracer = 'QSO'
-    imweights = ['WEIGHT_SYS', 'WEIGHT_ONE', 'WEIGHT_IMLIN', 'WEIGHT_IMLIN_DES'][1:2]
+    tracer = 'ELG_LOPnotqso'
+    #tracer = 'QSO'
+    imweights = ['WEIGHT_SYS', 'WEIGHT_IMLIN', 'WEIGHT_IMLIN_DES', 'WEIGHT_IMLIN_DES_NORM_GLOBAL', 'WEIGHT_ONE'][:3]
     renorm_imweight = False #True
-    for randomize in [None, 'constant', 'isotropic', 'angular', 'isotropic_norm', 'angular_norm'][1:2]:
+    renorm_randoms = True #False
+    for randomize in [None, 'constant', 'isotropic', 'angular', 'isotropic_norm', 'angular_norm'][:1]:
         for region in ['NGC', 'SGC']:
             for norm_regions in [['N', 'S'], ['N', 'SnoDES', 'DES']][1:]:
-                spectra = compute_spectrum_imlin(imweights=imweights, region=region, tracer=tracer, norm_regions=norm_regions, randomize=randomize, renorm_imweight=renorm_imweight, mpicomm=mpicomm)
+                spectra = compute_spectrum_imlin(imweights=imweights, region=region, tracer=tracer, norm_regions=norm_regions, randomize=randomize, renorm_imweight=renorm_imweight, renorm_randoms=renorm_randoms, mpicomm=mpicomm)
                 norm_regions = ''.join(norm_regions)
                 randomize_label = f'_randomize-{randomize}' if randomize else ''
                 renorm_imweight_label = '_renorm-imweight' if renorm_imweight else ''
+                renorm_randoms_label = '' if renorm_randoms else '_no-renorm-ran'
                 for spectrum, imweight in zip(spectra, imweights):
                     for stat, value in spectrum.items():
-                        tools.write_stats(stats_dir / f'{stat}_{tracer}_{region}_{imweight}_norm{norm_regions}{randomize_label}{renorm_imweight_label}.h5', value, mpicomm=mpicomm)
+                        print(stat, value.value().sum())
+                        tools.write_stats(stats_dir / f'{stat}_{tracer}_{region}_{imweight}_norm{norm_regions}{randomize_label}{renorm_imweight_label}{renorm_randoms_label}.h5', value, mpicomm=mpicomm)

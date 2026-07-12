@@ -327,7 +327,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
     from desilike.theories.galaxy_clustering import (DirectSpectrum2Template, ShapeFitSpectrum2Template, BAOSpectrum2Template,
         REPTVelocileptorsTracerSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSPTSpectrum2Poles,
         FOLPSTracerSpectrum3Poles, COMETPTSpectrum2Poles, COMETTracerSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum3Poles,
-        DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles)
+        DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles, DampedBAOWigglesTracerSpectrum2Poles)
     from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
     from desilike.base import params as get_params
     theory_options = dict(theory_options)
@@ -364,6 +364,7 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             pt = FOLPSPTSpectrum2Poles(A_full=A_full)
             if theory_options['model'] == 'folpsD':
                 theory_options.setdefault('damping_method', 'tree')
+
             kw = {name: theory_options[name] for name in ['damping', 'damping_method', 'prior_basis'] if name in theory_options}
             theory = FOLPSTracerSpectrum2Poles(template=template, pt=pt, tracers=tracers, **kw, **theory_options.get('options', {}))
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
@@ -386,12 +387,19 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
             theory = COMETTracerSpectrum3Poles(cosmo=cosmology, tracers=tracers, **kw, **theory_options.get('options', {}))
             kw_stoch = get_physical_stochastic_settings(tracer=get_simple_tracer(tracers))
             theory.update(**kw_stoch, nbar=nbar, params=update_theory_nuisance_priors(get_params(theory, level=1), theory_options['model'], stat, kw['prior_basis'], marg=theory_options.get('marg', False), user_params=theory_options.get('params') or None))
-    elif 'recon_particle2_correlation' in stat:
+    elif 'recon_' in stat:
         kw = {name: np.asarray(data_attrs.get(f'recon_{name}', None)).flat[0] for name in ['mode', 'smoothing_radius']}
         kw = kw | {name: theory_options[name] for name in kw if name in theory_options}
         if kw['mode'] is None: kw['mode'] = ''  # no reconstruction
-        kw['broadband'] = theory_options.get('broadband', 'pcs2')
-        theory = DampedBAOWigglesTracerCorrelation2Poles(template=template, **kw, ells=[0, 2, 4])
+        kw['ells'] = [0, 2, 4]
+        if stat == 'recon_particle2_correlation':
+            kw['broadband'] = theory_options.get('broadband', 'pcs2')
+            theory = DampedBAOWigglesTracerCorrelation2Poles(template=template, **kw)
+        elif stat == 'recon_mesh2_spectrum':
+            kw['broadband'] = theory_options.get('broadband', 'pcs')
+            theory = DampedBAOWigglesTracerSpectrum2Poles(template=template, **kw)
+        else:
+            raise NotImplementedError(f'cannot fit {stat}')
         # FIXME level=2
         theory.update(params=update_theory_nuisance_priors(get_params(theory, level=2), theory_options['model'], stat, prior_basis=kw['mode'], tracer=tracers, marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
     if theory is None:
@@ -967,6 +975,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         if not covariances:
             raise ValueError(f'no covariances found in {cov_fns}')
         covariance = combine_covariances(covariances, data)
+        covariance = covariance.clone(value=covariance.value() / 25.)
         covariance.attrs['nobs'] = -1
     elif covariance_options.get('source') == 'mock':
         # Mock-based covariance
@@ -1506,6 +1515,7 @@ def generate_likelihood_options_helper(stats=('mesh2_spectrum', 'mesh3_spectrum'
     if isinstance(stats, str):
         stats = [stats]
     tracers = [tracer] if isinstance(tracer, (str, tuple)) else tracer
+    zranges = [zrange] if not isinstance(tracer[0], (tuple, list)) else zrange
     observables = []
     for tracer, stat in itertools.product(tracers, stats):
         tracer, zrange = get_full_tracer_zrange(tracer, zrange)

@@ -88,12 +88,14 @@ def add_cont_columns(catalog, wsys_map):
     """Stamp WEIGHT_CONT (from the healpix map) and WEIGHT_CONTCONST (mean per N, SnoDES, DES region) on ``catalog``."""
     pix = hp.ang2pix(nside, np.asarray(catalog['RA']), np.asarray(catalog['DEC']), nest=True, lonlat=True)
     catalog['WEIGHT_CONT'] = 1. / wsys_map[pix]
+    """
     catalog['WEIGHT_CONTCONST'] = catalog.ones()
     for photo_region in norm_regions:
         mask = tools.select_region(catalog['RA'], catalog['DEC'], region=photo_region)
         csize = catalog.mpicomm.allreduce(mask.sum())
         if csize > 0:
             catalog['WEIGHT_CONTCONST'][mask] = catalog['WEIGHT_CONT'][mask].csum() / csize
+    """
     return catalog
 
 
@@ -150,10 +152,10 @@ def run_stats(stats=('mesh2_spectrum', 'mesh3_spectrum'), imweight='WEIGHT_SYS',
         for itracer in options['catalog']:
             options['catalog'][itracer]['zranges'] = zranges  # override fiducial zranges
             options['catalog'][itracer]['expand'] = {'parent_randoms_fn': tools.get_catalog_fn(kind='parent_randoms', version='data-dr2-v2', tracer=itracer, nran=options['catalog'][itracer]['nran']),
-                                                     'from_data': ['Z', 'WEIGHT_SYS', 'WEIGHT_CONT', 'WEIGHT_CONTCONST']}
+                                                     'from_data': ['Z', 'WEIGHT_SYS', 'WEIGHT_CONT']}
             if complete is not None:
                 options['catalog'][itracer]['complete'] = dict(complete)
-                options['catalog'][itracer]['reshuffle'] = {'from_data': ['WEIGHT_CONT', 'WEIGHT_CONTCONST']}
+                options['catalog'][itracer]['reshuffle'] = {'from_data': ['WEIGHT_CONT']}
         compute_stats_from_options(list(stats), analysis=analysis, get_stats_fn=_get_stats_fn,
                                    read_catalog=read_catalog, prepare_catalog=prepare_catalog, cache=cache, **options)
 
@@ -166,13 +168,15 @@ if __name__ == '__main__':
     except RuntimeError: pass
     setup_logging()
 
-    imweights = ['WEIGHT_SYS', 'WEIGHT_IMLIN', 'WEIGHT_IMLIN_DES']
-    contweights = ['CONT', 'CONTCONST']
+    imweights = ['WEIGHT_SYS']
+    contweights = ['CONT', 'CONTCONST'][:1]
     complete = None
     #complete = {}  # on-the-fly complete catalogs
     #complete = {'altmtl': True}  # on-the-fly altmtl catalogs
+    tracer = 'QSO'
+    zranges = [(0.8, 2.1)]
     for imweight in imweights:
         for contweight in contweights:
             for region in ['NGC', 'SGC']:
-                run_stats(stats=['mesh2_spectrum', 'mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, imocks=range(25), complete=complete)
-                run_stats(stats=['window_mesh2_spectrum', 'window_mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, imocks=[0], complete=complete)
+                run_stats(stats=['mesh2_spectrum', 'mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, tracer=tracer, zranges=zranges, imocks=range(5), complete=complete)
+                #run_stats(stats=['window_mesh2_spectrum', 'window_mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, imocks=[0], complete=complete)
