@@ -762,6 +762,9 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=None, windo
         ``theory(fields)`` returning the 3D P / B / T callables consumed by
         :func:`compute_covariance_mesh3_spectrum`, evaluated at the best-fit bias.
         Best-fit values are stored as ``theory.bias`` (also ``theory.z``, ``theory.f``, ``theory.chi2``).
+        The best-fit model multipoles, at the (selected, and windowed if ``window3`` is provided)
+        data binning, are stored as ``theory.spectrum2`` / ``theory.spectrum3``, and the data they
+        are to be compared to (after ``select2`` / ``select3``) as ``theory.data2`` / ``theory.data3``.
     """
     from jaxpower import MeshAttrs
     from jaxpower.cov3 import compute_spectrum3_covariance
@@ -945,6 +948,12 @@ def run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=None, windo
 
     theory = make_theory(fid_bias | best)
     theory.chi2 = float(res.fun)
+    # Best-fit model multipoles at the data binning, to inspect the quality of the fit
+    model = np.asarray(model_vector(jnp.asarray(res.x)))
+    size2 = np.asarray(spectrum2.value()).size
+    theory.spectrum2 = spectrum2.clone(value=model[:size2])
+    theory.spectrum3 = spectrum3.clone(value=model[size2:])
+    theory.data2, theory.data3 = spectrum2, spectrum3
     return theory
 
 

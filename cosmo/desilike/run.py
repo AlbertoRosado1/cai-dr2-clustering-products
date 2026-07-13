@@ -136,6 +136,12 @@ def time_posterior(posterior, nvmap=10, nrepeats=10, rng=42):
     def logposterior(params):
         return posterior(params)
 
+    # Eager call first: readable traceback on errors, and any one-off lazy setup
+    # (data loading, emulator reads, ...) happens outside the timed JIT calls.
+    value = jax.block_until_ready(logposterior(single_point))
+    if not np.all(np.isfinite(value)):
+        print(f'time_posterior: WARNING, non-finite logposterior {value} at the timed point')
+
     configurations = [('jit', jax.jit(logposterior), single_point, 1),
                       ('vmap', jax.jit(jax.vmap(logposterior)), points, nvmap)]
     timings = {}
@@ -145,6 +151,7 @@ def time_posterior(posterior, nvmap=10, nrepeats=10, rng=42):
         compile_seconds = time.perf_counter() - start
         if not np.all(np.isfinite(value)):
             print(f'time_posterior [{label}]: WARNING, non-finite logposterior {value} at the timed point(s)')
+        jax.block_until_ready(function(arguments))  # buffer iteration between compilation and timing
         repeat_seconds = []
         for _ in range(nrepeats):
             start = time.perf_counter()
