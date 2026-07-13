@@ -83,9 +83,8 @@ def _build_likelihoods_options(stats, tracers, zranges, region, version, stats_d
             observable_options['theory']['model'] = theory_model
             #observable_options['theory']['marg'] = False
             observable_options['theory']['prior_basis'] = prior_basis
-        likelihood_options['covariance']['source'] = 'mock'
-        likelihood_options['covariance']['version'] = 'glam-uchuu-v2-altmtl'
-        likelihood_options['covariance']['project'] = 'full_shape/base'
+        likelihood_options['covariance'] = {'source': 'mock', 'region': region, 'zrange': zrange, 'project': 'full_shape/base', 'version': 'glam-uchuu-v2-altmtl'}
+        #likelihood_options['covariance'] = {'source': 'jaxpower', 'region': region, 'zrange': zrange, 'project': project, 'version': version}
         likelihoods.append(likelihood_options)
     return likelihoods
 
@@ -242,7 +241,7 @@ if __name__ == '__main__':
     stats_dir = Path(DEFAULT_STATS_DIR)
     cache_dir = Path(args.cache_dir)
     _validate_theory_model(args.stats, args.theory_model)
-    for zrange in [(0.8, 2.1), (0.8, 1.6), (1.6, 2.1)]:
+    for zrange in [(0.8, 2.1), (0.8, 1.6), (1.6, 2.1), (0.8, 1.4), (1.4, 2.1)][:3]:
         run_fit(actions=args.todo, version=dataset, stats_dir=stats_dir, project='full_shape/fiber_assignment_systematics',
                 fits_dir=fits_dir, cache_dir=cache_dir, stats=args.stats, tracers=['QSO'], zranges=[zrange], region='GCcomb', theory_model=args.theory_model,
                 syst_templates=[], cosmo_model=args.cosmo_params, sampler=args.sampler, nchains=args.nchains,

@@ -118,6 +118,6 @@ if __name__ == '__main__':
     #covariance = 'rascalc'
     #covariance = 'jaxpower'
 
-    for tracer in ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1'][-2:-1]:
+    for tracer in ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1']:
         for region in ['GCcomb', 'NGC', 'SGC', 'GCcomb_noDES', 'GCcomb_noN', 'NGCnoN', 'SGCnoDES', 'N', 'S']:
-            run_fit(actions=['profile', 'sample'], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance, region=region)
+            run_fit(actions=['profile', 'sample'][:1], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance, region=region)

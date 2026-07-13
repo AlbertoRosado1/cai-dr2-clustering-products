@@ -131,7 +131,7 @@ def postprocess_stats(tracer='LRG', analysis='full_shape', project='', version='
     if zranges is None:
         zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
     options = dict(catalog=dict(version=version, tracer=tracer, zrange=zranges, weight=weight, imock=imocks[0]), imocks=imocks,
-                   combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'particle2_correlation', 'particle3_correlation'][:4]},
+                   combine_regions={'stats': ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum', 'covariance_mesh2_spectrum', 'particle2_correlation', 'particle3_correlation'][:5]},
                    mesh2_spectrum={'cut': True, 'auw': True}, window_mesh2_spectrum={'cut': True},
                    mesh3_spectrum={'auw': True}, window_mesh3_spectrum={},
                    systematic_templates={'stats': ['mesh2_spectrum', 'mesh3_spectrum'], 'effects': ['auw', 'amr', 'ric']})
@@ -184,7 +184,7 @@ if __name__ == '__main__':
     #tracers = ['BGS', 'LRG', 'ELG', 'QSO'] #[1:2]
     #tracers = [('LRG', 'ELG')]
     #tracers = ['ELG', 'LRG'][:1]
-    tracers = ['LRG']
+    tracers = ['QSO']
     #tracers = ['ELG', 'QSO'][:1]
     #tracers = ['LRG', 'QSO']
     # run BGS
@@ -203,15 +203,16 @@ if __name__ == '__main__':
     #stats = ['particle2_correlation', 'close_pair_correction']
     #stats = ['particle2_correlation']
     #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'window_mesh2_spectrum', 'window_mesh3_spectrum']
+    #stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][2:]
     #stats = ['window_mesh3_spectrum']
-    stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:2]
+    #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:2]
     #stats = ['mesh3_spectrum', 'close_pair_correction']
-    #postprocess = ['combine_regions']
+    postprocess = ['combine_regions']
     #postprocess = ['systematic_templates']
     #weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
-    #weight = 'default-FKP'
-    weight = 'default-FKP-noimsys'
+    weight = 'default-FKP'
+    #weight = 'default-FKP-noimsys'
     #weight = 'default'
     regions = ['NGC', 'SGC']
     #regions = ['SGCnoDES', 'DES']
@@ -235,8 +236,7 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-        #zranges = [(0.8, 2.1), (0.8, 1.6), (1.6, 2.1)][:1]
-        zranges = [(0.8, 1.1)]
+        zranges = [(0.8, 2.1), (0.8, 1.6), (1.6, 2.1), (0.8, 1.4), (1.4, 2.1)][3:]
 
         def get_run_stats():
             if mode == 'interactive':
@@ -266,7 +266,7 @@ if __name__ == '__main__':
                     # Add dependence on other tasks
                     get_run_stats()(imocks=_imocks, ibatch=nbatches, tasks=tasks, stats=stats, **run_stats_kws)
             elif any('covariance' in stat for stat in stats):
-                get_run_stats()(imocks=[0], stats=stats, **run_stats_kws)
+                get_run_stats()(imocks=imocks[:1], stats=stats, **run_stats_kws)
             elif stats:
                 batch_imocks = np.array_split(imocks, max((len(imocks) + max_mocks_per_batch - 1) // max_mocks_per_batch, 1)) if len(imocks) > max_mocks_per_batch else [imocks]
                 for _imocks in batch_imocks:

@@ -142,6 +142,7 @@ def compute_spectrum_imlin(nran=4, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
                 mean_ratios = []
                 for renorm_imweight_region in renorm_imweight_regions:
                     mask = select_region(data['RA'], data['DEC'], region=renorm_imweight_region)
+                    #mask &= (data['Z'] > 0.8) & (data['Z'] < 1.6)
                     mean_ratios.append(ratio[mask].mean())
                 mean_ratios = np.array(mean_ratios) / np.mean(mean_ratios)
                 print(f'Mean imweight ratios {mean_ratios}')
@@ -158,8 +159,8 @@ def compute_spectrum_imlin(nran=4, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
             catalogs['randoms'] = Catalog.scatter(randoms, mpicomm=mpicomm, mpiroot=0)
         for kind, catalog in catalogs.items():
             catalogs[kind] = tools.mask_catalog(catalog, kind, zrange=zrange)
-        if renorm_randoms:
-            renormalize_randoms_over_data(catalogs['randoms'], catalogs['data'], regions=norm_regions)
+        #if renorm_randoms:
+        #    renormalize_randoms_over_data(catalogs['randoms'], catalogs['data'], regions=norm_regions)
         for kind, catalog in catalogs.items():
             catalogs[kind] = tools.mask_catalog(catalog, kind, zrange=zrange, region=region)
         for kind, catalog in catalogs.items():
@@ -170,9 +171,9 @@ def compute_spectrum_imlin(nran=4, zrange=(1.1, 1.6), tracer='ELG_LOPnotqso', re
 
         if True:
             sum_data_weights, sum_randoms_weights = [], []
-            for region in norm_regions:
-                mask_data = select_region(catalogs['data']['RA'], catalogs['data']['DEC'], region=region)
-                mask_randoms = select_region(catalogs['randoms']['RA'], catalogs['randoms']['DEC'], region=region)
+            for _region in norm_regions:
+                mask_data = select_region(catalogs['data']['RA'], catalogs['data']['DEC'], region=_region)
+                mask_randoms = select_region(catalogs['randoms']['RA'], catalogs['randoms']['DEC'], region=_region)
                 sum_data_weights.append(catalogs['data']['INDWEIGHT'][mask_data].csum())
                 sum_randoms_weights.append(catalogs['randoms']['INDWEIGHT'][mask_randoms].csum())
             sum_data_weights, sum_randoms_weights = np.array(sum_data_weights), np.array(sum_randoms_weights)
@@ -197,8 +198,8 @@ if __name__ == '__main__':
     tracer = 'ELG_LOPnotqso'
     #tracer = 'QSO'
     imweights = ['WEIGHT_SYS', 'WEIGHT_IMLIN', 'WEIGHT_IMLIN_DES', 'WEIGHT_IMLIN_DES_NORM_GLOBAL', 'WEIGHT_ONE'][:3]
-    renorm_imweight = False #True
-    renorm_randoms = True #False
+    renorm_imweight = True #True
+    renorm_randoms = False #False
     for randomize in [None, 'constant', 'isotropic', 'angular', 'isotropic_norm', 'angular_norm'][:1]:
         for region in ['NGC', 'SGC']:
             for norm_regions in [['N', 'S'], ['N', 'SnoDES', 'DES']][1:]:

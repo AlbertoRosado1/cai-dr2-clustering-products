@@ -83,7 +83,7 @@ def _build_likelihoods_options(stats, tracers, zranges, version, stats_dir, proj
             observable_options['theory']['model'] = theory_model
             #observable_options['theory']['marg'] = False
             observable_options['theory']['prior_basis'] = prior_basis
-        likelihood_options['covariance'] = {'source': 'jaxpower', 'region': 'ALL', 'zrange': zrange, 'project': 'full_shape/lightcone_validation', 'version': version}
+        likelihood_options['covariance'] = {'source': 'jaxpower', 'region': region, 'zrange': zrange, 'project': project, 'version': version}
         #likelihood_options['covariance'] = {'source': 'mock', 'region': 'GCcomb', 'zrange': (0.8, 2.1), 'project': 'full_shape/base'}
         likelihoods.append(likelihood_options)
     return likelihoods

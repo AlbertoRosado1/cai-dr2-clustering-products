@@ -86,13 +86,19 @@ def compute_weight_sys_map(tracer='ELG_LOPnotqso', imweight='WEIGHT_SYS', nside=
     If ``gaussian``, the map is replaced by a Gaussian realization with the same angular
     power spectrum, footprint mean and variance (see :func:`gaussianize_sys_map`).
     """
-    fns = [data_cat_dir / f'{tracer}_{region}_clustering.dat.fits' for region in ['NGC', 'SGC']]
-    data = tools._read_catalog(fns, mpicomm=MPI.COMM_SELF)
+    if True:
+        fns = [data_cat_dir / f'LRG_{region}_clustering.dat.fits' for region in ['NGC', 'SGC']]
+        data = tools._read_catalog(fns, mpicomm=MPI.COMM_SELF)
+        #data = data[(data['Z'] > 0.4) & (data['Z'] < 0.6)]
+    else:
+        fns = [data_cat_dir / f'{tracer}_{region}_clustering.dat.fits' for region in ['NGC', 'SGC']]
+        data = tools._read_catalog(fns, mpicomm=MPI.COMM_SELF)
     pix = hp.ang2pix(nside, data['RA'], data['DEC'], nest=True, lonlat=True)
     npix = hp.nside2npix(nside)
     counts = np.bincount(pix, minlength=npix)
     wsum = np.bincount(pix, weights=data[imweight], minlength=npix)
     wsys_map = np.divide(wsum, counts, out=np.ones(npix, dtype='f8'), where=counts > 0)
+    #np.save('wsys_map_LRG1.npy', wsys_map)
     logger.info(f'{imweight} map from {counts.sum():d} objects in {(counts > 0).sum():d} pixels; '
                 f'mean = {data[imweight].mean():.4f}, pixel range = [{wsys_map[counts > 0].min():.4f}, {wsys_map[counts > 0].max():.4f}]')
     if gaussian:
@@ -144,6 +150,7 @@ def run_stats(stats=('mesh2_spectrum', 'mesh3_spectrum'), imweight='WEIGHT_SYS',
     zranges = [tuple(zrange) for zrange in zranges]
     cache = {}
     wsys_map = get_weight_sys_map(tracer=tracer, imweight=imweight, gaussian=gaussian)
+    imweight = f'{imweight}-LRG'
     if gaussian:
         imweight = f'{imweight}-gaussian'  # file name tag only; catalog columns are unchanged
 
@@ -203,15 +210,17 @@ if __name__ == '__main__':
     setup_logging()
 
     imweights = ['WEIGHT_SYS']
-    contweights = ['CONT', 'CONTCONST'][:1]
+    contweights = ['CONT']
     complete = None
     #complete = {}  # on-the-fly complete catalogs
     #complete = {'altmtl': True}  # on-the-fly altmtl catalogs
     gaussian = False  # if True, contaminate with a Gaussian map following the imweight map's spectrum
     tracer = 'QSO'
     zranges = [(0.8, 2.1)]
+    #tracer = 'LRG'
+    #zranges = [(0.4, 0.6)]
     for imweight in imweights:
         for contweight in contweights:
-            for region in ['NGC', 'SGC']:
+            for region in ['NGC', 'SGC'][:1]:
                 run_stats(stats=['mesh2_spectrum', 'mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, tracer=tracer, zranges=zranges, imocks=range(5), complete=complete, gaussian=gaussian)
                 #run_stats(stats=['window_mesh2_spectrum', 'window_mesh3_spectrum'], imweight=imweight, contweight=contweight, region=region, imocks=[0], complete=complete, gaussian=gaussian)

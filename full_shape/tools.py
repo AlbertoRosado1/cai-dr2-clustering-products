@@ -975,7 +975,7 @@ def get_stats(observables_options: list[dict], covariance_options: dict=None, un
         if not covariances:
             raise ValueError(f'no covariances found in {cov_fns}')
         covariance = combine_covariances(covariances, data)
-        covariance = covariance.clone(value=covariance.value() / 25.)
+        #covariance = covariance.clone(value=covariance.value() / 25.)
         covariance.attrs['nobs'] = -1
     elif covariance_options.get('source') == 'mock':
         # Mock-based covariance
