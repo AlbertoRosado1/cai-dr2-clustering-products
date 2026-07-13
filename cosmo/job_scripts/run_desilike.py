@@ -73,12 +73,14 @@ def _setup_task_manager():
 
 if __name__ == '__main__':
 
-    todo = ['profile', 'sample'][:1]
+    todo = ['profile', 'sample'][1:]
     models = ['base']
     #likelihoods = [['desi-dr2-bao-all', 'desdovekie'], 'CMB-SP4A']
     #likelihoods = ['desi-dr2-bao-lya-fs']
     #likelihoods = [['abacus-dr2-fs-s2-s3-all-comet']]
-    likelihoods = [['abacus-dr2-fs-s2-s3-all-folpsD']]
+    #likelihoods = [['abacus-dr2-fs-s2-s3-all-folpsD', 'desdovekie']]
+    likelihoods = [['desi-dr2-bao-all', 'planck2018-lowl-TT', 'planck2018-lowl-EE', 'planck2018-highl-plik-TTTEEE'][:1]]
+    engine = 'ace'
     #engine = 'camb'
     engine = None  # per-likelihood default: eisenstein_hu (comet FS), ACE emulators (folpsD FS), class otherwise
     run = 'run1'
@@ -99,4 +101,4 @@ if __name__ == '__main__':
         if task == 'profile':
             profile(**config, timing=True)
         else:
-            sample(resume=resume, sampler='emcee', **config)
+            sample(resume=resume, sampler='pocomc', **config)

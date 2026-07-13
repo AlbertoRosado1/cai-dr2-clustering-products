@@ -1041,7 +1041,7 @@ def get_post_recon_spectrum_kernels(cosmo, z, f, b1, smoothing_radius, shotnoise
 
 
 def _compute_cov3_windows(get_data_randoms, fields=None, mattrs=None, edges=None, ells2=(0, 2, 4),
-                          ells3=((0, 0, 0),), buffer_size=50):
+                          ells3=((0, 0, 0),), buffer_size=0):
     """
     Compute the cov3-style (grouped-field-label) two-anchor and three-anchor covariance windows
     from randoms. Shared by :func:`compute_covariance_mesh3_spectrum` and :func:`compute_covariance`.
@@ -1096,7 +1096,7 @@ def _compute_cov3_windows(get_data_randoms, fields=None, mattrs=None, edges=None
 
 def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectrum3=None, theory=None, shotnoise=0.,
                                       fields=None, mattrs=None, edges=None, ells2=(0, 2, 4), ells3=((0, 0, 0),),
-                                      buffer_size=50, batch_size=16):
+                                      buffer_size=0, batch_size=16):
     r"""
     Compute the joint 2-point + 3-point spectrum covariance with :mod:`jaxpower`.
 
