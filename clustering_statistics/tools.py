@@ -542,8 +542,12 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10.}
     propose_fiducial['covariance_particle2_correlation'] = propose_fiducial['covariance_mesh2_spectrum']
-    # Joint P + B covariance window: reuse the same mesh resolution as the power spectrum covariance
+    # Joint P + B covariance window: half the power spectrum covariance resolution (same boxsize);
+    # the covariance windows are smooth, and each buffered mesh of the 3-point window is a full
+    # meshsize^3 array, so this cuts its memory and FFT cost by ~8x
     propose_fiducial['covariance_mesh3_spectrum'] = dict(propose_fiducial['covariance_mesh2_spectrum'])
+    _mattrs = propose_fiducial['covariance_mesh2_spectrum']['mattrs']
+    propose_fiducial['covariance_mesh3_spectrum']['mattrs'] = {'meshsize': _mattrs['meshsize'] // 2, 'cellsize': 2. * _mattrs['cellsize']}
     for name in ['covariance_mesh2_spectrum', 'covariance_particle2_correlation']:
         propose_fiducial[name.replace('covariance_', 'covariance_recon_')] = propose_fiducial[name]
 

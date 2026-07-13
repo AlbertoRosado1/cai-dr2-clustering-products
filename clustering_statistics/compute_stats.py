@@ -926,8 +926,18 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 # Fit bias parameters on the joint (P, B) data vector
                 theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=window2)
 
+            # Reuse the covariance windows from a previous run when found on disk (they depend
+            # on the randoms and binning options only, not on the theory)
+            window_fns = {key: get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)))
+                          for key in ['window_covariance_mesh2_correlation', 'window_covariance_mesh3_correlation']}
+            windows = {}
+            if all(Path(fn).exists() for fn in window_fns.values()):
+                logger.info('Reusing covariance windows %s', [str(fn) for fn in window_fns.values()])
+                windows = {'window2': window_fns['window_covariance_mesh2_correlation'],
+                           'window3': window_fns['window_covariance_mesh3_correlation']}
+
             results = compute_covariance_mesh3_spectrum(functools.partial(get_data, tracer), spectrum2=spectrum2, spectrum3=spectrum3,
-                                                        theory=theory, shotnoise=shotnoise, fields=[simple_tracer], **covariance_options)
+                                                        theory=theory, shotnoise=shotnoise, fields=[simple_tracer], **windows, **covariance_options)
 
             def add_label(covariance):
                 # Label the two stacked (P, B) blocks with their observable kind and tracer(s)
@@ -941,10 +951,9 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 if key in results:
                     tools.write_stats(fn, add_label(results[key]))
 
-            # Write intermediate covariance-window correlation functions to disk
-            for key in results:
-                if 'correlation' in key:
-                    fn = get_stats_fn(kind=key, catalog=fn_catalog_options, **(covariance_options | dict(auw=False, cut=False)))
+            # Write intermediate covariance-window correlation functions to disk (unless reloaded)
+            if not windows:
+                for key, fn in window_fns.items():
                     tools.write_stats(fn, results[key])
 
 

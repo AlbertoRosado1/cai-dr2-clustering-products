@@ -1096,7 +1096,7 @@ def _compute_cov3_windows(get_data_randoms, fields=None, mattrs=None, edges=None
 
 def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectrum3=None, theory=None, shotnoise=0.,
                                       fields=None, mattrs=None, edges=None, ells2=(0, 2, 4), ells3=((0, 0, 0),),
-                                      buffer_size=0, batch_size=16):
+                                      buffer_size=0, batch_size=16, window2=None, window3=None):
     r"""
     Compute the joint 2-point + 3-point spectrum covariance with :mod:`jaxpower`.
 
@@ -1135,6 +1135,12 @@ def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectru
         Buffer size for the 3-point window binning; increase for faster computation at the cost of memory.
     batch_size : int, optional
         Batch size for the covariance assembly.
+    window2, window3 : optional
+        Precomputed (interpolated) covariance windows, as returned in the results dictionary
+        ('window_covariance_mesh2_correlation', 'window_covariance_mesh3_correlation') of a
+        previous call; file paths are read with :func:`lsstypes.read`. Both must be provided
+        to skip the window computation from the randoms (``mattrs``, ``edges``, ``ells2``,
+        ``ells3``, ``buffer_size`` are then ignored); the field labels must match *fields*.
 
     Returns
     -------
@@ -1142,6 +1148,7 @@ def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectru
         Dictionary containing the covariance matrix ('raw') and the interpolated covariance window
         correlations ('window_covariance_mesh2_correlation', 'window_covariance_mesh3_correlation').
     """
+    from pathlib import Path
     from jaxpower.cov3 import compute_spectrum3_covariance
 
     # Use default fields (0, 1, ...) if not provided
@@ -1151,8 +1158,14 @@ def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectru
     # The measured observables define the covariance binning; field labels must match the windows
     observable = types.ObservableTree([spectrum2, spectrum3], fields=[(fields[0],) * 2, (fields[0],) * 3])
 
-    window2, window3 = _compute_cov3_windows(get_data_randoms, fields=fields, mattrs=mattrs, edges=edges,
-                                             ells2=ells2, ells3=ells3, buffer_size=buffer_size)
+    if window2 is not None and window3 is not None:
+        if isinstance(window2, (str, Path)): window2 = types.read(window2)
+        if isinstance(window3, (str, Path)): window3 = types.read(window3)
+        if jax.process_index() == 0:
+            logger.info('Using precomputed covariance windows')
+    else:
+        window2, window3 = _compute_cov3_windows(get_data_randoms, fields=fields, mattrs=mattrs, edges=edges,
+                                                 ells2=ells2, ells3=ells3, buffer_size=buffer_size)
     # Store interpolated correlation windows for diagnostics / reuse
     results = {'window_covariance_mesh2_correlation': window2, 'window_covariance_mesh3_correlation': window3}
 
@@ -1166,7 +1179,7 @@ def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectru
 def compute_covariance(*get_data_randoms, spectrum2=None, spectrum3=None, recon_spectrum2=None, theory=None,
                        RR=None, shotnoise=0., fields=None, mattrs=None, edges=None, ells2=(0, 2, 4),
                        ells3=((0, 0, 0),), buffer_size=50, batch_size=16, smoothing_radius=None,
-                       prelim_mattrs=None, split_SS=True):
+                       prelim_mattrs=None, split_SS=True, window2=None, window3=None):
     r"""
     Compute the joint covariance of the pre-recon 2-point + 3-point spectra and the
     post-reconstruction 2-point correlation function, i.e. of
@@ -1233,6 +1246,12 @@ def compute_covariance(*get_data_randoms, spectrum2=None, spectrum3=None, recon_
     split_SS : bool, optional
         If ``True``, split the calculation of the post-recon shot-noise-shot-noise term;
         ensures much better convergence for low-density samples such as QSO.
+    window2, window3 : optional
+        Precomputed (interpolated) covariance windows, as returned in the results dictionary
+        ('window_covariance_mesh2_correlation', 'window_covariance_mesh3_correlation') of a
+        previous call; file paths are read with :func:`lsstypes.read`. Both must be provided
+        to skip the window computation from the randoms (``mattrs``, ``edges``, ``ells2``,
+        ``ells3``, ``buffer_size`` are then ignored); the field labels must match *fields*.
 
     Returns
     -------
@@ -1280,8 +1299,15 @@ def compute_covariance(*get_data_randoms, spectrum2=None, spectrum3=None, recon_
     # shot-noise-driven reducible bispectrum/trispectrum terms (fields (pre,pre,post) etc, since
     # pre/post share correlated shot noise). Rather than enumerate every such combination,
     # collapse any field-group touching 'post' to the identical 'pre' one at lookup time.
-    window2, window3 = _compute_cov3_windows(get_data_randoms, fields=[pre], mattrs=mattrs, edges=edges,
-                                             ells2=ells2, ells3=ells3, buffer_size=buffer_size)
+    if window2 is not None and window3 is not None:
+        from pathlib import Path
+        if isinstance(window2, (str, Path)): window2 = types.read(window2)
+        if isinstance(window3, (str, Path)): window3 = types.read(window3)
+        if jax.process_index() == 0:
+            logger.info('Using precomputed covariance windows')
+    else:
+        window2, window3 = _compute_cov3_windows(get_data_randoms, fields=[pre], mattrs=mattrs, edges=edges,
+                                                 ells2=ells2, ells3=ells3, buffer_size=buffer_size)
     # Store the real (unwrapped, serializable) windows for diagnostics / reuse
     results = {'window_covariance_mesh2_correlation': window2, 'window_covariance_mesh3_correlation': window3}
 
