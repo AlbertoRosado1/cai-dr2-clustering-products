@@ -49,7 +49,7 @@ def get_desilike_output(model='base', engine=None, likelihoods=None, kind='sampl
     return directory
 
 
-def get_posterior(likelihoods, model=None, engine=None, **kwargs):
+def get_posterior(likelihoods, model=None, engine=None, truncate_priors=False, **kwargs):
     """Build and compile a :class:`desilike.base.Posterior` for cosmology inference.
 
     Parameters
@@ -63,6 +63,9 @@ def get_posterior(likelihoods, model=None, engine=None, **kwargs):
         the per-likelihood default: ``'eisenstein_hu'`` for COMET-only full-shape
         fits, the ACE emulator set for FolpsD-style ones, ``'class'`` otherwise
         (see :func:`~cosmo.desilike.mapping_likelihoods.get_default_engine`).
+    truncate_priors : bool, optional
+        ACE engines only: intersect the cosmological priors with the emulator
+        training ranges (see :func:`parameters.get_cosmology`). Default is ``False``.
 
     Returns
     -------
@@ -77,7 +80,7 @@ def get_posterior(likelihoods, model=None, engine=None, **kwargs):
 
     parameterization = get_parameterization(likelihoods=likelihoods)
     cosmo = get_cosmology(model=model, engine=engine, parameterization=parameterization,
-                          likelihoods=likelihoods)
+                          likelihoods=likelihoods, truncate_priors=truncate_priors)
 
     all_likes = []
     for name in likelihoods:
