@@ -941,7 +941,8 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
 
             def add_label(covariance):
                 # Label the two stacked (P, B) blocks with their observable kind and tracer(s)
-                observable = types.ObservableTree(list(covariance.observable), observables=['mesh2_spectrum', 'mesh3_spectrum'],
+                observable = types.ObservableTree(list(covariance.observable),
+                                                  observables=[tools.get_simple_stats(name) for name in ['mesh2_spectrum', 'mesh3_spectrum']],
                                                   tracers=covariance.observable.fields)
                 return covariance.clone(observable=observable)
 
