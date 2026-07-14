@@ -82,7 +82,7 @@ if __name__ == '__main__':
     likelihoods = [['desi-dr2-bao-all', 'planck2018-lowl-TT', 'planck2018-lowl-EE', 'planck2018-highl-plik-TTTEEE'][:1]]
     engine = 'ace'
     #engine = 'camb'
-    engine = None  # per-likelihood default: eisenstein_hu (comet FS), ACE emulators (folpsD FS), class otherwise
+    #engine = None  # per-likelihood default: eisenstein_hu (comet FS), ACE emulators (folpsD FS), class otherwise
     run = 'run1'
     output_dir = None
     resume = False
@@ -96,7 +96,7 @@ if __name__ == '__main__':
         tm_sample, tm_profile = _setup_task_manager()
         profile = tm_profile.python_app(profile)
         sample = tm_sample.python_app(sample)
-    
+
     for task, config in _iter_configs(todo, models, likelihoods, engine=engine, run=run, output_dir=output_dir):
         if task == 'profile':
             profile(**config, timing=True)
