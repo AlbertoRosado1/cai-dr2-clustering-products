@@ -78,8 +78,9 @@ if __name__ == '__main__':
     #likelihoods = [['desi-dr2-bao-all', 'desdovekie'], 'CMB-SP4A']
     #likelihoods = ['desi-dr2-bao-lya-fs']
     #likelihoods = [['abacus-dr2-fs-s2-s3-all-comet']]
-    #likelihoods = [['abacus-dr2-fs-s2-s3-all-folpsD', 'desdovekie']]
-    likelihoods = [['desi-dr2-bao-all', 'planck2018-lowl-TT', 'planck2018-lowl-EE', 'planck2018-highl-plik-TTTEEE'][:1]]
+    likelihoods = [['abacus-dr2-fs-s2-s3-all-folpsD', 'desdovekie']]
+    #likelihoods = [['desi-dr2-bao-all', 'planck2018-lowl-TT', 'planck2018-lowl-EE', 'planck2018-highl-plik-TTTEEE']]
+    #likelihoods = [['desi-dr2-bao-all', 'desdovekie']]
     engine = 'ace'
     #engine = 'camb'
     #engine = None  # per-likelihood default: eisenstein_hu (comet FS), ACE emulators (folpsD FS), class otherwise
