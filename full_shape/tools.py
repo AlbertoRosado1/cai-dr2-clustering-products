@@ -230,7 +230,7 @@ def update_theory_nuisance_priors(params, model, stat, prior_basis, coevolution=
             if recon: sigmapar, sigmaper = 6., 3.
         sigmas = {'sigmas': (2., 2.), 'sigmapar': (sigmapar, 2.), 'sigmaper': (sigmaper, 1.)}
         for name, value in sigmas.items():
-            configs[name] = {'prior': {'dist': 'norm', 'loc': value[0], 'scale': value[1], 'limits': [0., 20.]}}
+            configs[name] = {'value': value[0], 'prior': {'dist': 'norm', 'loc': value[0], 'scale': value[1], 'limits': [0., 20.]}}
         if marg:
             for param in params.select(basename=f'*l*_*'):
                 param.update(derived='marg')
@@ -401,7 +401,8 @@ def get_theory(stat: str, theory_options: dict, cosmology: object=None, data_att
         else:
             raise NotImplementedError(f'cannot fit {stat}')
         # FIXME level=2
-        theory.update(params=update_theory_nuisance_priors(get_params(theory, level=2), theory_options['model'], stat, prior_basis=kw['mode'], tracer=tracers, marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None))
+        params = update_theory_nuisance_priors(get_params(theory, level=2), theory_options['model'], stat, prior_basis=kw['mode'], tracer=tracers, marg=theory_options.get('marg', False), ells=getattr(data, 'ells', [0, 2, 4]), user_params=theory_options.get('params') or None)
+        theory.update(params=params)
     if theory is None:
         raise ValueError(f'theory not found for {stat} and {repr(theory_options)}')
     return theory

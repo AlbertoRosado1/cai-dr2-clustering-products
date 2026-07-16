@@ -542,8 +542,13 @@ def propose_fiducial(kind, tracer, zrange=None, analysis='full_shape'):
         # very stable with nran, cellsize and boxsize
         propose_fiducial['covariance_mesh2_spectrum']['mattrs'] = {'meshsize': propose_meshsizes[simple_tracers[0]], 'cellsize': 10.}
     propose_fiducial['covariance_particle2_correlation'] = propose_fiducial['covariance_mesh2_spectrum']
-    # Joint P + B covariance window: reuse the same mesh resolution as the power spectrum covariance
+    # Joint P + B covariance window: half the power spectrum covariance resolution (same boxsize);
+    # the covariance windows are smooth, and each buffered mesh of the 3-point window is a full
+    # meshsize^3 array, so this cuts its memory and FFT cost by ~8x
     propose_fiducial['covariance_mesh3_spectrum'] = dict(propose_fiducial['covariance_mesh2_spectrum'])
+    _mattrs = propose_fiducial['covariance_mesh2_spectrum']['mattrs']
+    propose_fiducial['covariance_mesh3_spectrum']['mattrs'] = {'meshsize': _mattrs['meshsize'] // 2, 'cellsize': 2. * _mattrs['cellsize']}
+    propose_fiducial['covariance_mesh3_spectrum']['terms'] = 'PB' 
     for name in ['covariance_mesh2_spectrum', 'covariance_particle2_correlation']:
         propose_fiducial[name.replace('covariance_', 'covariance_recon_')] = propose_fiducial[name]
 
@@ -1142,6 +1147,8 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
+            if 'full' in kind:
+                cat_dir = cat_dir.parent
         
         elif version == 'glam-uchuu-v2-complete':
             # TODO: Decide where to save complete version of the clustering catalogs.
@@ -1222,7 +1229,16 @@ def get_catalog_fn(version=None, cat_dir=None, kind='data', tracer='LRG',
             ext = 'h5'
             if kind == 'forfa_data':
                 return base_dir / f'forFA{imock:d}.fits'
-
+        
+        elif version == 'abacus-hf-dr2-v2-altmtl-maskedfraczpNN':
+            base_dir = desi_dir / f'mocks/cai/LSS/DA2/mocks/AbacusHF_DR2v2'
+            cat_dir = base_dir / f'altmtl{imock:d}/loa-v1/mock{imock:d}/LSScats/NN'
+            ext = 'h5'
+            if kind == 'forfa_data':
+                return base_dir / f'forFA{imock:d}.fits'
+            if 'full' in kind:
+                cat_dir = cat_dir.parent
+        
         elif 'abacus-hf-lc-dr2' in version:
             assert 'QSO' in tracer
             version = version.split('-')[-1]
@@ -2080,7 +2096,10 @@ def set_catalog_weights(catalog, kind, weight=None, FKP_P0=None, binned_weight=N
                     bitwise_weights = None
             else:  # parent
                 # equivalent of IIP weights
-                individual_weight /= catalog['FRACZ_TILELOCID']
+                if 'NEW_WEIGHTFRACZ' in catalog and 'nn' in weight_type.lower():
+                    individual_weight *= catalog['NEW_WEIGHTFRACZ']
+                else:
+                    individual_weight /= catalog['FRACZ_TILELOCID']
                 if 'compondata' in weight_type:
                     individual_weight /= catalog['FRAC_TLOBS_TILES']
                 bitwise_weights = None
