@@ -49,7 +49,7 @@ def get_desilike_output(model='base', engine=None, likelihoods=None, kind='sampl
     return directory
 
 
-def get_posterior(likelihoods, model=None, engine=None, **kwargs):
+def get_posterior(likelihoods, model=None, engine=None, truncate_priors=False, **kwargs):
     """Build and compile a :class:`desilike.base.Posterior` for cosmology inference.
 
     Parameters
@@ -63,6 +63,9 @@ def get_posterior(likelihoods, model=None, engine=None, **kwargs):
         the per-likelihood default: ``'eisenstein_hu'`` for COMET-only full-shape
         fits, the ACE emulator set for FolpsD-style ones, ``'class'`` otherwise
         (see :func:`~cosmo.desilike.mapping_likelihoods.get_default_engine`).
+    truncate_priors : bool, optional
+        ACE engines only: intersect the cosmological priors with the emulator
+        training ranges (see :func:`parameters.get_cosmology`). Default is ``False``.
 
     Returns
     -------
@@ -77,7 +80,7 @@ def get_posterior(likelihoods, model=None, engine=None, **kwargs):
 
     parameterization = get_parameterization(likelihoods=likelihoods)
     cosmo = get_cosmology(model=model, engine=engine, parameterization=parameterization,
-                          likelihoods=likelihoods)
+                          likelihoods=likelihoods, truncate_priors=truncate_priors)
 
     all_likes = []
     for name in likelihoods:
@@ -176,8 +179,9 @@ def propose_fiducial_sampler_options(sampler=None):
         sampler = 'emcee'
     init, run = {}, {}
     init['rng'] = 42
+    # 'nparallel' (number of independent runs) is left unset: sample_desilike
+    # defaults it to one run per MPI rank.
     if sampler in ['emcee', 'zeus', 'mhmcmc', 'nuts', 'numpyro_nuts', 'numpyro_barker']:
-        init['nparallel'] = 4
         run['min_steps'] = 50
         run['gelman_rubin'] = 1.05
         run['ess'] = 400
@@ -272,6 +276,9 @@ def sample_desilike(posterior, kernel='pocomc', init: dict=None, run: dict=None,
     logger = logging.getLogger('sample_desilike')
     init = dict(init or {})
     run = dict(run or {})
+    # One independent run (chain) per MPI rank by default; single-chain runs
+    # still get convergence checks through the split-chain Gelman-Rubin.
+    init.setdefault('nparallel', get_mpicomm().size)
     if output_dir is not None:
         output_dir = Path(output_dir)
         mpicomm = get_mpicomm()

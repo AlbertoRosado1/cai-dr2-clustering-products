@@ -146,11 +146,12 @@ if __name__ == '__main__':
     stats, postprocess = [], []
     #version = 'abacus-hf-dr2-v2-altmtl'
     #version = 'glam-uchuu-v2-altmtl'
+    version = 'abacus-hf-dr2-v2-altmtl-maskedfraczpNN'
     #version = 'glam-uchuu-v2-altmtl-maskedfraczpNN'
     #version = ('glam-uchuu-v2-altmtl', 'glam-uchuu-v2-altmtl-maskedfraczpNN')
     #version = 'abacus-2ndgen-dr2-complete'
     #version = 'abacus-2ndgen-dr2-altmtl'
-    version = 'data-dr2-v2'
+    #version = 'data-dr2-v2'
     #version = 'data-dr2-test-maskedfracz'
     #version = 'data-dr2-test-maskedfraczpNN'
     analysis = 'full_shape'
@@ -163,7 +164,7 @@ if __name__ == '__main__':
     project = f'{analysis}/fiber_assignment_systematics'
     #project = f'{analysis}/fiber_assignment_systematics_tests'
     #project = f'{analysis}/fiber_assignment_systematics_ELG_{compweight}'
-    imocks = np.arange(25)
+    imocks = np.arange(22, 25)
     #imocks = np.arange(3, 9)
     #imocks = np.arange(14, 25)
     #imocks = np.arange(12, 25)
@@ -176,7 +177,7 @@ if __name__ == '__main__':
     if 'glam-uchuu-v2-altmtl' in version:
         check_for_existing_measurements = False
         imocks = np.loadtxt('../helper_scripts/glam-uchuu-v2-altmtl_dark-time_imocks_for_covariance.txt', dtype=int)[:25]
-        imocks = [150]
+        #imocks = [150]
 
     stats_dir = tools.base_stats_dir
 
@@ -184,8 +185,8 @@ if __name__ == '__main__':
     #tracers = ['BGS', 'LRG', 'ELG', 'QSO'] #[1:2]
     #tracers = [('LRG', 'ELG')]
     #tracers = ['ELG', 'LRG'][:1]
-    tracers = ['QSO']
-    #tracers = ['ELG', 'QSO'][:1]
+    #tracers = ['QSO']
+    tracers = ['ELG', 'QSO'][:1]
     #tracers = ['LRG', 'QSO']
     # run BGS
     #version = 'abacus-2ndgen-dr2-altmtl'
@@ -206,12 +207,12 @@ if __name__ == '__main__':
     #stats = ['mesh2_spectrum', 'window_mesh2_spectrum', 'covariance_mesh2_spectrum'][2:]
     #stats = ['window_mesh3_spectrum']
     #stats = ['mesh2_spectrum', 'mesh3_spectrum', 'close_pair_correction'][:2]
-    #stats = ['mesh3_spectrum', 'close_pair_correction']
+    stats = ['mesh2_spectrum', 'close_pair_correction']
     postprocess = ['combine_regions']
     #postprocess = ['systematic_templates']
     #weight = 'default-FKP'
     #weight = 'default-FKP-bitwise-iip'
-    weight = 'default-FKP'
+    weight = 'default-nn-FKP'
     #weight = 'default-FKP-noimsys'
     #weight = 'default'
     regions = ['NGC', 'SGC']
@@ -236,7 +237,7 @@ if __name__ == '__main__':
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)[:1]
         else:
             zranges = tools.propose_fiducial('zranges', tracer, analysis=analysis)
-        zranges = [(0.8, 2.1), (0.8, 1.6), (1.6, 2.1), (0.8, 1.4), (1.4, 2.1)][3:]
+        #zranges = [(0.8, 2.1), (0.8, 1.6), (1.6, 2.1), (0.8, 1.4), (1.4, 2.1)][3:]
 
         def get_run_stats():
             if mode == 'interactive':
