@@ -1651,9 +1651,14 @@ def _get_emulator_cache_options(observable_options, observable=None):
     """Return options that define the reusable Taylor-emulator domain."""
     options = {
         name: observable_options[name]
-        for name in ['stat', 'catalog', 'theory', 'emulator']
+        for name in ['stat', 'catalog', 'emulator']
         if name in observable_options
     }
+    if 'theory' in observable_options:
+        theory_options = dict(observable_options['theory'])
+        theory_options.pop('damping', None)
+        theory_options.pop('damping_method', None)
+        options['theory'] = theory_options
     if 'window' in observable_options:
         options['window'] = observable_options['window']
     if observable is not None:
