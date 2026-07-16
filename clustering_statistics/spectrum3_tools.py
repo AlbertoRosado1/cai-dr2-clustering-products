@@ -1184,7 +1184,7 @@ def compute_covariance_mesh3_spectrum(*get_data_randoms, spectrum2=None, spectru
     # The measured observables define the covariance binning; field labels must match the windows
     observable = types.ObservableTree([spectrum2, spectrum3], fields=[(fields[0],) * 2, (fields[0],) * 3])
 
-    if window2 is not None and window3 is not None:
+    if False: #window2 is not None and window3 is not None:
         if isinstance(window2, (str, Path)): window2 = types.read(window2)
         if isinstance(window3, (str, Path)): window3 = types.read(window3)
         if jax.process_index() == 0:

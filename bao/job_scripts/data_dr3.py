@@ -74,18 +74,9 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
                                 cosmology_options=options['cosmology'], cache_dir=None)
     from desilike import compile
     from desilike.samples import Profiles, MCSamples
-    output_fns = list(get_fits_fn(kind='samples', **options).parent.glob('samples_*.h5'))
-    samples = [MCSamples.read(output_fn) for output_fn in output_fns]
-    qnames = ['qiso', 'qap']
-    means = MCSamples.concatenate([sample.remove_burnin(0.3) for sample in samples]).mean(qnames)
-    for sample, output_fn in zip(samples, output_fns):
-        if recenter:
-            for qname, mean in zip(qnames, means):
-                sample[qname] = sample[qname] - mean + 1.
-        if mpicomm.rank == 0:
-            sample.write(output_fn)
     output_fn = get_fits_fn(kind='profiles', **options)
     profiles = Profiles.read(output_fn)
+    qnames = ['qiso', 'qap']
     if recenter:
         # Hack to complement DR3 blinding
         for qname in qnames:
@@ -102,6 +93,15 @@ def run_fit(actions=('profile',), tracer='LRG1', data='data-dr2-v1.1', project='
             for iobservable, observable in enumerate(sublikelihood.observables):
                 observable.plot(fn=plot_dir / f'plot_likelihood{ilikelihood}_observable{iobservable}.pdf')
                 observable.plot_bao(fn=plot_dir / f'plot_bao_likelihood{ilikelihood}_observable{iobservable}.pdf')
+    output_fns = list(get_fits_fn(kind='samples', **options).parent.glob('samples_*.h5'))
+    samples = [MCSamples.read(output_fn) for output_fn in output_fns]
+    means = MCSamples.concatenate([sample.remove_burnin(0.3) for sample in samples]).mean(qnames)
+    for sample, output_fn in zip(samples, output_fns):
+        if recenter:
+            for qname, mean in zip(qnames, means):
+                sample[qname] = sample[qname] - mean + 1.
+        if mpicomm.rank == 0:
+            sample.write(output_fn)
 
 
 if __name__ == '__main__':
@@ -109,15 +109,15 @@ if __name__ == '__main__':
     stats_dir = tools.base_stats_dir
     fits_dir = tools.base_fits_dir
 
-    data = 'data-dr3-matterhorn-v2-v0-bao'
-    recenter = False
-    covariance = 'jaxpower'
-
-    #data = 'data-dr2-v1.1'
+    #data = 'data-dr3-matterhorn-v2-v0-bao'
     #recenter = True
-    #covariance = 'rascalc'
+    #covariance = 'jaxpower'
+
+    data = 'data-dr2-v1.1'
+    recenter = True
+    covariance = 'rascalc'
     #covariance = 'jaxpower'
 
     for tracer in ['BGS1', 'LRG1', 'LRG2', 'LRG3', 'ELG2', 'QSO1']:
-        for region in ['GCcomb', 'NGC', 'SGC', 'GCcomb_noDES', 'GCcomb_noN', 'NGCnoN', 'SGCnoDES', 'N', 'S']:
-            run_fit(actions=['profile', 'sample'][:1], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance, region=region)
+        for region in ['GCcomb', 'NGC', 'SGC', 'GCcomb_noDES', 'GCcomb_noN', 'NGCnoN', 'SGCnoDES', 'N', 'S'][:1]:
+            run_fit(actions=['profile', 'sample'], data=data, project=f'bao/centered_alpha/{data}' if recenter else f'bao/with_desi-clustering/{data}', tracer=tracer, stats_dir=stats_dir, fits_dir=fits_dir, recenter=recenter, covariance=covariance, region=region)

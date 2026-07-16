@@ -925,6 +925,7 @@ def compute_stats_from_options(stats, analysis='full_shape', cache=None,
                 window2 = types.read(window_fn)
                 # Fit bias parameters on the joint (P, B) data vector
                 theory = run_preliminary_fit_mesh3_spectrum(spectrum2, spectrum3, window2=window2)
+                types.ObservableTree([theory.data2, theory.data3, theory.spectrum2, theory.spectrum3], kind=['data2', 'data3', 'spectrum2', 'spectrum3']).write('debug_cov3/fit.h5')
 
             # Reuse the covariance windows from a previous run when found on disk (they depend
             # on the randoms and binning options only, not on the theory)
